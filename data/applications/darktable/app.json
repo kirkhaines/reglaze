@@ -1,0 +1,19 @@
+{
+  "app_id": "darktable",
+  "name": "Darktable",
+  "winget_id": "Darktable.Darktable",
+  "steam_id": null,
+  "website": "https://www.darktable.org",
+  "directories": [
+    {
+      "id": "library",
+      "description": "Image library database and data caches",
+      "default_path": "%LOCALAPPDATA%\\darktable",
+      "category": "catalog",
+      "needs_mapping": true,
+      "safe_for_stream": false,
+      "recommended_storage": "sync",
+      "notes": "Uses SQLite databases (library.db, data.db). Streaming mounts cause database write locks and corruption."
+    }
+  ]
+}

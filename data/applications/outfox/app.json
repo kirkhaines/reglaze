@@ -1,0 +1,41 @@
+{
+  "app_id": "outfox",
+  "name": "Project OutFox",
+  "winget_id": null,
+  "steam_id": null,
+  "website": "https://projectoutfox.com",
+  "install": {
+    "method": "manual",
+    "download_url": "https://projectoutfox.com/download",
+    "default_target_directory": "%GAMES_DIR%\\OutFox",
+    "guide_file": "guide.md",
+    "post_install_script": "post-install.ps1",
+    "instructions": [
+      "Download the latest OutFox Win64 release archive from the official website.",
+      "Extract or install the files into the target directory.",
+      "Launch the game executable once to generate the default user profile and directories, then exit."
+    ]
+  },
+  "directories": [
+    {
+      "id": "songs",
+      "description": "Rhythm Game Simfiles and Music Packs",
+      "default_path": "%GAMES_DIR%\\OutFox\\Songs",
+      "category": "songs",
+      "needs_mapping": true,
+      "safe_for_stream": true,
+      "recommended_storage": "streaming",
+      "notes": "Music charts and audio packages. Safe for streaming cloud mount or secondary storage."
+    },
+    {
+      "id": "save",
+      "description": "Profiles, high scores, machine statistics, and preferences",
+      "default_path": "%GAMES_DIR%\\OutFox\\Save",
+      "category": "saves",
+      "needs_mapping": true,
+      "safe_for_stream": true,
+      "recommended_storage": "streaming",
+      "notes": "Local profile and score data."
+    }
+  ]
+}

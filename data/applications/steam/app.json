@@ -1,0 +1,19 @@
+{
+  "app_id": "steam",
+  "name": "Valve Steam",
+  "winget_id": "Valve.Steam",
+  "steam_id": null,
+  "website": "https://store.steampowered.com",
+  "directories": [
+    {
+      "id": "userdata",
+      "description": "Local user profiles, screenshots, cloud save fallbacks, and grid icons",
+      "default_path": "%PROGRAMFILES(X86)%\\Steam\\userdata",
+      "category": "configs",
+      "needs_mapping": true,
+      "safe_for_stream": true,
+      "recommended_storage": "streaming",
+      "notes": "Per-account configuration, non-Steam shortcuts, custom library art, and local screenshot cache."
+    }
+  ]
+}

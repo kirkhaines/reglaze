@@ -83,9 +83,21 @@ Modern software engineering treats servers and compute runtimes as disposable in
 ```text
 reglaze/
 ├── data/
-│   └── applications.json       # Reference catalog of apps, notable dirs, and storage rules
+│   ├── applications/           # Modular application catalog (one directory per app_id)
+│   │   ├── _schema.json        # Formal schema for individual app manifests
+│   │   ├── _template/          # Starter template (app.json, guide.md, post-install.ps1)
+│   │   ├── adobe_lightroom/    # app.json
+│   │   ├── outfox/             # app.json, guide.md, post-install.ps1
+│   │   ├── vscode/             # app.json, post-install.ps1
+│   │   └── ... (beat_saber, steam, lotro, git, etc.)
+│   ├── windows/                # Modular Windows settings & preference scripts
+│   │   ├── explorer-folder-options.ps1  # Hidden files, extensions, launch to This PC
+│   │   ├── taskbar-system-tray.ps1      # Taskbar alignment, search mode, tray icons
+│   │   ├── performance-power.ps1        # Power plan and display/sleep timeouts
+│   │   └── audit-windows-settings.ps1   # Audits existing system settings
+│   └── applications.json       # Cached/merged application catalog index
 ├── docs/
-│   ├── ARCHITECTURE.md         # Detailed design decisions
+│   ├── ARCHITECTURE.md         # Comprehensive system architecture & technical design
 │   └── TESTING_GUIDE.md        # Walkthrough for third-party testers
 ├── schemas/
 │   └── reglaze.schema.json     # JSON Schema validating the agnostic spec
@@ -94,9 +106,9 @@ reglaze/
 │   │   ├── Audit-BitLocker.ps1 # Extracts BitLocker recovery keys
 │   │   ├── Audit-Licensing.ps1 # Gathers Windows edition, digital license & product keys
 │   │   ├── Audit-Storage.ps1   # Enumerates physical disks, partition GUIDs & drive letters
+│   │   ├── Audit-Apps.ps1      # Discovers WinGet packages AND Add/Remove Programs (ARP)
 │   │   ├── Audit-Junctions.ps1 # Discovers existing directory junctions and reparse points
-│   │   ├── Audit-Packages.ps1  # Exports installed WinGet applications
-│   │   └── Invoke-Audit.ps1    # Orchestrator producing audit-reference.json & initial reglaze.yaml
+│   │   └── Invoke-Audit.ps1    # Emits audit-reference.json & scaffolded reglaze.yaml
 │   ├── compiler/               # Translates reglaze.yaml -> tool outputs
 │   │   ├── generators/
 │   │   │   ├── UnattendGenerator.ps1
@@ -111,11 +123,12 @@ reglaze/
 │       ├── Install-Junctions.ps1
 │       ├── Test-CloudMount.ps1
 │       ├── Setup-Wsl.ps1
-│       └── sync-dev-repos.sh   # Background rclone sync script inside WSL2
+│       ├── hydrate.ps1         # User hydration runner with checkpoint resumption
+│       └── sync-dev-repos.sh   # Background rclone bisync script inside WSL2
 ├── examples/
 │   ├── audit-reference.json    # Reference output from pre-flight audit
 │   └── reglaze.yaml            # Complete reference workstation specification
-├── reglaze.yaml                # Your personal system blueprint
+├── reglaze.yaml                # Your personal system blueprint (git-ignored)
 └── README.md
 ```
 
@@ -347,6 +360,10 @@ Windows directory junctions (`mklink /J`) are used to link local application pat
 * Active Git repositories and build trees must reside inside the native ext4 WSL2 VHD filesystem (e.g., `~/dev`) rather than over the Windows 9P filesystem bridge (`/mnt/c/...`) to avoid catastrophic filesystem performance degradation.
 * `reglaze` configures `rclone` inside WSL2 to synchronize `~/dev` to a designated Google Drive remote folder (`Backups/WSL_DevRepos`) on a scheduled systemd user timer.
 
+### Git-Optional Dotfile & Application Config Management via Chezmoi
+* **Decoupled from Git:** While Chezmoi is often paired with Git repositories, `reglaze` supports running Chezmoi directly backed by a local folder provisioned inside Google Drive streaming (`%STREAM%\Config\chezmoi`) or local sync roots (`%SYNC_PROJECTS%\dotfiles`). No Git remote repository is required.
+* **App-Specific Config Modifiers (`modify_` scripts):** For applications with dynamic or sensitive settings files (JSON, INI, XML), Chezmoi's `modify_<filename>.ps1` scripts read existing application configurations from `stdin`, programmatically transform specific keys/sections, and output the updated configuration to `stdout`. This preserves local machine state while enforcing desired options without overwriting whole files statically.
+
 ### Single API Credential Declaration & Quota Protection
 * **The Problem:** The default public API client ID shared by tools like `rclone` frequently encounters Google's global queries-per-second throttling. During full syncs of dev repos containing thousands of files, this causes `HTTP 403: User Rate Limit Exceeded` errors and stalled backups.
 * **The Solution:** Google Drive OAuth 2.0 API credentials (`client_id_env` and `client_secret_env`) are configured **once** under `storage.api_credentials` in `reglaze.yaml`. The compiler automatically injects these credentials into both Windows synchronization scripts and the WSL2 `rclone.conf` configuration, ensuring uninterrupted wire-speed synchronization under your private project quota.
@@ -360,10 +377,11 @@ Before wiping an existing installation, `reglaze` runs a non-destructive discove
 * **BitLocker Recovery Keys (`Audit-BitLocker.ps1`)**: Queries all protected volumes using `Get-BitLockerVolume` to capture key protectors and numeric recovery passwords, ensuring auxiliary drives are not permanently locked out post-reinstall.
 * **Licensing & Activation Checks (`Audit-Licensing.ps1`)**: Extracts the current Windows edition, licensing channel (OEM/Retail/Digital License), and partial or full product key details via WMI/SoftwareLicensingService.
 * **Drive & Partition Identification (`Audit-Storage.ps1`)**: Identifies physical drive numbers, serial numbers, models, partition styles (GPT/MBR), partition GUIDs, volumes, and file systems to ensure `autounattend.xml` targets the exact OS drive without risking secondary data drives.
-* **Directory Junctions & Reparse Points (`Audit-Junctions.ps1`)**: Scans `%USERPROFILE%`, `%APPDATA%`, and local application directories for existing reparse points (`fsutil reparsepoint query` / `Get-Item | ? LinkType`), cross-referencing findings against `data/applications.json`.
-* **WinGet Packages (`Audit-Packages.ps1`)**: Exports installed software detectable via WinGet (`winget export`).
+* **Comprehensive Application Discovery (`Audit-Apps.ps1`)**: Discovers installed software across both **WinGet** (`winget export`) and the Windows **Add/Remove Programs (ARP)** registry hives (64-bit, 32-bit WoW64, and per-user HKCU). Detects manual installers (InnoSetup, NSIS, MSI), de-duplicates against WinGet, and correlates findings against `data/applications/`.
+* **Windows Preferences & System Settings (`audit-windows-settings.ps1`)**: Audits user and system settings (File Explorer folder options, Taskbar alignment and search mode, power schemes and sleep timeouts).
+* **Directory Junctions & Reparse Points (`Audit-Junctions.ps1`)**: Scans `%USERPROFILE%`, `%APPDATA%`, and local application directories for existing reparse points (`fsutil reparsepoint query` / `Get-Item | ? LinkType`), cross-referencing findings against `data/applications/`.
 * **Output Artifacts**:
-  * `audit-reference.json`: Complete dump of all hardware IDs, licensing metadata, BitLocker keys, disk partitions, and raw installed package lists.
+  * `audit-reference.json`: Complete dump of hardware IDs, licensing metadata, BitLocker keys, disk partitions, WinGet packages, non-WinGet ARP software, and Windows system preferences.
   * `reglaze.yaml`: Scaffolded starter blueprint pre-populated with discovered system settings, packages, storage mappings, and suggested junction configurations ready for user editing.
 
 ---

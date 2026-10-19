@@ -1,0 +1,29 @@
+{
+  "app_id": "adobe_lightroom",
+  "name": "Adobe Lightroom Classic",
+  "winget_id": "Adobe.CreativeCloud",
+  "steam_id": null,
+  "website": "https://www.adobe.com/products/photoshop-lightroom.html",
+  "directories": [
+    {
+      "id": "catalog",
+      "description": "Lightroom Catalog (.lrcat) and Previews",
+      "default_path": "%USERPROFILE%\\Pictures\\Lightroom",
+      "category": "catalog",
+      "needs_mapping": true,
+      "safe_for_stream": false,
+      "recommended_storage": "sync",
+      "notes": "SQLite-backed database engine. Direct access across virtual streaming mounts leads to file locking latency, database corruption, and crashed catalogs. Must use local synced storage."
+    },
+    {
+      "id": "presets",
+      "description": "Develop Presets and Camera Profiles",
+      "default_path": "%APPDATA%\\Adobe\\CameraRaw",
+      "category": "config",
+      "needs_mapping": true,
+      "safe_for_stream": true,
+      "recommended_storage": "streaming",
+      "notes": "Flat XMP files; safe for streaming cloud mount."
+    }
+  ]
+}

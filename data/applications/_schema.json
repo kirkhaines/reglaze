@@ -1,0 +1,41 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ApplicationDefinition",
+  "type": "object",
+  "required": ["app_id", "name", "directories"],
+  "properties": {
+    "app_id": { "type": "string" },
+    "name": { "type": "string" },
+    "winget_id": { "type": ["string", "null"] },
+    "steam_id": { "type": ["integer", "null"] },
+    "website": { "type": "string" },
+    "install": {
+      "type": "object",
+      "properties": {
+        "method": { "enum": ["winget", "steam", "manual"] },
+        "download_url": { "type": ["string", "null"] },
+        "default_target_directory": { "type": ["string", "null"] },
+        "guide_file": { "type": ["string", "null"] },
+        "post_install_script": { "type": ["string", "null"] },
+        "instructions": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "directories": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "description", "default_path", "category", "needs_mapping", "safe_for_stream", "recommended_storage"],
+        "properties": {
+          "id": { "type": "string" },
+          "description": { "type": "string" },
+          "default_path": { "type": "string" },
+          "category": { "enum": ["config", "configs", "saves", "songs", "catalog", "library"] },
+          "needs_mapping": { "type": "boolean" },
+          "safe_for_stream": { "type": "boolean" },
+          "recommended_storage": { "enum": ["streaming", "sync", "local_preserved"] },
+          "notes": { "type": "string" }
+        }
+      }
+    }
+  }
+}

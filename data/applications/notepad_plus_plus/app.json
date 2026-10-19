@@ -1,0 +1,19 @@
+{
+  "app_id": "notepad_plus_plus",
+  "name": "Notepad++",
+  "winget_id": "Notepad++.Notepad++",
+  "steam_id": null,
+  "website": "https://notepad-plus-plus.org",
+  "directories": [
+    {
+      "id": "app_config",
+      "description": "Session states, shortcuts, and syntax styling",
+      "default_path": "%APPDATA%\\Notepad++",
+      "category": "configs",
+      "needs_mapping": true,
+      "safe_for_stream": true,
+      "recommended_storage": "streaming",
+      "notes": "XML configuration files; safe for streaming cloud mount."
+    }
+  ]
+}

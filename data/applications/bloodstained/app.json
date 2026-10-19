@@ -1,0 +1,19 @@
+{
+  "app_id": "bloodstained",
+  "name": "Bloodstained: Ritual of the Night",
+  "winget_id": null,
+  "steam_id": 692850,
+  "website": "https://playbloodstained.com",
+  "directories": [
+    {
+      "id": "game_saves",
+      "description": "Save game slots and system data",
+      "default_path": "%LOCALAPPDATA%\\BloodstainedRotN",
+      "category": "saves",
+      "needs_mapping": true,
+      "safe_for_stream": true,
+      "recommended_storage": "streaming",
+      "notes": "Unreal Engine local save game and configuration files."
+    }
+  ]
+}

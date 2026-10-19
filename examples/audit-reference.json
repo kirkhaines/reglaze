@@ -95,6 +95,41 @@
     { "id": "Adobe.CreativeCloud", "version": "6.4.0.361" },
     { "id": "Docker.DockerDesktop", "version": "4.35.0" },
     { "id": "twpayne.chezmoi", "version": "2.53.0" }
-  ]
+  ],
+  "detected_non_winget_applications": [
+    {
+      "display_name": "Project OutFox Alpha 5",
+      "display_version": "0.5.0",
+      "publisher": "Team OutFox",
+      "install_location": "D:\\Games\\OutFox",
+      "registry_hive": "HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall",
+      "matched_app_id": "outfox"
+    },
+    {
+      "display_name": "RetroArch",
+      "display_version": "1.19.1",
+      "publisher": "Libretro",
+      "install_location": "C:\\Emulators\\RetroArch",
+      "registry_hive": "HKCU:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall",
+      "matched_app_id": null
+    }
+  ],
+  "detected_windows_settings": {
+    "explorer": {
+      "show_hidden_files": true,
+      "show_file_extensions": true,
+      "launch_to": "ThisPC"
+    },
+    "taskbar": {
+      "alignment": "Left",
+      "search_mode": "IconOnly",
+      "widgets_visible": false,
+      "chat_visible": false
+    },
+    "power": {
+      "active_scheme_name": "High Performance",
+      "ac_sleep_minutes": 0
+    }
+  }
 }
 

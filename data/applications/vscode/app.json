@@ -1,0 +1,22 @@
+{
+  "app_id": "vscode",
+  "name": "Visual Studio Code",
+  "winget_id": "Microsoft.VisualStudioCode",
+  "steam_id": null,
+  "website": "https://code.visualstudio.com",
+  "install": {
+    "post_install_script": "post-install.ps1"
+  },
+  "directories": [
+    {
+      "id": "user_settings",
+      "description": "Keybindings, user settings, and snippets",
+      "default_path": "%APPDATA%\\Code\\User",
+      "category": "configs",
+      "needs_mapping": true,
+      "safe_for_stream": true,
+      "recommended_storage": "streaming",
+      "notes": "Safe for streaming mount or dotfiles (chezmoi) management."
+    }
+  ]
+}

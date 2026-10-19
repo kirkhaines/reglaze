@@ -1,0 +1,19 @@
+{
+  "app_id": "neva",
+  "name": "Neva",
+  "winget_id": null,
+  "steam_id": 2420660,
+  "website": "https://www.nomada.studio",
+  "directories": [
+    {
+      "id": "game_saves",
+      "description": "Game saves, chapter progress, and settings",
+      "default_path": "%LOCALAPPDATA%\\Neva",
+      "category": "saves",
+      "needs_mapping": true,
+      "safe_for_stream": true,
+      "recommended_storage": "streaming",
+      "notes": "Standard JSON/binary local game progress and settings."
+    }
+  ]
+}

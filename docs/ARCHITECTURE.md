@@ -124,6 +124,31 @@ To decouple blueprints from physical machine drive topologies, all directory pat
 > [!IMPORTANT]
 > **Syntax Standardization:** All variable placeholders strictly use the underscore format (e.g., `%SYNC_CATALOGS%`, `%SYNC_PROJECTS%`). The colon format (such as `%SYNC:catalogs%`) is explicitly rejected by the schema validator.
 
+### 3.4 Dotfile & Configuration Management via Chezmoi (Git-Optional)
+
+While Chezmoi is frequently paired with remote Git repositories, **Chezmoi operates on local directory trees and does not require Git**. `reglaze` supports running Chezmoi directly against storage backends provisioned in Google Drive:
+
+1. **Decoupled Source Directory**:
+   - The Chezmoi source state can reside directly within the cloud streaming tier (`%STREAM%\Config\chezmoi`) or within a local sync root (`%SYNC_PROJECTS%\dotfiles`).
+   - Invocation does not require cloning a repository; it reads the source directory directly:
+     ```powershell
+     chezmoi apply --source "$env:STREAM\Config\chezmoi"
+     ```
+   - Alternatively, a lightweight `~/.config/chezmoi/chezmoi.toml` can be provisioned by `reglaze` pointing to the source directory:
+     ```toml
+     sourceDir = "G:/My Drive/Config/chezmoi"
+     ```
+
+2. **App-Specific Config Reading & Writing (`modify_` scripts)**:
+   - For applications with complex configuration files (e.g. `UserPreferences.ini`, `settings.json`, XML configs) where overwriting the entire file would destroy dynamic runtime state or machine-specific tokens, Chezmoi supports **`modify_` scripts**.
+   - A `modify_<filename>.ps1` script receives the existing target file on standard input (`stdin`), executes programmatic transformations (e.g., updating specific INI keys, merging JSON fragments, or toggling XML attributes), and emits the modified content on standard output (`stdout`).
+   - If the target file does not yet exist on disk, Chezmoi provides an empty stream or default template to the script.
+
+3. **Lifecycle Script Execution (`run_` scripts)**:
+   - **`run_once_`**: Executes once per machine (e.g. installing CLI extensions, setting one-time registry keys).
+   - **`run_onchange_`**: Re-executes whenever an accompanying configuration file changes (e.g. hashing a plugins list and running an installer when the hash changes).
+   - **`run_after_`**: Executes after configuration files are written (e.g. reloading daemon settings or restarting an agent).
+
 ---
 
 ## 4. Security, Secrets & Threat Model
@@ -250,9 +275,28 @@ Get-BitLockerVolume | ForEach-Object {
 }
 ```
 
+#### Dual Application Discovery: WinGet + Add/Remove Programs (ARP)
+WinGet manifests only cover software distributed through the Windows Package Manager. To detect manually installed applications, standalone software, and older installers (InnoSetup, NSIS, InstallShield, MSI), `audit.ps1` executes a comprehensive registry harvest across three distinct hives:
+1. **64-bit Machine-Wide**: `HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*`
+2. **32-bit WoW64 Machine-Wide**: `HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*`
+3. **Current User (Per-User Installs)**: `HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*`
+
+The audit module:
+- Extracts `DisplayName`, `DisplayVersion`, `Publisher`, `InstallLocation`, `InstallDate`, and `UninstallString`.
+- Filters out OS updates, hotfixes, and language packs (`SystemComponent -ne 1`, `ParentKeyName -eq $null`).
+- De-duplicates items already tracked by WinGet.
+- Cross-references remaining applications against the `data/applications/` catalog using normalized names and fuzzy publisher matching.
+- Emits unmatched applications into `detected_non_winget_applications` in `audit-reference.json`, allowing the user to easily identify and transition manual software into `custom:` or new `data/applications/<app_id>` definitions.
+
+#### Windows Preferences & System Settings Discovery
+The pre-flight audit executes `data/windows/audit-windows-settings.ps1` to capture current environment configurations:
+- **File Explorer**: Hidden file visibility (`Hidden`), file extension display (`HideFileExt`), navigation target (`LaunchTo`).
+- **Taskbar & Tray**: Taskbar alignment (`TaskbarAl`), search display mode (`SearchboxTaskbarMode`), widgets (`TaskbarDa`), and system tray icon visibility.
+- **Power & Performance**: Active power scheme GUID and display/sleep timeouts (`powercfg`).
+
 #### Pre-Flight Output Artifacts
-1. `audit-reference.json`: The machine hardware and cryptographic profile.
-2. `reglaze.yaml`: Pre-populated skeleton blueprint reflecting detected packages and junction mappings.
+1. `audit-reference.json`: The machine hardware, cryptographic profile, installed WinGet packages, non-WinGet ARP software, and detected Windows settings.
+2. `reglaze.yaml`: Pre-populated skeleton blueprint reflecting detected packages, junction mappings, and storage options.
 
 ---
 
@@ -451,22 +495,82 @@ su - $WSLUser -c 'rclone bisync gdrive:dev_repos /home/$WSLUser/dev_repos --resy
 "@
 ```
 
+#### HITL State Resumption, Checkpoints & Desktop Shortcut
+
+To ensure a seamless user experience even if the operator is interrupted, exits the terminal, or experiences a reboot:
+
+1. **State Tracking & Checkpoints (`hydration-state.json`)**:
+   - `hydrate.ps1` maintains an idempotent state file at `%LOCALAPPDATA%\Reglaze\hydration-state.json`.
+   - Each completed milestone records a timestamped checkpoint:
+     ```json
+     {
+       "msa_connected": true,
+       "cloud_stream_authenticated": true,
+       "steam_library_connected": true,
+       "manual_apps_installed": ["outfox"],
+       "junctions_established": true,
+       "wsl_provisioned": true,
+       "dev_repos_cloned": false,
+       "completed": false
+     }
+     ```
+   - When launched, `hydrate.ps1` checks this state file. Completed milestones are validated and skipped, allowing the operator to resume exactly where they left off.
+
+2. **Automatic Startup & Self-Unregistration**:
+   - At the conclusion of Phase 4, the installer registers `hydrate.ps1` in the standard user's startup registry key:
+     `HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run\ReglazeHydrate`
+   - When the final milestone completes (`completed: true`), `hydrate.ps1` **automatically unregisters itself**:
+     ```powershell
+     Remove-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" -Name "ReglazeHydrate" -ErrorAction SilentlyContinue
+     ```
+   - Subsequent user logins boot directly into a clean, unencumbered Windows desktop.
+
+3. **Visible Desktop Resumption Shortcut**:
+   - During initial user session initialization, a prominent shortcut is placed on the operator's desktop:
+     `%USERPROFILE%\Desktop\Resume Reglaze Setup.lnk`
+     pointing to:
+     `powershell.exe -ExecutionPolicy Bypass -NoExit -File C:\Reglaze\payload\hydrate.ps1`
+   - If the operator closes the terminal or needs to pause setup, they can simply double-click this desktop shortcut to resume at any time.
+   - Upon final completion, the script renames the shortcut to `Reglaze Health Check.lnk` to provide a 1-click diagnostic tool for verifying ongoing junction and sync health.
+
 ---
 
 ## 6. Component Architecture & CLI Interface
 
-The `reglaze` framework is implemented as an extensible PowerShell 7+ engine with a standardized CLI command suite:
+The `reglaze` framework is implemented as an extensible PowerShell 7+ engine with a standardized CLI command suite and modular catalog architecture:
 
 ```
 reglaze/
 ├── bin/
 │   └── reglaze.ps1                # Main CLI wrapper script
 ├── data/
-│   └── applications.json          # Reference Application Catalog
+│   ├── applications/              # Modular Application Catalog (one directory per app_id)
+│   │   ├── _schema.json           # Formal JSON Schema for individual app manifests
+│   │   ├── _template/             # Starter template for adding new applications
+│   │   │   ├── app.json
+│   │   │   ├── guide.md
+│   │   │   └── post-install.ps1
+│   │   ├── adobe_lightroom/
+│   │   │   └── app.json
+│   │   ├── outfox/
+│   │   │   ├── app.json
+│   │   │   ├── guide.md           # Interactive manual install instructions
+│   │   │   └── post-install.ps1   # Post-install shortcuts and path configuration
+│   │   ├── vscode/
+│   │   │   ├── app.json
+│   │   │   └── post-install.ps1   # Extension initialization
+│   │   └── ... (beat_saber, steam, lotro, git, etc.)
+│   ├── windows/                   # Modular Windows Settings & Preferences
+│   │   ├── explorer-folder-options.ps1  # Show hidden files, extensions, launch to This PC
+│   │   ├── taskbar-system-tray.ps1      # Taskbar alignment, search mode, widget visibility
+│   │   ├── performance-power.ps1        # Power scheme, sleep and monitor timeouts
+│   │   └── audit-windows-settings.ps1   # Audits existing Windows settings for baseline
+│   └── applications.json          # Merged/cached catalog index
 ├── src/
 │   ├── audit/                     # Phase 0 Audit Engine
 │   │   ├── Get-MachineHardware.ps1
 │   │   ├── Get-BitLockerProfile.ps1
+│   │   ├── Get-InstalledApplications.ps1 # Scans WinGet + Add/Remove Programs (ARP)
 │   │   ├── Get-ExistingJunctions.ps1
 │   │   └── Export-AuditBaseline.ps1
 │   ├── compiler/                  # Phase 1 & 2 Compiler Engine
@@ -474,6 +578,7 @@ reglaze/
 │   │   ├── Resolve-Variables.ps1
 │   │   ├── Build-Autounattend.ps1
 │   │   ├── Build-WinGetDSC.ps1
+
 │   │   └── Build-MediaPayload.ps1
 │   ├── linking/                   # Junction & Redirection Engine
 │   │   ├── New-DirectoryJunction.ps1

@@ -1,0 +1,19 @@
+{
+  "app_id": "git",
+  "name": "Git for Windows",
+  "winget_id": "Git.Git",
+  "steam_id": null,
+  "website": "https://git-scm.com",
+  "directories": [
+    {
+      "id": "gitconfig",
+      "description": "Global user git configuration and credentials",
+      "default_path": "%USERPROFILE%\\.gitconfig",
+      "category": "configs",
+      "needs_mapping": true,
+      "safe_for_stream": true,
+      "recommended_storage": "streaming",
+      "notes": "Global git settings; safe for streaming or chezmoi management."
+    }
+  ]
+}
