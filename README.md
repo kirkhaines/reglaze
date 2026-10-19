@@ -72,9 +72,9 @@ Modern software engineering treats servers and compute runtimes as disposable in
 | **0. Pre-Flight Audit** | `audit.ps1` | Scans the active PC prior to wiping. Extracts BitLocker recovery keys, Windows activation/license info, physical disk and partition GUIDs/IDs, active directory junctions, installed WinGet packages, Git remotes, and environment variables. Correlates detected software against `data/applications.json` and emits `audit-reference.json` alongside an initial, scaffolded `reglaze.yaml`. |
 | **1. User Blueprint Review & Validation** | Manual / Config Editor & Compiler | The user inspects and edits `reglaze.yaml` against `audit-reference.json`. The `reglaze` compiler validates declared applications against `data/applications.json`: any directory marked `needs_mapping: true` must be mapped to its recommended target type (`streaming` vs `sync`), or the user must provide an explicit `override` with a rationale. Uncataloged apps and custom folders are declared under `custom:`. |
 | **2. Media Generation** | `Compile-Reglaze.ps1` & `New-InstallMedia.ps1` | Compiles `reglaze.yaml` into tool-specific artifacts (`autounattend.xml`, `configuration.dsc.yaml`, `bootstrap.ps1`, `setup-wsl.sh`) and packages them onto bootable installation media (USB or ISO) with required drivers and bootstrap scripts. |
-| **3. Unattended Install** | `autounattend.xml` | Boots from media, targets the specified disk/partition without touching secondary storage drives, bypasses OOBE/telemetry traps, provisions the `LocalAdmin` administrative account and the primary standard (non-admin) user account, and triggers post-install provisioning. |
-| **4. System & App Provisioning** | WinGet DSC (`configuration.dsc.yaml`) | Declaratively provisions system features (Developer Mode, WSL2, VirtualMachinePlatform), core runtimes, and primary applications without manual installer clicks. |
-| **5. State Linking & Tailoring** | `bootstrap.ps1` & `Setup-Wsl.ps1` | Prompts for initial cloud/sync auth, configures Google Drive API credentials (avoiding rate limits), validates mount points and synced folders, provisions WSL2 Ubuntu distro with apt packages, configures `rclone` to sync `dev_repos` to Google Drive, recreates directory junctions, and runs dotfile tools. |
+| **3. Unattended Install** | `autounattend.xml` | Boots from media, identifies target OS disk via multi-factor hardware attributes (Serial Number, Bus Type, Model) to protect secondary drives, partitions and applies Windows image, provisions dedicated `LocalAdmin` with temporary setup auto-logon, and creates the primary standard user account (`local_to_msa`). |
+| **4. Machine Provisioning & BitLocker Recovery** | `bootstrap.ps1` & WinGet DSC | Auto-logs into `LocalAdmin`. Unlocks preserved secondary drives using embedded recovery keys and re-arms TPM auto-unlock (`Enable-BitLockerAutoUnlock`). Declaratively provisions system features (WSL2, Hyper-V, Developer Mode), runtimes, and core applications via WinGet DSC, pre-stages WSL2, and purges auto-logon credentials before rebooting. |
+| **5. User & Application Hydration** | `hydrate.ps1` & `Setup-Wsl.ps1` | Primary standard user signs in interactively (connecting to MSA). Staged human-in-the-loop steps: cloud storage authentication (Google Drive sentinel mount) &rarr; Steam GUI sign-in (instantly detects pre-existing `%DATA_DRIVE%` library) &rarr; manual app install guidance (e.g. OutFox). Establishes directory junctions, executes non-interactive WSL2 root user provisioning with `rclone bisync`, clones `dev_repos`, and runs post-flight health verification. |
 
 ---
 
@@ -144,13 +144,14 @@ system:
       username: "LocalAdmin"
       password_env: "LOCAL_ADMIN_PASSWORD"
       description: "Dedicated local administrator for UAC elevation"
+      auto_logon: true          # Temporarily used by unattended setup for initial provisioning
     # Primary daily interactive user (configured as a standard non-admin account)
     primary_user:
-      account_type: "microsoft" # or "local"
+      account_type: "local_to_msa" # Created locally, connected interactively to MSA post-install
       email: "developer@example.com"
       username: "Developer"
       is_admin: false           # Standard user without administrative privileges
-      auto_logon: true          # Automatically sign into primary user post-provisioning
+      auto_logon: false         # Daily interactive login
   features:
     developer_mode: true
     virtual_machine_platform: true
@@ -177,16 +178,16 @@ storage:
   sync:
     provider: "google-drive-sync"
     directories:
-      # Multiple synced folders can be defined; accessible via %SYNC:<id>% or %SYNC_<ID>%
+      # Multiple synced folders can be defined; accessible via %SYNC_<ID>%
       catalogs:
         local_path: "%OS_DRIVE%\\Sync\\Catalogs"
         cloud_folder: "Catalogs"
         verify_folder: "%OS_DRIVE%\\Sync\\Catalogs"
-        sync_variable: "SYNC_CATALOGS" # Exposes %SYNC:catalogs% or %SYNC_CATALOGS%
+        sync_variable: "SYNC_CATALOGS" # Exposes %SYNC_CATALOGS%
       projects:
         local_path: "%DATA_DRIVE%\\Projects"
         cloud_folder: "Projects"
-        sync_variable: "SYNC_PROJECTS" # Exposes %SYNC:projects% or %SYNC_PROJECTS%
+        sync_variable: "SYNC_PROJECTS" # Exposes %SYNC_PROJECTS%
   api_credentials:
     # Defined ONCE here; compiler injects into Windows sync scripts and WSL2 rclone.conf
     client_id_env: "GDRIVE_CLIENT_ID"
@@ -199,7 +200,7 @@ variables:
 
 # Unified applications section.
 # Presence in this list implies automatic installation (via WinGet or Steam) unless overridden.
-# Directories use variable placeholders (%STREAM%, %SYNC:<id>%, %OS_DRIVE%, %DATA_DRIVE%, etc.)
+# Directories use variable placeholders (%STREAM%, %SYNC_<ID>%, %OS_DRIVE%, %DATA_DRIVE%, etc.)
 applications:
   # Pattern 1: Cloud-Streamed Settings (WinGet app)
   vscode:
@@ -211,7 +212,7 @@ applications:
   adobe_lightroom:
     directories:
       catalog:
-        target: "%SYNC:catalogs%\\Lightroom" # Satisfies 'recommended_storage: sync'
+        target: "%SYNC_CATALOGS%\\Lightroom" # Satisfies 'recommended_storage: sync'
       presets:
         override:
           action: "omit"
@@ -275,11 +276,12 @@ wsl2:
       # API credentials automatically inherited from storage.api_credentials above
 
 dev_repos:
-  root: "%SYNC:projects%" # Uses synced projects folder defined in storage.sync
+  root: "%SYNC_PROJECTS%" # Uses synced projects folder defined in storage.sync
   remotes:
     - name: "dotfiles"
       repo: "git@github.com:developer/dotfiles.git"
       method: "chezmoi"
+
 ```
 
 ---
@@ -303,7 +305,7 @@ Applications store critical data in disparate, undocumented local folders. `regl
 To prevent brittle hardcoded drive letters and paths, `reglaze` supports standardized variable placeholders:
 * **Drive Identifiers:** `%OS_DRIVE%` (target OS disk, e.g. `C:`) and `%DATA_DRIVE%` (secondary preserved disk, e.g. `D:`).
 * **Streaming Mount:** `%STREAM%` (resolves to the cloud streaming sentinel root, e.g. `G:\My Drive`).
-* **Multiple Synced Roots:** `%SYNC:<id>%` or `%SYNC_<ID>%` (e.g. `%SYNC:catalogs%` &rarr; `C:\Sync\Catalogs`, `%SYNC:projects%` &rarr; `D:\Projects`).
+* **Multiple Synced Roots:** `%SYNC_<ID>%` (e.g. `%SYNC_CATALOGS%` &rarr; `C:\Sync\Catalogs`, `%SYNC_PROJECTS%` &rarr; `D:\Projects`).
 * **Custom Shortcuts:** Any custom variable declared under `variables:` (e.g. `%GAMES_DIR%`, `%STEAM_DIR%`).
 
 ### Enforcement & Override Policy

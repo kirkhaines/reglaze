@@ -14,13 +14,14 @@ system:
       username: "LocalAdmin"
       password_env: "LOCAL_ADMIN_PASSWORD"
       description: "Dedicated local administrator for UAC elevation"
+      auto_logon: true          # Temporarily used by unattended setup for initial provisioning
     # Primary daily interactive user (configured as a standard non-admin account)
     primary_user:
-      account_type: "microsoft" # or "local"
+      account_type: "local_to_msa" # Created locally, connected interactively to MSA post-install
       email: "developer@example.com"
       username: "Developer"
       is_admin: false           # Standard user without administrative privileges
-      auto_logon: true          # Automatically sign into primary user post-provisioning
+      auto_logon: false         # Active daily login requires standard user authentication
   features:
     developer_mode: true
     virtual_machine_platform: true
@@ -47,16 +48,16 @@ storage:
   sync:
     provider: "google-drive-sync"
     directories:
-      # Multiple synced folders can be defined; accessible via %SYNC:<id>% or %SYNC_<ID>%
+      # Multiple synced folders can be defined; accessible via %SYNC_<ID>%
       catalogs:
         local_path: "%OS_DRIVE%\\Sync\\Catalogs"
         cloud_folder: "Catalogs"
         verify_folder: "%OS_DRIVE%\\Sync\\Catalogs"
-        sync_variable: "SYNC_CATALOGS" # Exposes %SYNC:catalogs% or %SYNC_CATALOGS%
+        sync_variable: "SYNC_CATALOGS" # Exposes %SYNC_CATALOGS%
       projects:
         local_path: "%DATA_DRIVE%\\Projects"
         cloud_folder: "Projects"
-        sync_variable: "SYNC_PROJECTS" # Exposes %SYNC:projects% or %SYNC_PROJECTS%
+        sync_variable: "SYNC_PROJECTS" # Exposes %SYNC_PROJECTS%
   api_credentials:
     # Declared ONCE here. The compiler injects these credentials into Windows sync scripts and WSL2 rclone.conf
     client_id_env: "GDRIVE_CLIENT_ID"
@@ -69,7 +70,7 @@ variables:
 
 # Unified applications section.
 # Presence in this list implies automatic installation (via WinGet or Steam) unless overridden.
-# Directories use variable placeholders (%STREAM%, %SYNC:<id>%, %OS_DRIVE%, %DATA_DRIVE%, etc.)
+# Directories use variable placeholders (%STREAM%, %SYNC_<ID>%, %OS_DRIVE%, %DATA_DRIVE%, etc.)
 applications:
   # Pattern 1: Developer Editor with Cloud-Streamed Settings
   vscode:
@@ -81,7 +82,7 @@ applications:
   adobe_lightroom:
     directories:
       catalog:
-        target: "%SYNC:catalogs%\\Lightroom" # Satisfies 'recommended_storage: sync' (safe_for_stream: false)
+        target: "%SYNC_CATALOGS%\\Lightroom" # Satisfies 'recommended_storage: sync' (safe_for_stream: false)
       presets:
         override:
           action: "omit"
@@ -152,8 +153,9 @@ wsl2:
 
 # Host Windows Developer Repositories
 dev_repos:
-  root: "%SYNC:projects%" # Uses synced projects folder defined in storage.sync
+  root: "%SYNC_PROJECTS%" # Uses synced projects folder defined in storage.sync
   remotes:
     - name: "dotfiles"
       repo: "git@github.com:developer/dotfiles.git"
       method: "chezmoi"
+
