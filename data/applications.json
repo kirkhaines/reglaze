@@ -1,0 +1,270 @@
+[
+  {
+    "app_id": "adobe_lightroom",
+    "name": "Adobe Lightroom Classic",
+    "winget_id": "Adobe.CreativeCloud",
+    "steam_id": null,
+    "website": "https://www.adobe.com/products/photoshop-lightroom.html",
+    "directories": [
+      {
+        "id": "catalog",
+        "description": "Lightroom Catalog (.lrcat) and Previews",
+        "default_path": "%USERPROFILE%\\Pictures\\Lightroom",
+        "category": "catalog",
+        "needs_mapping": true,
+        "safe_for_stream": false,
+        "recommended_storage": "sync",
+        "notes": "SQLite-backed database engine. Direct access across virtual streaming mounts leads to file locking latency, database corruption, and crashed catalogs. Must use local synced storage."
+      },
+      {
+        "id": "presets",
+        "description": "Develop Presets and Camera Profiles",
+        "default_path": "%APPDATA%\\Adobe\\CameraRaw",
+        "category": "config",
+        "needs_mapping": true,
+        "safe_for_stream": true,
+        "recommended_storage": "streaming",
+        "notes": "Flat XMP files; safe for streaming cloud mount."
+      }
+    ]
+  },
+  {
+    "app_id": "darktable",
+    "name": "Darktable",
+    "winget_id": "Darktable.Darktable",
+    "steam_id": null,
+    "website": "https://www.darktable.org",
+    "directories": [
+      {
+        "id": "library",
+        "description": "Image library database and data caches",
+        "default_path": "%LOCALAPPDATA%\\darktable",
+        "category": "catalog",
+        "needs_mapping": true,
+        "safe_for_stream": false,
+        "recommended_storage": "sync",
+        "notes": "Uses SQLite databases (library.db, data.db). Streaming mounts cause database write locks and corruption."
+      }
+    ]
+  },
+  {
+    "app_id": "beat_saber",
+    "name": "Beat Saber",
+    "winget_id": null,
+    "steam_id": 620980,
+    "website": "https://beatsaber.com",
+    "directories": [
+      {
+        "id": "custom_levels",
+        "description": "Custom Songs & Levels",
+        "default_path": "%PROGRAMFILES(X86)%\\Steam\\steamapps\\common\\Beat Saber\\Beat Saber_Data\\CustomLevels",
+        "category": "songs",
+        "needs_mapping": true,
+        "safe_for_stream": true,
+        "recommended_storage": "streaming",
+        "notes": "Large audio and map asset bundles; read-only during song play. Safe for streaming or secondary local drive."
+      },
+      {
+        "id": "game_saves",
+        "description": "Player scores, campaign progress, and settings",
+        "default_path": "%USERPROFILE%\\AppData\\LocalLow\\Hyperbolic Magnetism\\Beat Saber",
+        "category": "saves",
+        "needs_mapping": true,
+        "safe_for_stream": true,
+        "recommended_storage": "streaming",
+        "notes": "Standard JSON/binary save files."
+      }
+    ]
+  },
+  {
+    "app_id": "outfox",
+    "name": "Project OutFox",
+    "winget_id": null,
+    "steam_id": null,
+    "website": "https://projectoutfox.com",
+    "directories": [
+      {
+        "id": "songs",
+        "description": "Rhythm Game Simfiles and Music Packs",
+        "default_path": "C:\\Games\\OutFox 0.5.0 Alpha Win64\\Songs",
+        "category": "songs",
+        "needs_mapping": true,
+        "safe_for_stream": true,
+        "recommended_storage": "streaming",
+        "notes": "Music charts and audio packages. Safe for streaming cloud mount or secondary storage."
+      },
+      {
+        "id": "save",
+        "description": "Profiles, high scores, machine statistics, and preferences",
+        "default_path": "C:\\Games\\OutFox 0.5.0 Alpha Win64\\Save",
+        "category": "saves",
+        "needs_mapping": true,
+        "safe_for_stream": true,
+        "recommended_storage": "streaming",
+        "notes": "Local profile and score data."
+      }
+    ]
+  },
+  {
+    "app_id": "satisfactory",
+    "name": "Satisfactory",
+    "winget_id": null,
+    "steam_id": 526870,
+    "website": "https://www.satisfactorygame.com",
+    "directories": [
+      {
+        "id": "game_saves",
+        "description": "Factory Game World Saves",
+        "default_path": "%LOCALAPPDATA%\\FactoryGame\\Saved\\SaveGames",
+        "category": "saves",
+        "needs_mapping": true,
+        "safe_for_stream": true,
+        "recommended_storage": "streaming",
+        "notes": "Discrete compressed save files (.sav) created sequentially. Safe for cloud streaming mount."
+      },
+      {
+        "id": "blueprints",
+        "description": "Custom Factory Blueprints",
+        "default_path": "%LOCALAPPDATA%\\FactoryGame\\Saved\\SaveGames\\blueprints",
+        "category": "configs",
+        "needs_mapping": true,
+        "safe_for_stream": true,
+        "recommended_storage": "streaming",
+        "notes": "Modular blueprint files."
+      }
+    ]
+  },
+  {
+    "app_id": "neva",
+    "name": "Neva",
+    "winget_id": null,
+    "steam_id": 2420660,
+    "website": "https://www.nomada.studio",
+    "directories": [
+      {
+        "id": "game_saves",
+        "description": "Game saves, chapter progress, and settings",
+        "default_path": "%LOCALAPPDATA%\\Neva",
+        "category": "saves",
+        "needs_mapping": true,
+        "safe_for_stream": true,
+        "recommended_storage": "streaming",
+        "notes": "Standard JSON/binary local game progress and settings."
+      }
+    ]
+  },
+  {
+    "app_id": "bloodstained",
+    "name": "Bloodstained: Ritual of the Night",
+    "winget_id": null,
+    "steam_id": 692850,
+    "website": "https://playbloodstained.com",
+    "directories": [
+      {
+        "id": "game_saves",
+        "description": "Save game slots and system data",
+        "default_path": "%LOCALAPPDATA%\\BloodstainedRotN",
+        "category": "saves",
+        "needs_mapping": true,
+        "safe_for_stream": true,
+        "recommended_storage": "streaming",
+        "notes": "Unreal Engine local save game and configuration files."
+      }
+    ]
+  },
+  {
+    "app_id": "lotro",
+    "name": "The Lord of the Rings Online",
+    "winget_id": "StandingStoneGames.TheLordoftheRingsOnline",
+    "steam_id": 212500,
+    "website": "https://www.lotro.com",
+    "directories": [
+      {
+        "id": "user_configs",
+        "description": "User preferences, UI layouts, plugins, and screenshots",
+        "default_path": "%USERPROFILE%\\Documents\\The Lord of the Rings Online",
+        "category": "configs",
+        "needs_mapping": true,
+        "safe_for_stream": true,
+        "recommended_storage": "streaming",
+        "notes": "Contains UserPreferences.ini, keybindings, custom UI skins, and ABC music files."
+      }
+    ]
+  },
+  {
+    "app_id": "steam",
+    "name": "Valve Steam",
+    "winget_id": "Valve.Steam",
+    "steam_id": null,
+    "website": "https://store.steampowered.com",
+    "directories": [
+      {
+        "id": "userdata",
+        "description": "Local user profiles, screenshots, cloud save fallbacks, and grid icons",
+        "default_path": "%PROGRAMFILES(X86)%\\Steam\\userdata",
+        "category": "configs",
+        "needs_mapping": true,
+        "safe_for_stream": true,
+        "recommended_storage": "streaming",
+        "notes": "Per-account configuration, non-Steam shortcuts, custom library art, and local screenshot cache."
+      }
+    ]
+  },
+  {
+    "app_id": "vscode",
+    "name": "Visual Studio Code",
+    "winget_id": "Microsoft.VisualStudioCode",
+    "steam_id": null,
+    "website": "https://code.visualstudio.com",
+    "directories": [
+      {
+        "id": "user_settings",
+        "description": "Keybindings, user settings, and snippets",
+        "default_path": "%APPDATA%\\Code\\User",
+        "category": "configs",
+        "needs_mapping": true,
+        "safe_for_stream": true,
+        "recommended_storage": "streaming",
+        "notes": "Safe for streaming mount or dotfiles (chezmoi) management."
+      }
+    ]
+  },
+  {
+    "app_id": "notepad_plus_plus",
+    "name": "Notepad++",
+    "winget_id": "Notepad++.Notepad++",
+    "steam_id": null,
+    "website": "https://notepad-plus-plus.org",
+    "directories": [
+      {
+        "id": "app_config",
+        "description": "Session states, shortcuts, and syntax styling",
+        "default_path": "%APPDATA%\\Notepad++",
+        "category": "configs",
+        "needs_mapping": true,
+        "safe_for_stream": true,
+        "recommended_storage": "streaming",
+        "notes": "XML configuration files; safe for streaming cloud mount."
+      }
+    ]
+  },
+  {
+    "app_id": "git",
+    "name": "Git for Windows",
+    "winget_id": "Git.Git",
+    "steam_id": null,
+    "website": "https://git-scm.com",
+    "directories": [
+      {
+        "id": "gitconfig",
+        "description": "Global user git configuration and credentials",
+        "default_path": "%USERPROFILE%\\.gitconfig",
+        "category": "configs",
+        "needs_mapping": true,
+        "safe_for_stream": true,
+        "recommended_storage": "streaming",
+        "notes": "Global git settings; safe for streaming or chezmoi management."
+      }
+    ]
+  }
+]

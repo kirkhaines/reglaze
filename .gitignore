@@ -1,0 +1,31 @@
+# Generated build artifacts
+dist/
+build/
+bin/
+
+# Temporary / Output files
+*.tmp
+*.bak
+*.log
+audit-output/
+
+# Secrets and environment configs
+.env
+.env.*
+*.key
+*.pfx
+
+# Windows system files
+Thumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Editor / IDE settings
+.vscode/
+.idea/
+*.suo
+*.user
+
+# Personal system blueprints and audit files (public templates are in examples/)
+reglaze.yaml
+audit-reference.json

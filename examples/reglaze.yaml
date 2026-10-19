@@ -1,0 +1,150 @@
+version: "1.0"
+profile: "developer-creative-workstation"
+
+system:
+  computer_name: "WORKSTATION-01"
+  os_edition: "Windows 11 Pro"
+  timezone: "Central Standard Time"
+  licensing:
+    channel: "Retail"
+    backup_key_reference: "audit-reference.json"
+  users:
+    # Dedicated local admin account used solely for UAC privilege elevation
+    local_admin:
+      username: "LocalAdmin"
+      password_env: "LOCAL_ADMIN_PASSWORD"
+      description: "Dedicated local administrator for UAC elevation"
+    # Primary daily interactive user (configured as a standard non-admin account)
+    primary_user:
+      account_type: "microsoft" # or "local"
+      email: "developer@example.com"
+      username: "Developer"
+      is_admin: false           # Standard user without administrative privileges
+      auto_logon: true          # Automatically sign into primary user post-provisioning
+  features:
+    developer_mode: true
+    virtual_machine_platform: true
+    subsystem_for_linux: true
+
+disks:
+  target_os_disk:
+    disk_id: 0 # Matches Disk 0 from audit-reference.json
+    wipe_and_partition: true
+  preserved_disks:
+    - disk_id: 1
+      label: "Bulk-Data"
+      expected_mount: "D:"
+      description: "Dedicated high-capacity SSD for raw media, VMs, and game libraries (user-backed up)"
+
+storage:
+  streaming:
+    cloud_provider: "google-drive"
+    mount_point: "G:"
+    verify_folder: "G:\\My Drive" # Sentinel folder used to verify mount readiness
+  sync:
+    provider: "google-drive-sync"
+    local_sync_root: "C:\\Sync"
+    verify_folder: "C:\\Sync\\Catalogs"
+  api_credentials:
+    # Declared ONCE here. The compiler injects these credentials into Windows sync scripts and WSL2 rclone.conf
+    client_id_env: "GDRIVE_CLIENT_ID"
+    client_secret_env: "GDRIVE_CLIENT_SECRET"
+
+# Unified applications section.
+# Presence in this list implies automatic installation (via WinGet or Steam) unless overridden.
+# Each entry demonstrates a distinct configuration pattern supported by reglaze:
+applications:
+  # Pattern 1: Developer Editor with Cloud-Streamed Settings
+  vscode:
+    directories:
+      user_settings:
+        target: "G:\\My Drive\\Config\\VSCode"
+
+  # Pattern 2: Database Catalog requiring Local Sync + Inline Directory Override
+  adobe_lightroom:
+    directories:
+      catalog:
+        target: "C:\\Sync\\Catalogs\\Lightroom" # Satisfies 'recommended_storage: sync' (safe_for_stream: false)
+      presets:
+        override:
+          action: "omit"
+          reason: "Starting clean with default presets; previous custom presets archived separately"
+
+  # Pattern 3: Multi-Tier Storage (Large game assets on secondary drive D:, save states in cloud streaming G:)
+  beat_saber:
+    directories:
+      custom_levels:
+        target: "D:\\SteamLibrary\\steamapps\\common\\Beat Saber\\Beat Saber_Data\\CustomLevels"
+      game_saves:
+        target: "G:\\My Drive\\Backups\\BeatSaber\\AppData"
+
+  # Pattern 4: Human-in-the-Loop Manual Installation for Non-Automated Software
+  outfox:
+    install:
+      method: "manual"
+      download_url: "https://projectoutfox.com/download"
+      version: "0.5.0 Alpha"
+      target_directory: "C:\\Games\\OutFox"
+      instructions:
+        - "Download the OutFox Win64 archive from the URL above."
+        - "Extract to 'C:\\Games\\OutFox'."
+        - "Launch once to generate the default user profile, then exit."
+      post_install_script: "./scripts/post-install-outfox.ps1"
+    directories:
+      songs:
+        target: "D:\\Games\\OutFox\\Songs"
+      save:
+        target: "G:\\My Drive\\Backups\\OutFox\\Save"
+
+  # Pattern 5: Zero-Configuration Tools (CLI runtimes, terminal, container engines)
+  git: {}
+  windows_terminal:
+    winget_id: "Microsoft.WindowsTerminal"
+  docker_desktop:
+    winget_id: "Docker.DockerDesktop"
+
+  # Pattern 6: Custom / Uncataloged Applications & Arbitrary Folders
+  custom:
+    - name: "RetroArch Emulators"
+      install: false
+      directories:
+        - name: "RetroArch Saves and States"
+          link: "C:\\Emulators\\RetroArch\\saves"
+          target: "G:\\My Drive\\Backups\\Emulators\\RetroArch\\saves"
+          storage_type: "streaming"
+    - name: "Local Scratch Stash"
+      directories:
+        - name: "DAW Audio Cache"
+          link: "C:\\DAW\\AudioCache"
+          target: "D:\\AudioProduction\\Cache"
+          storage_type: "local_preserved"
+
+# WSL2 Linux Subsystem Environment
+wsl2:
+  enabled: true
+  distro: "Ubuntu-24.04"
+  default_user: "developer"
+  packages:
+    - "build-essential"
+    - "git"
+    - "curl"
+    - "zsh"
+    - "python3-pip"
+    - "rclone"
+  dev_repos:
+    root: "~/dev"
+    sync_engine: "rclone"
+    rclone:
+      remote_name: "gdrive"
+      remote_folder: "Backups/WSL_DevRepos"
+      sync_direction: "bidirectional"
+      schedule: "*/30 * * * *" # Syncs every 30 minutes via systemd user timer
+      # Inherits API credentials from storage.api_credentials above
+
+# Host Windows Developer Repositories
+dev_repos:
+  root: "C:\\Projects" # Stored locally on fast SSD; synced via git remote
+  remotes:
+    - name: "dotfiles"
+      repo: "git@github.com:developer/dotfiles.git"
+      method: "chezmoi"

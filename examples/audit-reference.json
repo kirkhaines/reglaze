@@ -1,0 +1,100 @@
+{
+  "audit_metadata": {
+    "timestamp": "2026-10-18T12:00:00Z",
+    "reglaze_version": "1.0.0",
+    "host_name": "WORKSTATION-01",
+    "os_version": "Microsoft Windows 11 Pro 10.0.26100 (Build 26100)"
+  },
+  "system_and_licensing": {
+    "os_edition": "Windows 11 Pro",
+    "installed_product_key": "XXXXX-XXXXX-XXXXX-XXXXX-XXXXX",
+    "license_status": "Licensed",
+    "license_channel": "Retail",
+    "digital_license": true,
+    "hardware_hash": "00000000-0000-0000-0000-000000000000"
+  },
+  "bitlocker_recovery_keys": [
+    {
+      "mount_point": "C:",
+      "volume_type": "OperatingSystem",
+      "protection_status": "On",
+      "encryption_method": "XtsAes128",
+      "recovery_key_id": "{00000000-0000-0000-0000-000000000001}",
+      "recovery_password": "XXXXXX-XXXXXX-XXXXXX-XXXXXX-XXXXXX-XXXXXX-XXXXXX-XXXXXX",
+      "key_protectors": ["Tpm", "RecoveryPassword"]
+    },
+    {
+      "mount_point": "D:",
+      "volume_type": "Data",
+      "protection_status": "On",
+      "encryption_method": "XtsAes128",
+      "recovery_key_id": "{00000000-0000-0000-0000-000000000002}",
+      "recovery_password": "XXXXXX-XXXXXX-XXXXXX-XXXXXX-XXXXXX-XXXXXX-XXXXXX-XXXXXX",
+      "key_protectors": ["Password", "RecoveryPassword"]
+    }
+  ],
+  "storage_topology": {
+    "disks": [
+      {
+        "disk_number": 0,
+        "friendly_name": "NVMe Primary OS SSD 2TB",
+        "serial_number": "NVME_DISK_0001_SAMPLE",
+        "bus_type": "NVMe",
+        "size_bytes": 2000398934016,
+        "partition_style": "GPT",
+        "partitions": [
+          { "partition_number": 1, "type": "System", "size_bytes": 104857600, "mount_point": null },
+          { "partition_number": 2, "type": "Reserved", "size_bytes": 16777216, "mount_point": null },
+          { "partition_number": 3, "type": "Basic", "size_bytes": 1999279767552, "mount_point": "C:", "label": "Windows" },
+          { "partition_number": 4, "type": "Recovery", "size_bytes": 1004535808, "mount_point": null }
+        ]
+      },
+      {
+        "disk_number": 1,
+        "friendly_name": "NVMe Secondary Data SSD 4TB",
+        "serial_number": "NVME_DISK_0002_SAMPLE",
+        "bus_type": "NVMe",
+        "size_bytes": 4000787030016,
+        "partition_style": "GPT",
+        "partitions": [
+          { "partition_number": 1, "type": "Basic", "size_bytes": 4000786000000, "mount_point": "D:", "label": "Bulk-Data" }
+        ]
+      }
+    ]
+  },
+  "detected_junctions": [
+    {
+      "source_path": "C:\\Program Files (x86)\\Steam\\steamapps\\common\\Beat Saber\\Beat Saber_Data\\CustomLevels",
+      "target_path": "D:\\SteamLibrary\\steamapps\\common\\Beat Saber\\Beat Saber_Data\\CustomLevels",
+      "matched_app_id": "beat_saber",
+      "matched_directory_id": "custom_levels"
+    },
+    {
+      "source_path": "C:\\Users\\Developer\\AppData\\LocalLow\\Hyperbolic Magnetism\\Beat Saber",
+      "target_path": "G:\\My Drive\\Backups\\BeatSaber\\AppData",
+      "matched_app_id": "beat_saber",
+      "matched_directory_id": "game_saves"
+    },
+    {
+      "source_path": "C:\\Users\\Developer\\AppData\\Roaming\\Code\\User",
+      "target_path": "G:\\My Drive\\Config\\VSCode",
+      "matched_app_id": "vscode",
+      "matched_directory_id": "user_settings"
+    },
+    {
+      "source_path": "C:\\Users\\Developer\\Pictures\\Lightroom",
+      "target_path": "C:\\Sync\\Catalogs\\Lightroom",
+      "matched_app_id": "adobe_lightroom",
+      "matched_directory_id": "catalog"
+    }
+  ],
+  "installed_winget_packages": [
+    { "id": "Git.Git", "version": "2.47.0" },
+    { "id": "Microsoft.VisualStudioCode", "version": "1.95.0" },
+    { "id": "Google.GoogleDrive", "version": "99.0.0.0" },
+    { "id": "Adobe.CreativeCloud", "version": "6.4.0.361" },
+    { "id": "Microsoft.WindowsTerminal", "version": "1.21.2911.0" },
+    { "id": "Docker.DockerDesktop", "version": "4.35.0" },
+    { "id": "twpayne.chezmoi", "version": "2.53.0" }
+  ]
+}
