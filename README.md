@@ -160,10 +160,12 @@ disks:
   target_os_disk:
     disk_id: 0 # Matches Disk 0 from audit-reference.json
     wipe_and_partition: true
+    drive_variable: "OS_DRIVE" # Exposes %OS_DRIVE% (e.g. C:)
   preserved_disks:
     - disk_id: 1
       label: "Bulk-Data"
       expected_mount: "D:"
+      drive_variable: "DATA_DRIVE" # Exposes %DATA_DRIVE% (e.g. D:)
       description: "Dedicated high-capacity SSD for raw media, VMs, and game libraries (user-backed up)"
 
 storage:
@@ -171,29 +173,45 @@ storage:
     cloud_provider: "google-drive"
     mount_point: "G:"
     verify_folder: "G:\\My Drive"
+    stream_variable: "STREAM"     # Exposes %STREAM% -> G:\My Drive
   sync:
     provider: "google-drive-sync"
-    local_sync_root: "C:\\Sync"
-    verify_folder: "C:\\Sync\\Catalogs"
+    directories:
+      # Multiple synced folders can be defined; accessible via %SYNC:<id>% or %SYNC_<ID>%
+      catalogs:
+        local_path: "%OS_DRIVE%\\Sync\\Catalogs"
+        cloud_folder: "Catalogs"
+        verify_folder: "%OS_DRIVE%\\Sync\\Catalogs"
+        sync_variable: "SYNC_CATALOGS" # Exposes %SYNC:catalogs% or %SYNC_CATALOGS%
+      projects:
+        local_path: "%DATA_DRIVE%\\Projects"
+        cloud_folder: "Projects"
+        sync_variable: "SYNC_PROJECTS" # Exposes %SYNC:projects% or %SYNC_PROJECTS%
   api_credentials:
     # Defined ONCE here; compiler injects into Windows sync scripts and WSL2 rclone.conf
     client_id_env: "GDRIVE_CLIENT_ID"
     client_secret_env: "GDRIVE_CLIENT_SECRET"
 
+# Custom directory/drive shortcut variables
+variables:
+  GAMES_DIR: "%DATA_DRIVE%\\Games"
+  STEAM_DIR: "%DATA_DRIVE%\\SteamLibrary"
+
 # Unified applications section.
-# Listing an application implies automatic installation (WinGet/Steam) unless overridden.
+# Presence in this list implies automatic installation (via WinGet or Steam) unless overridden.
+# Directories use variable placeholders (%STREAM%, %SYNC:<id>%, %OS_DRIVE%, %DATA_DRIVE%, etc.)
 applications:
   # Pattern 1: Cloud-Streamed Settings (WinGet app)
   vscode:
     directories:
       user_settings:
-        target: "G:\\My Drive\\Config\\VSCode"
+        target: "%STREAM%\\Config\\VSCode"
 
   # Pattern 2: Database Catalog requiring Local Sync + Inline Directory Override
   adobe_lightroom:
     directories:
       catalog:
-        target: "C:\\Sync\\Catalogs\\Lightroom" # Satisfies 'recommended_storage: sync'
+        target: "%SYNC:catalogs%\\Lightroom" # Satisfies 'recommended_storage: sync'
       presets:
         override:
           action: "omit"
@@ -203,32 +221,26 @@ applications:
   beat_saber:
     directories:
       custom_levels:
-        target: "D:\\SteamLibrary\\steamapps\\common\\Beat Saber\\Beat Saber_Data\\CustomLevels"
+        target: "%STEAM_DIR%\\steamapps\\common\\Beat Saber\\Beat Saber_Data\\CustomLevels"
       game_saves:
-        target: "G:\\My Drive\\Backups\\BeatSaber\\AppData"
+        target: "%STREAM%\\Backups\\BeatSaber\\AppData"
 
   # Pattern 4: Human-in-the-Loop Manual Install for Non-Automated Software
+  # Note: Download URL, method, and generic instructions are inherited from applications.json
   outfox:
     install:
-      method: "manual"
-      download_url: "https://projectoutfox.com/download"
       version: "0.5.0 Alpha"
-      target_directory: "C:\\Games\\OutFox"
-      instructions:
-        - "Download the OutFox Win64 archive from the URL above."
-        - "Extract to 'C:\\Games\\OutFox'."
-        - "Launch once to generate the default user profile, then exit."
+      target_directory: "%GAMES_DIR%\\OutFox"
       post_install_script: "./scripts/post-install-outfox.ps1"
     directories:
       songs:
-        target: "D:\\Games\\OutFox\\Songs"
+        target: "%GAMES_DIR%\\OutFox\\Songs"
       save:
-        target: "G:\\My Drive\\Backups\\OutFox\\Save"
+        target: "%STREAM%\\Backups\\OutFox\\Save"
 
-  # Pattern 5: Zero-Configuration Tools (CLI runtimes, terminal)
+  # Pattern 5: Zero-Configuration Tools (CLI runtimes, container engines)
   git: {}
-  windows_terminal:
-    winget_id: "Microsoft.WindowsTerminal"
+  docker_desktop: {}
 
   # Pattern 6: Custom / Uncataloged Applications & Arbitrary Folders
   custom:
@@ -236,8 +248,8 @@ applications:
       install: false
       directories:
         - name: "RetroArch Saves and States"
-          link: "C:\\Emulators\\RetroArch\\saves"
-          target: "G:\\My Drive\\Backups\\Emulators\\RetroArch\\saves"
+          link: "%OS_DRIVE%\\Emulators\\RetroArch\\saves"
+          target: "%STREAM%\\Backups\\Emulators\\RetroArch\\saves"
           storage_type: "streaming"
 
 # WSL2 Linux Subsystem Environment
@@ -263,7 +275,7 @@ wsl2:
       # API credentials automatically inherited from storage.api_credentials above
 
 dev_repos:
-  root: "C:\\Projects"
+  root: "%SYNC:projects%" # Uses synced projects folder defined in storage.sync
   remotes:
     - name: "dotfiles"
       repo: "git@github.com:developer/dotfiles.git"
@@ -278,12 +290,21 @@ dev_repos:
 
 Applications store critical data in disparate, undocumented local folders. `reglaze` ships with a curated reference catalog specifying known software profiles:
 
-* **Identity & Discoverability:** Captures the unique `app_id` (e.g., `beat_saber`, `outfox`, `satisfactory`, `neva`, `bloodstained`, `lotro`, `steam`, `adobe_lightroom`, `vscode`, `git`), `name`, `winget_id`, Steam App ID (`steam_id`), and official `website`.
-* **Notable Directories:** Lists specific app paths (`configs`, `saves`, `songs`, `catalogs`, `code`) with default directory locations.
+* **Identity & Discoverability:** Captures the unique `app_id` (e.g., `beat_saber`, `outfox`, `satisfactory`, `neva`, `bloodstained`, `lotro`, `steam`, `adobe_lightroom`, `vscode`, `git`, `docker_desktop`), `name`, `winget_id`, Steam App ID (`steam_id`), and official `website`.
+* **Generic Installation Guidance:** For applications requiring human intervention (such as `outfox`), `data/applications.json` houses machine-independent installation metadata (`method: "manual"`, `download_url`, `default_target_directory`, and step-by-step instructions). User blueprints only specify machine-specific parameters (`version`, custom path, `post_install_script`).
+* **Notable Directories:** Lists specific app paths (`configs`, `saves`, `songs`, `catalogs`, `code`) with default directory locations and variable placeholders (`%GAMES_DIR%`, `%STEAM_LIBRARY%`).
 * **Storage Properties & Safety Rules:**
   * `needs_mapping`: Indicates whether unlinked data is lost during an OS wipe.
   * `safe_for_stream`: Specifies if the directory can safely be hosted on a virtual streaming cloud drive. SQLite catalogs (Lightroom, Darktable) and active Git object databases are flagged `safe_for_stream: false` because streaming file-locking semantics cause database corruption and index latency.
   * `recommended_storage`: Designates whether the directory belongs on `streaming`, `sync` (local bidirectional sync), or `local_preserved` (secondary disk).
+
+### Variable Placeholders & Storage Roots
+
+To prevent brittle hardcoded drive letters and paths, `reglaze` supports standardized variable placeholders:
+* **Drive Identifiers:** `%OS_DRIVE%` (target OS disk, e.g. `C:`) and `%DATA_DRIVE%` (secondary preserved disk, e.g. `D:`).
+* **Streaming Mount:** `%STREAM%` (resolves to the cloud streaming sentinel root, e.g. `G:\My Drive`).
+* **Multiple Synced Roots:** `%SYNC:<id>%` or `%SYNC_<ID>%` (e.g. `%SYNC:catalogs%` &rarr; `C:\Sync\Catalogs`, `%SYNC:projects%` &rarr; `D:\Projects`).
+* **Custom Shortcuts:** Any custom variable declared under `variables:` (e.g. `%GAMES_DIR%`, `%STEAM_DIR%`).
 
 ### Enforcement & Override Policy
 
@@ -291,9 +312,9 @@ During compilation (Phase 1), `reglaze` parses the `applications` block declared
 
 1. **Catalog Lookup by `app_id`:** Each key in `applications` references an `app_id` in `data/applications.json`.
 2. **Implied Installation:** Listing an application implies automatic installation (via WinGet or Steam) by default. Setting `install: false` skips installation (useful if the application binary is already preserved on secondary storage).
-3. **Human-in-the-Loop Manual Installs:** For software without automated or silent installers, declare `install.method: "manual"`. The bootstrap runner pauses during provisioning, presents the operator with the download URL, version, destination folder, and installation steps, and executes an optional `post_install_script`.
+3. **Catalog-Driven Manual Installs:** When an application requires manual setup, `reglaze` merges the generic instructions and download URL from `data/applications.json` with any machine-specific parameters declared in `reglaze.yaml` (such as `target_directory`, `version`, or `post_install_script`). During execution, the runner pauses to present guidance to the operator before establishing junction links.
 4. **Mandatory Mappings:** If an application has notable directories with `needs_mapping: true`, the user must declare a target under `directories.<directory_id>.target`.
-5. **Safety Verification:** If a directory is flagged `safe_for_stream: false`, pointing its junction target to a streaming mount (`G:\...`) will fail validation.
+5. **Safety Verification:** If a directory is flagged `safe_for_stream: false`, pointing its junction target to a streaming mount (`%STREAM%\...`) will fail validation.
 6. **Inline Overrides:** To intentionally omit a required directory or divert it from recommendations, specify an `override:` block directly within that directory's configuration:
    ```yaml
    presets:

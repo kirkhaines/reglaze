@@ -93,8 +93,8 @@
     { "id": "Microsoft.VisualStudioCode", "version": "1.95.0" },
     { "id": "Google.GoogleDrive", "version": "99.0.0.0" },
     { "id": "Adobe.CreativeCloud", "version": "6.4.0.361" },
-    { "id": "Microsoft.WindowsTerminal", "version": "1.21.2911.0" },
     { "id": "Docker.DockerDesktop", "version": "4.35.0" },
     { "id": "twpayne.chezmoi", "version": "2.53.0" }
   ]
 }
+

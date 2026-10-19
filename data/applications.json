@@ -82,11 +82,21 @@
     "winget_id": null,
     "steam_id": null,
     "website": "https://projectoutfox.com",
+    "install": {
+      "method": "manual",
+      "download_url": "https://projectoutfox.com/download",
+      "default_target_directory": "%GAMES_DIR%\\OutFox",
+      "instructions": [
+        "Download the latest OutFox Win64 release archive from the official website.",
+        "Extract or install the files into the target directory.",
+        "Launch the game executable once to generate the default user profile and directories, then exit."
+      ]
+    },
     "directories": [
       {
         "id": "songs",
         "description": "Rhythm Game Simfiles and Music Packs",
-        "default_path": "C:\\Games\\OutFox 0.5.0 Alpha Win64\\Songs",
+        "default_path": "%GAMES_DIR%\\OutFox\\Songs",
         "category": "songs",
         "needs_mapping": true,
         "safe_for_stream": true,
@@ -96,7 +106,7 @@
       {
         "id": "save",
         "description": "Profiles, high scores, machine statistics, and preferences",
-        "default_path": "C:\\Games\\OutFox 0.5.0 Alpha Win64\\Save",
+        "default_path": "%GAMES_DIR%\\OutFox\\Save",
         "category": "saves",
         "needs_mapping": true,
         "safe_for_stream": true,
@@ -266,5 +276,25 @@
         "notes": "Global git settings; safe for streaming or chezmoi management."
       }
     ]
+  },
+  {
+    "app_id": "docker_desktop",
+    "name": "Docker Desktop",
+    "winget_id": "Docker.DockerDesktop",
+    "steam_id": null,
+    "website": "https://www.docker.com/products/docker-desktop",
+    "directories": [
+      {
+        "id": "config",
+        "description": "Docker CLI contexts, daemon settings, and credentials",
+        "default_path": "%USERPROFILE%\\.docker",
+        "category": "configs",
+        "needs_mapping": false,
+        "safe_for_stream": true,
+        "recommended_storage": "streaming",
+        "notes": "User-level Docker config and CLI contexts; safe for cloud streaming or local dotfiles management."
+      }
+    ]
   }
 ]
+
