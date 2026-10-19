@@ -1,0 +1,114 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ReglazeConfiguration",
+  "type": "object",
+  "required": ["version", "system", "disks", "storage", "applications"],
+  "properties": {
+    "version": { "type": "string" },
+    "profile": { "type": "string" },
+    "system": {
+      "type": "object",
+      "required": ["computer_name", "users"],
+      "properties": {
+        "computer_name": { "type": "string" },
+        "os_edition": { "type": "string" },
+        "timezone": { "type": "string" },
+        "licensing": { "type": "object" },
+        "users": {
+          "type": "object",
+          "required": ["local_admin", "primary_user"],
+          "properties": {
+            "local_admin": {
+              "type": "object",
+              "required": ["username"],
+              "properties": {
+                "username": { "type": "string" },
+                "password_env": { "type": "string" },
+                "auto_logon": { "type": "boolean" }
+              }
+            },
+            "primary_user": {
+              "type": "object",
+              "required": ["username", "account_type"],
+              "properties": {
+                "username": { "type": "string" },
+                "email": { "type": "string" },
+                "account_type": { "enum": ["local_to_msa", "local", "microsoft"] },
+                "is_admin": { "type": "boolean" },
+                "auto_logon": { "type": "boolean" }
+              }
+            }
+          }
+        },
+        "features": { "type": "object" }
+      }
+    },
+    "disks": {
+      "type": "object",
+      "required": ["target_os_disk"],
+      "properties": {
+        "target_os_disk": {
+          "type": "object",
+          "required": ["drive_variable"],
+          "properties": {
+            "disk_id": { "type": "integer" },
+            "serial_number": { "type": "string" },
+            "bus_type": { "type": "string" },
+            "wipe_and_partition": { "type": "boolean" },
+            "drive_variable": { "type": "string" }
+          }
+        },
+        "preserved_disks": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["drive_variable"],
+            "properties": {
+              "disk_id": { "type": "integer" },
+              "serial_number": { "type": "string" },
+              "expected_mount": { "type": "string" },
+              "drive_variable": { "type": "string" },
+              "label": { "type": "string" },
+              "description": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+    "storage": {
+      "type": "object",
+      "required": ["streaming"],
+      "properties": {
+        "streaming": {
+          "type": "object",
+          "required": ["mount_point", "stream_variable"],
+          "properties": {
+            "cloud_provider": { "type": "string" },
+            "mount_point": { "type": "string" },
+            "verify_folder": { "type": "string" },
+            "stream_variable": { "type": "string" }
+          }
+        },
+        "sync": {
+          "type": "object",
+          "properties": {
+            "provider": { "type": "string" },
+            "directories": { "type": "object" }
+          }
+        },
+        "api_credentials": {
+          "type": "object",
+          "properties": {
+            "client_id_env": { "type": "string" },
+            "client_secret_env": { "type": "string" }
+          }
+        }
+      }
+    },
+    "variables": { "type": "object" },
+    "applications": { "type": "object" },
+    "custom": { "type": "array" },
+    "wsl2": { "type": "object" },
+    "dev_repos": { "type": "object" }
+  }
+}

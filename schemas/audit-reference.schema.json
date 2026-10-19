@@ -1,0 +1,119 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ReglazeAuditReference",
+  "type": "object",
+  "required": [
+    "audit_metadata",
+    "system_and_licensing",
+    "storage_topology",
+    "installed_winget_packages",
+    "detected_non_winget_applications"
+  ],
+  "properties": {
+    "audit_metadata": {
+      "type": "object",
+      "required": ["timestamp", "reglaze_version", "host_name", "os_version"],
+      "properties": {
+        "timestamp": { "type": "string" },
+        "reglaze_version": { "type": "string" },
+        "host_name": { "type": "string" },
+        "os_version": { "type": "string" }
+      }
+    },
+    "system_and_licensing": {
+      "type": "object",
+      "required": ["os_edition", "license_status", "license_channel"],
+      "properties": {
+        "os_version": { "type": "string" },
+        "os_edition": { "type": "string" },
+        "os_build": { "type": "string" },
+        "installed_product_key": { "type": "string" },
+        "license_status": { "type": "string" },
+        "license_channel": { "type": "string" },
+        "digital_license": { "type": "boolean" }
+      }
+    },
+    "bitlocker_recovery_keys": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["mount_point", "volume_type", "protection_status"],
+        "properties": {
+          "mount_point": { "type": "string" },
+          "volume_type": { "type": "string" },
+          "protection_status": { "type": "string" },
+          "encryption_method": { "type": "string" },
+          "recovery_key_id": { "type": ["string", "null"] },
+          "recovery_password": { "type": ["string", "null"] },
+          "key_protectors": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
+    "storage_topology": {
+      "type": "object",
+      "required": ["disks"],
+      "properties": {
+        "disks": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["disk_number", "friendly_name", "serial_number", "bus_type", "size_bytes"],
+            "properties": {
+              "disk_number": { "type": "integer" },
+              "friendly_name": { "type": "string" },
+              "serial_number": { "type": "string" },
+              "bus_type": { "type": "string" },
+              "size_bytes": { "type": "integer" },
+              "partition_style": { "type": "string" },
+              "partitions": { "type": "array" }
+            }
+          }
+        }
+      }
+    },
+    "detected_junctions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["source_path", "target_path"],
+        "properties": {
+          "source_path": { "type": "string" },
+          "target_path": { "type": "string" },
+          "matched_app_id": { "type": ["string", "null"] },
+          "matched_directory_id": { "type": ["string", "null"] }
+        }
+      }
+    },
+    "installed_winget_packages": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id"],
+        "properties": {
+          "id": { "type": "string" },
+          "name": { "type": "string" },
+          "version": { "type": "string" },
+          "matched_app_id": { "type": ["string", "null"] }
+        }
+      }
+    },
+    "detected_non_winget_applications": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["display_name"],
+        "properties": {
+          "display_name": { "type": "string" },
+          "display_version": { "type": "string" },
+          "publisher": { "type": "string" },
+          "install_location": { "type": ["string", "null"] },
+          "registry_hive": { "type": "string" },
+          "matched_app_id": { "type": ["string", "null"] }
+        }
+      }
+    },
+    "detected_windows_settings": {
+      "type": "object"
+    }
+  }
+}
