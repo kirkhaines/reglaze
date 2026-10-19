@@ -1,7 +1,8 @@
 # Generated build artifacts
 dist/
 build/
-bin/
+bin/*.exe
+!bin/*.ps1
 
 # Temporary / Output files
 *.tmp
