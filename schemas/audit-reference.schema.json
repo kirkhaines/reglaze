@@ -120,6 +120,9 @@
     },
     "user_identity": {
       "type": "object"
+    },
+    "detected_wsl": {
+      "type": "object"
     }
   }
 }

@@ -1,0 +1,28 @@
+{
+  "$schema": "../_schema.json",
+  "app_id": "antigravity_ide",
+  "name": "Antigravity IDE",
+  "winget_id": "Google.AntigravityIDE",
+  "steam_id": null,
+  "website": "https://github.com/google/antigravity",
+  "install": {
+    "method": "winget",
+    "download_url": null,
+    "default_target_directory": "%LOCALAPPDATA%\\Programs\\Antigravity IDE",
+    "guide_file": null,
+    "post_install_script": null,
+    "instructions": []
+  },
+  "directories": [
+    {
+      "id": "user_settings",
+      "description": "Antigravity IDE user settings, keybindings, and extensions",
+      "default_path": "%APPDATA%\\Antigravity IDE\\User",
+      "category": "configs",
+      "needs_mapping": true,
+      "safe_for_stream": true,
+      "recommended_storage": "streaming",
+      "notes": "Editor settings, shortcuts, and themes."
+    }
+  ]
+}

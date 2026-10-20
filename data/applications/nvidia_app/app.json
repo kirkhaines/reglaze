@@ -1,0 +1,30 @@
+{
+  "$schema": "../_schema.json",
+  "app_id": "nvidia_app",
+  "name": "NVIDIA App",
+  "winget_id": "XP8CLZL93F5Z4P",
+  "steam_id": null,
+  "website": "https://www.nvidia.com/en-us/software/nvidia-app/",
+  "install": {
+    "method": "winget",
+    "download_url": "https://www.nvidia.com/en-us/software/nvidia-app/",
+    "default_target_directory": "%ProgramFiles%\\NVIDIA Corporation\\NVIDIA App",
+    "guide_file": null,
+    "post_install_script": null,
+    "instructions": [
+      "Install NVIDIA App via Microsoft Store (winget install --id XP8CLZL93F5Z4P --source msstore) or official installer from nvidia.com."
+    ]
+  },
+  "directories": [
+    {
+      "id": "app_settings",
+      "description": "NVIDIA App graphics presets, overlay preferences, and game tuning profiles",
+      "default_path": "%LOCALAPPDATA%\\NVIDIA Corporation\\NVIDIA App",
+      "category": "configs",
+      "needs_mapping": true,
+      "safe_for_stream": true,
+      "recommended_storage": "streaming",
+      "notes": "Game graphics profiles, performance overlay preferences, and recording settings."
+    }
+  ]
+}
