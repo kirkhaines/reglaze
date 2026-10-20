@@ -1,0 +1,28 @@
+{
+  "$schema": "../_schema.json",
+  "app_id": "google_chrome",
+  "name": "Google Chrome",
+  "winget_id": "Google.Chrome",
+  "steam_id": null,
+  "website": "https://www.google.com/chrome/",
+  "install": {
+    "method": "winget",
+    "download_url": null,
+    "default_target_directory": null,
+    "guide_file": null,
+    "post_install_script": null,
+    "instructions": []
+  },
+  "directories": [
+    {
+      "id": "user_data",
+      "description": "Chrome user profile state and local browser storage",
+      "default_path": "%LOCALAPPDATA%\\Google\\Chrome\\User Data",
+      "category": "configs",
+      "needs_mapping": false,
+      "safe_for_stream": false,
+      "recommended_storage": "streaming",
+      "notes": "Bookmarks, extensions, and passwords sync natively through Google Account login. Direct filesystem mapping is discouraged due to file-lock contention."
+    }
+  ]
+}

@@ -59,3 +59,51 @@ function Get-LicensingAudit {
     }
 }
 
+function Get-UserIdentityAudit {
+    [CmdletBinding()]
+    param()
+
+    $Email = $null
+
+    # 1. Query Microsoft Connected Account email from IdentityCRL
+    try {
+        $MsaKeys = Get-ChildItem "HKCU:\Software\Microsoft\IdentityCRL\UserExtendedProperties" -ErrorAction SilentlyContinue
+        if ($MsaKeys) {
+            $Email = ($MsaKeys | Select-Object -First 1 -ExpandProperty PSChildName)
+        }
+    } catch {}
+
+    # 2. Query Git global email
+    if (-not $Email) {
+        try {
+            $GitEmail = & git config --global user.email 2>$null
+            if ($GitEmail -and $GitEmail.Contains("@")) {
+                $Email = $GitEmail.Trim()
+            }
+        } catch {}
+    }
+
+    # 3. Query whoami /upn
+    if (-not $Email) {
+        try {
+            $Upn = & whoami /upn 2>$null
+            if ($Upn -and $Upn.Contains("@")) {
+                $Email = $Upn.Trim()
+            }
+        } catch {}
+    }
+
+    $IsDetected = ($Email -ne $null)
+    if (-not $Email) {
+        $Email = "$($env:USERNAME)@example.com"
+    }
+
+    return [PSCustomObject]@{
+        username       = $env:USERNAME
+        email          = $Email
+        account_type   = if ($IsDetected) { "local_to_msa" } else { "local" }
+        email_detected = $IsDetected
+    }
+}
+
+

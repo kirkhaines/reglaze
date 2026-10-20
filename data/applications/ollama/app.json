@@ -1,0 +1,28 @@
+{
+  "$schema": "../_schema.json",
+  "app_id": "ollama",
+  "name": "Ollama",
+  "winget_id": "Ollama.Ollama",
+  "steam_id": null,
+  "website": "https://ollama.com",
+  "install": {
+    "method": "winget",
+    "download_url": null,
+    "default_target_directory": "%LOCALAPPDATA%\\Programs\\Ollama",
+    "guide_file": null,
+    "post_install_script": null,
+    "instructions": []
+  },
+  "directories": [
+    {
+      "id": "models",
+      "description": "Ollama local LLM model weights, manifests, and blobs",
+      "default_path": "%USERPROFILE%\\.ollama",
+      "category": "library",
+      "needs_mapping": true,
+      "safe_for_stream": false,
+      "recommended_storage": "local_preserved",
+      "notes": "Large multi-gigabyte neural network binaries. Cloud streaming mounts introduce severe inference latency and excessive network bandwidth. Preserve on high-speed NVMe or fast local SSD."
+    }
+  ]
+}

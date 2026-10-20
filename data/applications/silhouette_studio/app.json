@@ -1,0 +1,28 @@
+{
+  "$schema": "../_schema.json",
+  "app_id": "silhouette_studio",
+  "name": "Silhouette Studio",
+  "winget_id": "Silhouette.SilhouetteStudio",
+  "steam_id": null,
+  "website": "https://www.silhouetteamerica.com/software",
+  "install": {
+    "method": "winget",
+    "download_url": null,
+    "default_target_directory": null,
+    "guide_file": null,
+    "post_install_script": null,
+    "instructions": []
+  },
+  "directories": [
+    {
+      "id": "user_library",
+      "description": "Silhouette Studio user design library, custom cutting profiles, and preferences",
+      "default_path": "%APPDATA%\\com.aspexsoftware.Silhouette_Studio",
+      "category": "library",
+      "needs_mapping": true,
+      "safe_for_stream": true,
+      "recommended_storage": "streaming",
+      "notes": "User design cutting files and material settings. Safe for cloud streaming backup."
+    }
+  ]
+}

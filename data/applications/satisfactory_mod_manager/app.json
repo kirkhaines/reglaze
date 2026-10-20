@@ -1,0 +1,28 @@
+{
+  "$schema": "../_schema.json",
+  "app_id": "satisfactory_mod_manager",
+  "name": "Satisfactory Mod Manager",
+  "winget_id": "SatisfactoryModding.SatisfactoryModManager",
+  "steam_id": null,
+  "website": "https://ficsit.app",
+  "install": {
+    "method": "winget",
+    "download_url": null,
+    "default_target_directory": null,
+    "guide_file": null,
+    "post_install_script": null,
+    "instructions": []
+  },
+  "directories": [
+    {
+      "id": "profiles",
+      "description": "Satisfactory Mod Manager user profiles, mod configurations, and cached index",
+      "default_path": "%APPDATA%\\SatisfactoryModManager",
+      "category": "configs",
+      "needs_mapping": true,
+      "safe_for_stream": true,
+      "recommended_storage": "streaming",
+      "notes": "Small JSON profile files and mod activation states; safe for cloud streaming mount."
+    }
+  ]
+}

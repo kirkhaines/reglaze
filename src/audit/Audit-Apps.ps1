@@ -70,8 +70,16 @@ function Get-InstalledApplicationsAudit {
                             if (-not $WinGetIds.Contains($Id)) {
                                 $WinGetIds.Add($Id) | Out-Null
                                 
-                                # Match against catalog
-                                $MatchedApp = $Catalog | Where-Object { $_.winget_id -eq $Id } | Select-Object -First 1
+                                # Match against catalog: exact winget_id or name
+                                $MatchedApp = $Catalog | Where-Object { 
+                                    ($_.winget_id -and $_.winget_id -eq $Id)
+                                } | Select-Object -First 1
+
+                                if (-not $MatchedApp) {
+                                    $MatchedApp = $Catalog | Where-Object {
+                                        $_.name -and ($Name -eq $_.name -or $Name -like "*$($_.name)*")
+                                    } | Sort-Object { $_.name.Length } -Descending | Select-Object -First 1
+                                }
 
                                 $WinGetPackages += [PSCustomObject]@{
                                     id             = $Id
@@ -120,11 +128,19 @@ function Get-InstalledApplicationsAudit {
             }
 
             if (-not $AlreadyInWinGet) {
-                # Attempt to match with catalog
+                # Attempt to match with catalog (exact match first, then longest name match)
                 $MatchedApp = $Catalog | Where-Object {
-                    $DisplayName -like "*$($_.name)*" -or
-                    ($_.app_id -and $DisplayName -like "*$($_.app_id)*")
+                    $DisplayName -eq $_.name -or
+                    ($_.app_id -and $DisplayName -eq $_.app_id) -or
+                    ($_.winget_id -and $DisplayName -eq $_.winget_id)
                 } | Select-Object -First 1
+
+                if (-not $MatchedApp) {
+                    $MatchedApp = $Catalog | Where-Object {
+                        ($_.name -and $DisplayName -like "*$($_.name)*") -or
+                        ($_.app_id -and $DisplayName -like "*$($_.app_id)*")
+                    } | Sort-Object { if ($_.name) { $_.name.Length } else { $_.app_id.Length } } -Descending | Select-Object -First 1
+                }
 
                 $NonWinGetApps += [PSCustomObject]@{
                     display_name     = $DisplayName

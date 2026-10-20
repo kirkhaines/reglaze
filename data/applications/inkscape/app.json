@@ -1,0 +1,28 @@
+{
+  "$schema": "../_schema.json",
+  "app_id": "inkscape",
+  "name": "Inkscape",
+  "winget_id": "Inkscape.Inkscape",
+  "steam_id": null,
+  "website": "https://inkscape.org",
+  "install": {
+    "method": "winget",
+    "download_url": null,
+    "default_target_directory": null,
+    "guide_file": null,
+    "post_install_script": null,
+    "instructions": []
+  },
+  "directories": [
+    {
+      "id": "preferences",
+      "description": "Inkscape preferences.xml, user extensions, palettes, and templates",
+      "default_path": "%APPDATA%\\inkscape",
+      "category": "configs",
+      "needs_mapping": true,
+      "safe_for_stream": true,
+      "recommended_storage": "streaming",
+      "notes": "XML preferences and custom palette files; lightweight and safe for streaming cloud mount."
+    }
+  ]
+}

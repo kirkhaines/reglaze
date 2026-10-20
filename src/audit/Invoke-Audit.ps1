@@ -26,6 +26,7 @@ if (-not (Test-Path (Join-Path $RepoRoot "data\applications"))) {
 . (Join-Path $RepoRoot "src\audit\Audit-BitLocker.ps1")
 . (Join-Path $RepoRoot "src\audit\Audit-Apps.ps1")
 . (Join-Path $RepoRoot "src\audit\Audit-Junctions.ps1")
+. (Join-Path $RepoRoot "src\audit\Audit-StorageProviders.ps1")
 
 Write-ReglazeBanner "PRE-FLIGHT SYSTEM AUDIT"
 
@@ -74,7 +75,14 @@ if (Test-Path $WinSettingsScript) {
     }
 }
 
-# 8. Assemble and Emit audit-reference.json
+# 8. Execute Storage Providers & User Identity Discovery
+Write-ReglazeStep "Auditing Cloud Storage Providers & User Identity..."
+$StorageProvidersData = Get-StorageProvidersAudit
+$UserIdentityData = Get-UserIdentityAudit
+Write-ReglazeSuccess "User Identity: $($UserIdentityData.email) ($($UserIdentityData.account_type))"
+Write-ReglazeSuccess "Cloud Streaming: $($StorageProvidersData.streaming.mount_point) ($($StorageProvidersData.streaming.cloud_provider)), Synced roots: $($StorageProvidersData.sync_directories.Count)."
+
+# 9. Assemble and Emit audit-reference.json
 Write-ReglazeStep "Compiling Audit Reference Document..."
 $ComputerName = $env:COMPUTERNAME
 $AuditMetadata = [PSCustomObject]@{
@@ -87,6 +95,8 @@ $AuditMetadata = [PSCustomObject]@{
 $AuditReference = [PSCustomObject]@{
     audit_metadata                   = $AuditMetadata
     system_and_licensing             = $LicensingData
+    user_identity                    = $UserIdentityData
+    storage_providers                = $StorageProvidersData
     bitlocker_recovery_keys          = $BitLockerData
     storage_topology                 = $HardwareData.storage_topology
     detected_junctions               = $JunctionsData
@@ -134,9 +144,9 @@ if (-not (Test-Path $BlueprintPath) -or $Force) {
         '      password_env: "LOCAL_ADMIN_PASSWORD"',
         '      auto_logon: true',
         '    primary_user:',
-        '      account_type: "local_to_msa"',
-        "      email: `"$($env:USERNAME)@example.com`"",
-        "      username: `"$($env:USERNAME)`"",
+        "      account_type: `"$($UserIdentityData.account_type)`"",
+        "      email: `"$($UserIdentityData.email)`"",
+        "      username: `"$($UserIdentityData.username)`"",
         '      is_admin: false',
         '      auto_logon: false',
         '  features:',
@@ -155,42 +165,79 @@ if (-not (Test-Path $BlueprintPath) -or $Force) {
     )
 
     if ($PreservedDisks.Count -gt 0) {
+        $HasAssignedDataDrive = $false
         foreach ($PDisk in $PreservedDisks) {
             $FirstPart = $PDisk.partitions | Where-Object { $_.mount_point } | Select-Object -First 1
-            $Mount = if ($FirstPart) { $FirstPart.mount_point } else { "D:" }
+            $Mount = if ($FirstPart) { $FirstPart.mount_point } else { $null }
             $Label = if ($FirstPart -and $FirstPart.label) { $FirstPart.label } else { $PDisk.friendly_name }
-            $DriveVar = "DATA_DRIVE"
+
+            $DriveVar = $null
+            if ($Mount -eq "D:" -and -not $HasAssignedDataDrive) {
+                $DriveVar = "DATA_DRIVE"
+                $HasAssignedDataDrive = $true
+            }
 
             $YamlLines += "    - disk_id: $($PDisk.disk_number)"
             $YamlLines += "      serial_number: `"$($PDisk.serial_number)`""
-            $YamlLines += "      expected_mount: `"$Mount`""
-            $YamlLines += "      drive_variable: `"$DriveVar`""
+            if ($Mount) {
+                $YamlLines += "      expected_mount: `"$Mount`""
+            }
+            if ($DriveVar) {
+                $YamlLines += "      drive_variable: `"$DriveVar`""
+            }
             $YamlLines += "      label: `"$Label`""
         }
     } else {
         $YamlLines += '    []'
     }
 
+    $StreamMount = if ($StorageProvidersData.streaming.detected) { $StorageProvidersData.streaming.mount_point } else { "G:" }
+    $StreamVerify = if ($StorageProvidersData.streaming.detected) { $StorageProvidersData.streaming.verify_folder } else { "G:\My Drive" }
+    $StreamVerifyYaml = $StreamVerify -replace '\\', '\\'
+
     $YamlLines += @(
         '',
         'storage:',
         '  streaming:',
-        '    cloud_provider: "google-drive"',
-        '    mount_point: "G:"',
-        '    verify_folder: "G:\\My Drive"',
+        "    cloud_provider: `"$($StorageProvidersData.streaming.cloud_provider)`"",
+        "    mount_point: `"$StreamMount`"",
+        "    verify_folder: `"$StreamVerifyYaml`"",
         '    stream_variable: "STREAM"',
         '  sync:',
         '    provider: "google-drive-sync"',
-        '    directories:',
-        '      catalogs:',
-        '        local_path: "%OS_DRIVE%\\Sync\\Catalogs"',
-        '        cloud_folder: "Catalogs"',
-        '        verify_folder: "%OS_DRIVE%\\Sync\\Catalogs"',
-        '        sync_variable: "SYNC_CATALOGS"',
-        '      projects:',
-        '        local_path: "%DATA_DRIVE%\\Projects"',
-        '        cloud_folder: "Projects"',
-        '        sync_variable: "SYNC_PROJECTS"',
+        '    directories:'
+    )
+
+    if ($StorageProvidersData.sync_directories.Count -gt 0) {
+        foreach ($SyncDir in $StorageProvidersData.sync_directories) {
+            $LocalPathVar = $SyncDir.local_path
+            if ($LocalPathVar -like "D:\*") {
+                $LocalPathVar = "%DATA_DRIVE%" + $LocalPathVar.Substring(2)
+            } elseif ($LocalPathVar -like "C:\*") {
+                $LocalPathVar = "%OS_DRIVE%" + $LocalPathVar.Substring(2)
+            }
+            $LocalPathYaml = $LocalPathVar -replace '\\', '\\'
+            $YamlLines += "      $($SyncDir.id):"
+            $YamlLines += "        local_path: `"$LocalPathYaml`""
+            $YamlLines += "        cloud_folder: `"$($SyncDir.cloud_folder)`""
+            $YamlLines += "        verify_folder: `"$LocalPathYaml`""
+            $YamlLines += "        sync_variable: `"$($SyncDir.sync_variable)`""
+        }
+    } else {
+        $YamlLines += @(
+            '      catalogs:',
+            '        local_path: "%OS_DRIVE%\\Sync\\Catalogs"',
+            '        cloud_folder: "Catalogs"',
+            '        verify_folder: "%OS_DRIVE%\\Sync\\Catalogs"',
+            '        sync_variable: "SYNC_CATALOGS"',
+            '      projects:',
+            '        local_path: "%DATA_DRIVE%\\Projects"',
+            '        cloud_folder: "Projects"',
+            '        sync_variable: "SYNC_PROJECTS"'
+        )
+    }
+
+    $YamlLines += @(
         '  api_credentials:',
         '    client_id_env: "GDRIVE_CLIENT_ID"',
         '    client_secret_env: "GDRIVE_CLIENT_SECRET"',
@@ -211,14 +258,24 @@ if (-not (Test-Path $BlueprintPath) -or $Force) {
         if ($App.matched_app_id) { $DiscoveredAppIds.Add($App.matched_app_id) | Out-Null }
     }
 
+    $AvailableSyncVars = @($StorageProvidersData.sync_directories | Select-Object -ExpandProperty sync_variable)
+
     if ($DiscoveredAppIds.Count -gt 0) {
-        foreach ($AppId in $DiscoveredAppIds) {
+        foreach ($AppId in ($DiscoveredAppIds | Sort-Object)) {
             $CatalogApp = Get-ReglazeApplicationById -AppId $AppId -RepoRoot $RepoRoot
             $YamlLines += "  ${AppId}:"
             if ($CatalogApp.directories -and $CatalogApp.directories.Count -gt 0) {
                 $YamlLines += '    directories:'
                 foreach ($Dir in $CatalogApp.directories) {
-                    $SuggestedTarget = if ($Dir.safe_for_stream) { "%STREAM%\\Backups\\$AppId\\$($Dir.id)" } else { "%SYNC_CATALOGS%\\$AppId" }
+                    $SuggestedTarget = if ($Dir.safe_for_stream) { 
+                        "%STREAM%\\Backups\\$AppId\\$($Dir.id)" 
+                    } elseif ($AvailableSyncVars -contains "SYNC_DIRECTORYJUNCTIONS") {
+                        "%SYNC_DIRECTORYJUNCTIONS%\\$AppId"
+                    } elseif ($AvailableSyncVars -contains "SYNC_CATALOGS") {
+                        "%SYNC_CATALOGS%\\$AppId"
+                    } else {
+                        "%DATA_DRIVE%\\Backups\\$AppId"
+                    }
                     $YamlLines += "      $($Dir.id):"
                     $YamlLines += "        target: `"$SuggestedTarget`""
                 }
