@@ -52,7 +52,7 @@ switch ($Command) {
         Write-ReglazeInfo "Validating: $ResolvedCfg"
 
         # Check if validation module exists or run basic YAML / syntax check
-        $Validator = Join-Path $RepoRoot "src\compiler\Test-ReglazeSchema.ps1"
+        $Validator = Join-Path $RepoRoot "src\compiler\Test-ReglazeValidation.ps1"
         if (Test-Path $Validator) {
             & $Validator -ConfigFile $ResolvedCfg
         } else {
@@ -62,16 +62,14 @@ switch ($Command) {
 
     "compile" {
         $ResolvedCfg = if ($Config) { $Config } elseif ($Target) { $Target } else { Resolve-ReglazeConfigFile }
-        $ResolvedOut = if ($OutputDir) { $OutputDir } else { (Join-Path $RepoRoot "dist") }
-        Write-ReglazeBanner "REGLAZE COMPILER"
-        Write-ReglazeInfo "Source Blueprint: $ResolvedCfg"
-        Write-ReglazeInfo "Media Target: $ResolvedOut"
+        $ResolvedOut = if ($OutputDir) { $OutputDir } else { (Join-Path $RepoRoot "dist\media") }
 
         $CompilerScript = Join-Path $RepoRoot "src\compiler\Compile-Reglaze.ps1"
         if (Test-Path $CompilerScript) {
             & $CompilerScript -Config $ResolvedCfg -OutputDir $ResolvedOut
         } else {
-            Write-ReglazeWarning "Compiler engine scheduled for Milestone 2. Verified blueprint: $ResolvedCfg"
+            Write-ReglazeError "Compiler engine not found at: $CompilerScript"
+            exit 1
         }
     }
 
@@ -97,12 +95,26 @@ switch ($Command) {
 
     "test" {
         Write-ReglazeBanner "DIAGNOSTIC TEST SUITE"
-        $TestScript = Join-Path $RepoRoot "tests\Test-Milestone1.ps1"
-        if (Test-Path $TestScript) {
-            & $TestScript -All:$All
+        $M1Script = Join-Path $RepoRoot "tests\Test-Milestone1.ps1"
+        $M2Script = Join-Path $RepoRoot "tests\Test-Milestone2.ps1"
+
+        if ($Target -eq "m1" -or $Target -eq "milestone1") {
+            if (Test-Path $M1Script) { & $M1Script -All:$All }
+        } elseif ($Target -eq "m2" -or $Target -eq "milestone2") {
+            if (Test-Path $M2Script) { & $M2Script -All:$All }
         } else {
-            Write-ReglazeInfo "Running basic environment check..."
-            Write-ReglazeSuccess "PowerShell $($PSVersionTable.PSVersion) OK"
+            Write-ReglazeInfo "Executing Milestone 1 & Milestone 2 test suites..."
+            $M1Success = $true
+            $M2Success = $true
+            if (Test-Path $M1Script) {
+                & $M1Script -All:$All
+                if ($LASTEXITCODE -ne 0) { $M1Success = $false }
+            }
+            if (Test-Path $M2Script) {
+                & $M2Script -All:$All
+                if ($LASTEXITCODE -ne 0) { $M2Success = $false }
+            }
+            if (-not $M1Success -or -not $M2Success) { exit 1 }
         }
     }
 
