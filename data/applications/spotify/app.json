@@ -1,0 +1,17 @@
+{
+  "$schema": "../_schema.json",
+  "app_id": "spotify",
+  "name": "Spotify",
+  "winget_id": "Spotify.Spotify",
+  "steam_id": null,
+  "website": "https://www.spotify.com",
+  "install": {
+    "method": "winget",
+    "download_url": null,
+    "default_target_directory": null,
+    "guide_file": null,
+    "post_install_script": null,
+    "instructions": []
+  },
+  "directories": []
+}

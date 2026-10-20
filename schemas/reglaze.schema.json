@@ -40,7 +40,14 @@
             }
           }
         },
-        "features": { "type": "object" }
+        "features": { "type": "object" },
+        "updates": {
+          "type": "object",
+          "properties": {
+            "drivers": { "type": "boolean" },
+            "windows_updates": { "type": "boolean" }
+          }
+        }
       }
     },
     "disks": {
