@@ -23,6 +23,7 @@ $RepoRoot = $Script:RepoRoot
 . (Join-Path $RepoRoot "src\audit\Audit-Apps.ps1")
 . (Join-Path $RepoRoot "src\audit\Audit-Junctions.ps1")
 . (Join-Path $RepoRoot "src\audit\Audit-StorageProviders.ps1")
+. (Join-Path $RepoRoot "src\audit\Audit-Wsl.ps1")
 
 Write-ReglazeBanner "REGLAZE MILESTONE 1 VERIFICATION SUITE"
 
@@ -137,6 +138,14 @@ Assert-Test "Get-JunctionsAudit executes without error" {
     $Count = if ($Junc) { $Junc.Count } else { 0 }
     Write-ReglazeInfo "Discovered $Count junction(s)."
     return $true
+}
+
+# Test 8: WSL Audit Module
+Write-ReglazeStep "Testing WSL Distribution & Package Discovery..."
+Assert-Test "Get-WslAudit detects WSL state and package inventory" {
+    $Wsl = Get-WslAudit
+    Write-ReglazeInfo "WSL Enabled: $($Wsl.enabled), Default Distro: $($Wsl.default_distro), Packages: $($Wsl.detected_packages -join ', ')"
+    return ($Wsl -ne $null -and $Wsl.detected_packages.Count -gt 0)
 }
 
 # Test 8: End-to-End Invoke-Audit Execution

@@ -81,6 +81,14 @@ function Get-InstalledApplicationsAudit {
                                     } | Sort-Object { $_.name.Length } -Descending | Select-Object -First 1
                                 }
 
+                                # Check if package is internal OS runtime/codec noise
+                                $IsSystemNoise = ($Id -match "^(Microsoft\.VCRedist|Microsoft\.VCLibs|Microsoft\.UI\.Xaml|Microsoft\.WindowsAppRuntime|Microsoft\.DotNet\.Native|Microsoft\.CLRTypesSQLServer)") -or
+                                                 ($Id -match "^MSIX\\Microsoft\.(AV1VideoExtension|AVCEncoderVideoExtension|HEIFImageExtension|HEVCVideoExtension|MPEG2VideoExtension|VP9VideoExtensions|WebMediaExtensions|WebpImageExtension|RawImageExtension|Services\.Store\.Engagement|NET\.Native\.Framework|WinAppRuntime|Winget\.Source|SecHealthUI|StartExperiencesApp|StorePurchaseApp|ApplicationCompatibilityEnhancements)")
+
+                                if ($IsSystemNoise -and -not $MatchedApp) {
+                                    continue
+                                }
+
                                 $WinGetPackages += [PSCustomObject]@{
                                     id             = $Id
                                     name           = $Name
@@ -140,6 +148,12 @@ function Get-InstalledApplicationsAudit {
                         ($_.name -and $DisplayName -like "*$($_.name)*") -or
                         ($_.app_id -and $DisplayName -like "*$($_.app_id)*")
                     } | Sort-Object { if ($_.name) { $_.name.Length } else { $_.app_id.Length } } -Descending | Select-Object -First 1
+                }
+
+                # Skip driver-only subcomponents and internal runtime noise unless explicitly cataloged
+                $IsArpNoise = ($DisplayName -match "^(Adobe Genuine Service|Microsoft Windows Application Compatibility Fix Database|vs_CoreEditorFonts|Windows SDK AddOn|.*HD Audio Driver.*|.*USB Audio Drivers.*|.*FrameView SDK.*)")
+                if ($IsArpNoise -and -not $MatchedApp) {
+                    continue
                 }
 
                 $NonWinGetApps += [PSCustomObject]@{

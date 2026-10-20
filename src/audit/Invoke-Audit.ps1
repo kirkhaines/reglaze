@@ -27,6 +27,7 @@ if (-not (Test-Path (Join-Path $RepoRoot "data\applications"))) {
 . (Join-Path $RepoRoot "src\audit\Audit-Apps.ps1")
 . (Join-Path $RepoRoot "src\audit\Audit-Junctions.ps1")
 . (Join-Path $RepoRoot "src\audit\Audit-StorageProviders.ps1")
+. (Join-Path $RepoRoot "src\audit\Audit-Wsl.ps1")
 
 Write-ReglazeBanner "PRE-FLIGHT SYSTEM AUDIT"
 
@@ -82,7 +83,12 @@ $UserIdentityData = Get-UserIdentityAudit
 Write-ReglazeSuccess "User Identity: $($UserIdentityData.email) ($($UserIdentityData.account_type))"
 Write-ReglazeSuccess "Cloud Streaming: $($StorageProvidersData.streaming.mount_point) ($($StorageProvidersData.streaming.cloud_provider)), Synced roots: $($StorageProvidersData.sync_directories.Count)."
 
-# 9. Assemble and Emit audit-reference.json
+# 9. Execute WSL Environment Discovery
+Write-ReglazeStep "Auditing WSL Distributions & Packages..."
+$WslData = Get-WslAudit
+Write-ReglazeSuccess "WSL Enabled: $($WslData.enabled), Default Distro: $($WslData.default_distro), Packages: $($WslData.detected_packages.Count)."
+
+# 10. Assemble and Emit audit-reference.json
 Write-ReglazeStep "Compiling Audit Reference Document..."
 $ComputerName = $env:COMPUTERNAME
 $AuditMetadata = [PSCustomObject]@{
@@ -97,6 +103,7 @@ $AuditReference = [PSCustomObject]@{
     system_and_licensing             = $LicensingData
     user_identity                    = $UserIdentityData
     storage_providers                = $StorageProvidersData
+    detected_wsl                     = $WslData
     bitlocker_recovery_keys          = $BitLockerData
     storage_topology                 = $HardwareData.storage_topology
     detected_junctions               = $JunctionsData
@@ -288,16 +295,20 @@ if (-not (Test-Path $BlueprintPath) -or $Force) {
         $YamlLines += '  vscode: {}'
     }
 
+    $WslDistroName = if ($WslData.default_distro) { $WslData.default_distro } else { "Ubuntu" }
     $YamlLines += @(
         '',
         'wsl2:',
-        '  enabled: true',
-        '  distro: "Ubuntu"',
+        "  enabled: $($WslData.enabled.ToString().ToLower())",
+        "  distro: `"$WslDistroName`"",
         '  default_user: "developer"',
-        '  packages:',
-        '    - "git"',
-        '    - "curl"',
-        '    - "rclone"',
+        '  packages:'
+    )
+    foreach ($WslPkg in $WslData.detected_packages) {
+        $YamlLines += "    - `"$WslPkg`""
+    }
+
+    $YamlLines += @(
         '',
         'dev_repos:',
         '  root: "%SYNC_PROJECTS%"',
