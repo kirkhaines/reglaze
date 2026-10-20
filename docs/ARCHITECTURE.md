@@ -401,7 +401,7 @@ $DiskNumber = $TargetDisk.DeviceId
 
 ### Phase 4: Post-Install Machine Orchestration (`bootstrap.ps1` under LocalAdmin)
 
-Upon initial boot, Windows automatically logs into `LocalAdmin`. `bootstrap.ps1` executes non-interactively:
+Upon initial boot, Windows automatically logs into `LocalAdmin`. `bootstrap.ps1` executes non-interactively in strict sequence:
 
 ```powershell
 # 1. Unlock & Re-arm Preserved BitLocker Volumes
@@ -413,20 +413,34 @@ foreach ($Vol in $BitLockerPayload) {
     }
 }
 
-# 2. Execute WinGet DSC Configuration (Machine Scope)
+# 2. Automated WHQL Driver Servicing (Chipset, Audio, Network, Storage)
+# Executes prior to application installation so all hardware is natively operational
+if ($Blueprint.system.updates.drivers -ne $false) {
+    Install-PackageProvider -Name NuGet -Force -Scope CurrentUser
+    Install-Module -Name PSWindowsUpdate -Force -Scope CurrentUser
+    Get-WindowsUpdate -Category "Drivers" -Install -AcceptAll -IgnoreReboot -ErrorAction SilentlyContinue
+}
+
+# 3. General Windows Quality & Security Update Pass
+# Pulls latest cumulative updates and security patches before software packages are staged
+if ($Blueprint.system.updates.windows_updates -ne $false) {
+    Get-WindowsUpdate -NotCategory "Drivers" -Install -AcceptAll -IgnoreReboot -ErrorAction SilentlyContinue
+}
+
+# 4. Execute WinGet DSC Configuration (Machine Scope Application Deployment)
 winget configure --file "C:\Reglaze\payload\configuration.dsc.yaml" --accept-configuration-agreements --disable-interactivity
 
-# 3. Stage WSL2 Base Kernel and Ubuntu Distro
+# 5. Stage WSL2 Base Kernel and Linux Distribution
 wsl --install -d Ubuntu --no-launch
 
-# 4. Create Machine-Level Junctions (Program Files, Common Assets)
+# 6. Create Machine-Level Junctions (Program Files, Common Assets)
 # Executes any system-level junctions declared in junctions-manifest.json
 
-# 5. Destroy AutoLogon Credentials
+# 7. Destroy AutoLogon Credentials
 Remove-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" -Name "DefaultPassword" -ErrorAction SilentlyContinue
 Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" -Name "AutoAdminLogon" -Value "0"
 
-# 6. Schedule Phase 5 Hydration on User Logon & Restart
+# 8. Schedule Phase 5 Hydration on User Logon & Restart
 Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce" -Name "ReglazeHydrate" -Value "powershell.exe -ExecutionPolicy Bypass -File C:\Reglaze\payload\hydrate.ps1"
 Restart-Computer -Force
 ```

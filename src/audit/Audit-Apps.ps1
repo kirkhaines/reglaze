@@ -77,8 +77,9 @@ function Get-InstalledApplicationsAudit {
 
                                 if (-not $MatchedApp) {
                                     $MatchedApp = $Catalog | Where-Object {
-                                        $_.name -and ($Name -eq $_.name -or $Name -like "*$($_.name)*")
-                                    } | Sort-Object { $_.name.Length } -Descending | Select-Object -First 1
+                                        ($_.name -and ($Name -eq $_.name -or $Name -like "*$($_.name)*" -or $_.name -like "*$($Name)*")) -or
+                                        ($_.winget_id -and ($Id -like "*$($_.winget_id)*" -or ($Id -like "Python.*" -and $_.app_id -eq "python3")))
+                                    } | Sort-Object { if ($_.name) { $_.name.Length } else { $_.app_id.Length } } -Descending | Select-Object -First 1
                                 }
 
                                 # Check if package is internal OS runtime/codec noise
@@ -145,7 +146,7 @@ function Get-InstalledApplicationsAudit {
 
                 if (-not $MatchedApp) {
                     $MatchedApp = $Catalog | Where-Object {
-                        ($_.name -and $DisplayName -like "*$($_.name)*") -or
+                        ($_.name -and ($DisplayName -like "*$($_.name)*" -or ($DisplayName -like "Logi*" -and $_.app_id -eq "logitech_ghub"))) -or
                         ($_.app_id -and $DisplayName -like "*$($_.app_id)*")
                     } | Sort-Object { if ($_.name) { $_.name.Length } else { $_.app_id.Length } } -Descending | Select-Object -First 1
                 }
