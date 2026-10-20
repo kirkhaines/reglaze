@@ -1,19 +1,27 @@
 {
-  "app_id": "darktable",
-  "name": "Darktable",
-  "winget_id": "Darktable.Darktable",
-  "steam_id": null,
-  "website": "https://www.darktable.org",
-  "directories": [
-    {
-      "id": "library",
-      "description": "Image library database and data caches",
-      "default_path": "%LOCALAPPDATA%\\darktable",
-      "category": "catalog",
-      "needs_mapping": true,
-      "safe_for_stream": false,
-      "recommended_storage": "sync",
-      "notes": "Uses SQLite databases (library.db, data.db). Streaming mounts cause database write locks and corruption."
-    }
-  ]
+    "app_id":  "darktable",
+    "name":  "Darktable",
+    "website":  "https://www.darktable.org",
+    "install":  {
+                    "method":  "winget",
+                    "winget_id":  "Darktable.Darktable",
+                    "steam_id":  null,
+                    "download_url":  null,
+                    "default_target_directory":  null,
+                    "guide_file":  null,
+                    "post_install_script":  null,
+                    "instructions":  []
+                },
+    "directories":  [
+                        {
+                            "id":  "library",
+                            "description":  "Image library database and data caches",
+                            "default_path":  "%LOCALAPPDATA%\\darktable",
+                            "category":  "catalog",
+                            "needs_mapping":  true,
+                            "safe_for_stream":  false,
+                            "recommended_storage":  "sync",
+                            "notes":  "Uses SQLite databases (library.db, data.db). Streaming mounts cause database write locks and corruption."
+                        }
+                    ]
 }

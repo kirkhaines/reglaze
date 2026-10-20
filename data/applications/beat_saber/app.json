@@ -1,29 +1,37 @@
 {
-  "app_id": "beat_saber",
-  "name": "Beat Saber",
-  "winget_id": null,
-  "steam_id": 620980,
-  "website": "https://beatsaber.com",
-  "directories": [
-    {
-      "id": "custom_levels",
-      "description": "Custom Songs & Levels",
-      "default_path": "%PROGRAMFILES(X86)%\\Steam\\steamapps\\common\\Beat Saber\\Beat Saber_Data\\CustomLevels",
-      "category": "songs",
-      "needs_mapping": true,
-      "safe_for_stream": true,
-      "recommended_storage": "streaming",
-      "notes": "Large audio and map asset bundles; read-only during song play. Safe for streaming or secondary local drive."
-    },
-    {
-      "id": "game_saves",
-      "description": "Player scores, campaign progress, and settings",
-      "default_path": "%USERPROFILE%\\AppData\\LocalLow\\Hyperbolic Magnetism\\Beat Saber",
-      "category": "saves",
-      "needs_mapping": true,
-      "safe_for_stream": true,
-      "recommended_storage": "streaming",
-      "notes": "Standard JSON/binary save files."
-    }
-  ]
+    "app_id":  "beat_saber",
+    "name":  "Beat Saber",
+    "website":  "https://beatsaber.com",
+    "install":  {
+                    "method":  "steam",
+                    "winget_id":  null,
+                    "steam_id":  620980,
+                    "download_url":  null,
+                    "default_target_directory":  null,
+                    "guide_file":  null,
+                    "post_install_script":  null,
+                    "instructions":  []
+                },
+    "directories":  [
+                        {
+                            "id":  "custom_levels",
+                            "description":  "Custom Songs \u0026 Levels",
+                            "default_path":  "%PROGRAMFILES(X86)%\\Steam\\steamapps\\common\\Beat Saber\\Beat Saber_Data\\CustomLevels",
+                            "category":  "songs",
+                            "needs_mapping":  true,
+                            "safe_for_stream":  true,
+                            "recommended_storage":  "streaming",
+                            "notes":  "Large audio and map asset bundles; read-only during song play. Safe for streaming or secondary local drive."
+                        },
+                        {
+                            "id":  "game_saves",
+                            "description":  "Player scores, campaign progress, and settings",
+                            "default_path":  "%USERPROFILE%\\AppData\\LocalLow\\Hyperbolic Magnetism\\Beat Saber",
+                            "category":  "saves",
+                            "needs_mapping":  true,
+                            "safe_for_stream":  true,
+                            "recommended_storage":  "streaming",
+                            "notes":  "Standard JSON/binary save files."
+                        }
+                    ]
 }

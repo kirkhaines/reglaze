@@ -747,13 +747,13 @@ Each entry represents a certified application profile:
   "properties": {
     "app_id": { "type": "string" },
     "name": { "type": "string" },
-    "winget_id": { "type": ["string", "null"] },
-    "steam_id": { "type": ["integer", "null"] },
     "website": { "type": "string" },
     "install": {
       "type": "object",
       "properties": {
         "method": { "enum": ["winget", "steam", "manual"] },
+        "winget_id": { "type": ["string", "null"] },
+        "steam_id": { "type": ["integer", "null"] },
         "download_url": { "type": "string" },
         "default_target_directory": { "type": "string" },
         "instructions": { "type": "array", "items": { "type": "string" } }

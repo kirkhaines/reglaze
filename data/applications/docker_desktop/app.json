@@ -1,19 +1,27 @@
 {
-  "app_id": "docker_desktop",
-  "name": "Docker Desktop",
-  "winget_id": "Docker.DockerDesktop",
-  "steam_id": null,
-  "website": "https://www.docker.com/products/docker-desktop",
-  "directories": [
-    {
-      "id": "config",
-      "description": "Docker CLI contexts, daemon settings, and credentials",
-      "default_path": "%USERPROFILE%\\.docker",
-      "category": "configs",
-      "needs_mapping": false,
-      "safe_for_stream": true,
-      "recommended_storage": "streaming",
-      "notes": "User-level Docker config and CLI contexts; safe for cloud streaming or local dotfiles management."
-    }
-  ]
+    "app_id":  "docker_desktop",
+    "name":  "Docker Desktop",
+    "website":  "https://www.docker.com/products/docker-desktop",
+    "install":  {
+                    "method":  "winget",
+                    "winget_id":  "Docker.DockerDesktop",
+                    "steam_id":  null,
+                    "download_url":  null,
+                    "default_target_directory":  null,
+                    "guide_file":  null,
+                    "post_install_script":  null,
+                    "instructions":  []
+                },
+    "directories":  [
+                        {
+                            "id":  "config",
+                            "description":  "Docker CLI contexts, daemon settings, and credentials",
+                            "default_path":  "%USERPROFILE%\\.docker",
+                            "category":  "configs",
+                            "needs_mapping":  false,
+                            "safe_for_stream":  true,
+                            "recommended_storage":  "streaming",
+                            "notes":  "User-level Docker config and CLI contexts; safe for cloud streaming or local dotfiles management."
+                        }
+                    ]
 }

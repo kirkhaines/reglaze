@@ -1,17 +1,19 @@
 {
-  "$schema": "../_schema.json",
-  "app_id": "7zip",
-  "name": "7-Zip",
-  "winget_id": "7zip.7zip",
-  "steam_id": null,
-  "website": "https://www.7-zip.org",
-  "install": {
-    "method": "winget",
-    "download_url": null,
-    "default_target_directory": "%ProgramFiles%\\7-Zip",
-    "guide_file": null,
-    "post_install_script": null,
-    "instructions": []
-  },
-  "directories": []
+    "$schema":  "../_schema.json",
+    "app_id":  "7zip",
+    "name":  "7-Zip",
+    "website":  "https://www.7-zip.org",
+    "install":  {
+                    "method":  "winget",
+                    "winget_id":  "7zip.7zip",
+                    "steam_id":  null,
+                    "download_url":  null,
+                    "default_target_directory":  "%ProgramFiles%\\7-Zip",
+                    "guide_file":  null,
+                    "post_install_script":  null,
+                    "instructions":  []
+                },
+    "directories":  [
+
+                    ]
 }

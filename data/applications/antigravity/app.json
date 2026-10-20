@@ -1,38 +1,38 @@
 {
-  "$schema": "../_schema.json",
-  "app_id": "antigravity",
-  "name": "Antigravity",
-  "winget_id": "Google.Antigravity",
-  "steam_id": null,
-  "website": "https://github.com/google/antigravity",
-  "install": {
-    "method": "winget",
-    "download_url": null,
-    "default_target_directory": "%LOCALAPPDATA%\\Programs\\antigravity",
-    "guide_file": null,
-    "post_install_script": null,
-    "instructions": []
-  },
-  "directories": [
-    {
-      "id": "gemini_config",
-      "description": "Global Antigravity skills, rules, agent configurations, and MCP servers",
-      "default_path": "%USERPROFILE%\\.gemini\\config",
-      "category": "configs",
-      "needs_mapping": true,
-      "safe_for_stream": true,
-      "recommended_storage": "streaming",
-      "notes": "Global configuration root for Antigravity customizations."
-    },
-    {
-      "id": "antigravity_state",
-      "description": "Antigravity agent runtime state and authentication tokens",
-      "default_path": "%USERPROFILE%\\.gemini\\antigravity",
-      "category": "configs",
-      "needs_mapping": true,
-      "safe_for_stream": true,
-      "recommended_storage": "streaming",
-      "notes": "Runtime authentication and state metadata."
-    }
-  ]
+    "$schema":  "../_schema.json",
+    "app_id":  "antigravity",
+    "name":  "Antigravity",
+    "website":  "https://github.com/google/antigravity",
+    "install":  {
+                    "method":  "winget",
+                    "winget_id":  "Google.Antigravity",
+                    "steam_id":  null,
+                    "download_url":  null,
+                    "default_target_directory":  "%LOCALAPPDATA%\\Programs\\antigravity",
+                    "guide_file":  null,
+                    "post_install_script":  null,
+                    "instructions":  []
+                },
+    "directories":  [
+                        {
+                            "id":  "gemini_config",
+                            "description":  "Global Antigravity skills, rules, agent configurations, and MCP servers",
+                            "default_path":  "%USERPROFILE%\\.gemini\\config",
+                            "category":  "configs",
+                            "needs_mapping":  true,
+                            "safe_for_stream":  true,
+                            "recommended_storage":  "streaming",
+                            "notes":  "Global configuration root for Antigravity customizations."
+                        },
+                        {
+                            "id":  "antigravity_state",
+                            "description":  "Antigravity agent runtime state and authentication tokens",
+                            "default_path":  "%USERPROFILE%\\.gemini\\antigravity",
+                            "category":  "configs",
+                            "needs_mapping":  true,
+                            "safe_for_stream":  true,
+                            "recommended_storage":  "streaming",
+                            "notes":  "Runtime authentication and state metadata."
+                        }
+                    ]
 }

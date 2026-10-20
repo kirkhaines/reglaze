@@ -72,13 +72,13 @@ function Get-InstalledApplicationsAudit {
                                 
                                 # Match against catalog: exact winget_id or name
                                 $MatchedApp = $Catalog | Where-Object { 
-                                    ($_.winget_id -and $_.winget_id -eq $Id)
+                                    ($_.install -and $_.install.winget_id -and $_.install.winget_id -eq $Id)
                                 } | Select-Object -First 1
 
                                 if (-not $MatchedApp) {
                                     $MatchedApp = $Catalog | Where-Object {
                                         ($_.name -and ($Name -eq $_.name -or $Name -like "*$($_.name)*" -or $_.name -like "*$($Name)*")) -or
-                                        ($_.winget_id -and ($Id -like "*$($_.winget_id)*" -or ($Id -like "Python.*" -and $_.app_id -eq "python3")))
+                                        ($_.install -and $_.install.winget_id -and ($Id -like "*$($_.install.winget_id)*" -or ($Id -like "Python.*" -and $_.app_id -eq "python3")))
                                     } | Sort-Object { if ($_.name) { $_.name.Length } else { $_.app_id.Length } } -Descending | Select-Object -First 1
                                 }
 
@@ -141,12 +141,13 @@ function Get-InstalledApplicationsAudit {
                 $MatchedApp = $Catalog | Where-Object {
                     $DisplayName -eq $_.name -or
                     ($_.app_id -and $DisplayName -eq $_.app_id) -or
-                    ($_.winget_id -and $DisplayName -eq $_.winget_id)
+                    ($_.install -and $_.install.winget_id -and $DisplayName -eq $_.install.winget_id) -or
+                    ($_.install -and $_.install.steam_id -and $DisplayName -like "*$($_.install.steam_id)*")
                 } | Select-Object -First 1
 
                 if (-not $MatchedApp) {
                     $MatchedApp = $Catalog | Where-Object {
-                        ($_.name -and ($DisplayName -like "*$($_.name)*" -or ($DisplayName -like "Logi*" -and $_.app_id -eq "logitech_ghub"))) -or
+                        ($_.name -and ($DisplayName -like "*$($_.name)*" -or ($DisplayName -like "Logi*" -and $_.app_id -eq "logitech_ghub") -or ($DisplayName -like "*Visual Studio*" -and $_.app_id -eq "visual_studio"))) -or
                         ($_.app_id -and $DisplayName -like "*$($_.app_id)*")
                     } | Sort-Object { if ($_.name) { $_.name.Length } else { $_.app_id.Length } } -Descending | Select-Object -First 1
                 }

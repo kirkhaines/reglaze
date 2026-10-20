@@ -1,28 +1,28 @@
 {
-  "$schema": "../_schema.json",
-  "app_id": "logitech_ghub",
-  "name": "Logitech G HUB",
-  "winget_id": "Logitech.GHUB",
-  "steam_id": null,
-  "website": "https://www.logitechg.com/innovation/g-hub.html",
-  "install": {
-    "method": "winget",
-    "download_url": null,
-    "default_target_directory": null,
-    "guide_file": null,
-    "post_install_script": null,
-    "instructions": []
-  },
-  "directories": [
-    {
-      "id": "profiles",
-      "description": "Logitech G HUB device profiles, DPI sensitivities, macros, and RGB lighting configurations",
-      "default_path": "%LOCALAPPDATA%\\LGHUB",
-      "category": "configs",
-      "needs_mapping": true,
-      "safe_for_stream": true,
-      "recommended_storage": "streaming",
-      "notes": "User peripheral settings and macro bindings."
-    }
-  ]
+    "$schema":  "../_schema.json",
+    "app_id":  "logitech_ghub",
+    "name":  "Logitech G HUB",
+    "website":  "https://www.logitechg.com/innovation/g-hub.html",
+    "install":  {
+                    "method":  "winget",
+                    "winget_id":  "Logitech.GHUB",
+                    "steam_id":  null,
+                    "download_url":  null,
+                    "default_target_directory":  null,
+                    "guide_file":  null,
+                    "post_install_script":  null,
+                    "instructions":  []
+                },
+    "directories":  [
+                        {
+                            "id":  "profiles",
+                            "description":  "Logitech G HUB device profiles, DPI sensitivities, macros, and RGB lighting configurations",
+                            "default_path":  "%LOCALAPPDATA%\\LGHUB",
+                            "category":  "configs",
+                            "needs_mapping":  true,
+                            "safe_for_stream":  true,
+                            "recommended_storage":  "streaming",
+                            "notes":  "User peripheral settings and macro bindings."
+                        }
+                    ]
 }

@@ -1,28 +1,28 @@
 {
-  "$schema": "../_schema.json",
-  "app_id": "bsmanager",
-  "name": "BSManager",
-  "winget_id": "Zagrios.BSManager",
-  "steam_id": null,
-  "website": "https://github.com/Zagrios/bs-manager",
-  "install": {
-    "method": "winget",
-    "download_url": null,
-    "default_target_directory": "%LOCALAPPDATA%\\Programs\\bs-manager",
-    "guide_file": null,
-    "post_install_script": null,
-    "instructions": []
-  },
-  "directories": [
-    {
-      "id": "shared_data",
-      "description": "BSManager shared maps, models, playlists, and version management data",
-      "default_path": "%DOCUMENTS%\\BSManager",
-      "category": "library",
-      "needs_mapping": true,
-      "safe_for_stream": false,
-      "recommended_storage": "sync",
-      "notes": "Large map libraries, avatar models, and song downloads. Sync or local preserved storage is recommended to maintain game loading speed."
-    }
-  ]
+    "$schema":  "../_schema.json",
+    "app_id":  "bsmanager",
+    "name":  "BSManager",
+    "website":  "https://github.com/Zagrios/bs-manager",
+    "install":  {
+                    "method":  "winget",
+                    "winget_id":  "Zagrios.BSManager",
+                    "steam_id":  null,
+                    "download_url":  null,
+                    "default_target_directory":  "%LOCALAPPDATA%\\Programs\\bs-manager",
+                    "guide_file":  null,
+                    "post_install_script":  null,
+                    "instructions":  []
+                },
+    "directories":  [
+                        {
+                            "id":  "shared_data",
+                            "description":  "BSManager shared maps, models, playlists, and version management data",
+                            "default_path":  "%DOCUMENTS%\\BSManager",
+                            "category":  "library",
+                            "needs_mapping":  true,
+                            "safe_for_stream":  false,
+                            "recommended_storage":  "sync",
+                            "notes":  "Large map libraries, avatar models, and song downloads. Sync or local preserved storage is recommended to maintain game loading speed."
+                        }
+                    ]
 }

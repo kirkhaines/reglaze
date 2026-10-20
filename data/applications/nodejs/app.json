@@ -1,17 +1,19 @@
 {
-  "$schema": "../_schema.json",
-  "app_id": "nodejs",
-  "name": "Node.js",
-  "winget_id": "OpenJS.NodeJS",
-  "steam_id": null,
-  "website": "https://nodejs.org",
-  "install": {
-    "method": "winget",
-    "download_url": null,
-    "default_target_directory": "%ProgramFiles%\\nodejs",
-    "guide_file": null,
-    "post_install_script": null,
-    "instructions": []
-  },
-  "directories": []
+    "$schema":  "../_schema.json",
+    "app_id":  "nodejs",
+    "name":  "Node.js",
+    "website":  "https://nodejs.org",
+    "install":  {
+                    "method":  "winget",
+                    "winget_id":  "OpenJS.NodeJS",
+                    "steam_id":  null,
+                    "download_url":  null,
+                    "default_target_directory":  "%ProgramFiles%\\nodejs",
+                    "guide_file":  null,
+                    "post_install_script":  null,
+                    "instructions":  []
+                },
+    "directories":  [
+
+                    ]
 }
