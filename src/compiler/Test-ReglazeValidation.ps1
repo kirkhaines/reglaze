@@ -157,6 +157,196 @@ function Test-ReglazeBlueprint {
         }
     }
 
+    # 7. Check dev_repos variable tokens
+    if ($Blueprint.dev_repos -and $Blueprint.dev_repos.root) {
+        $ResolvedDevRoot = Resolve-VariableString -InputString $Blueprint.dev_repos.root -VariableMap $VarMap
+        $DevUnresolved = Test-UnresolvedTokens -InputString $ResolvedDevRoot
+        if ($DevUnresolved.Count -gt 0) {
+            $Errors.Add("Unresolvable variable token(s) in dev_repos.root '$($Blueprint.dev_repos.root)': $($DevUnresolved -join ', ')")
+        }
+    }
+
+    # 8. Directory Junction Integrity & Filesystem Rules Validation
+    # Enforces Windows NTFS Reparse Point constraints, filesystem rules, target drive existence,
+    # UNC rejection, circular loop prevention, and parent/child nesting prevention.
+    $AllowedTargetDrives = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    $AllowedTargetDrives.Add("C:") | Out-Null
+    if ($Blueprint.storage -and $Blueprint.storage.streaming -and $Blueprint.storage.streaming.mount_point) {
+        $StreamDrive = ([System.IO.Path]::GetPathRoot($Blueprint.storage.streaming.mount_point)).TrimEnd('\')
+        if ($StreamDrive) { $AllowedTargetDrives.Add($StreamDrive) | Out-Null }
+    }
+    if ($Blueprint.disks -and $Blueprint.disks.preserved_disks) {
+        foreach ($PDisk in $Blueprint.disks.preserved_disks) {
+            if ($PDisk.expected_mount) {
+                $PDrive = ([System.IO.Path]::GetPathRoot($PDisk.expected_mount)).TrimEnd('\')
+                if ($PDrive) { $AllowedTargetDrives.Add($PDrive) | Out-Null }
+            }
+        }
+    }
+    if ($Blueprint.storage -and $Blueprint.storage.sync -and $Blueprint.storage.sync.directories) {
+        $SyncDirs = $Blueprint.storage.sync.directories
+        $DirProps = if ($SyncDirs -is [System.Collections.IDictionary]) { $SyncDirs.Keys } else { $SyncDirs.PSObject.Properties.Name }
+        foreach ($Prop in $DirProps) {
+            $DirObj = if ($SyncDirs -is [System.Collections.IDictionary]) { $SyncDirs[$Prop] } else { $SyncDirs.$Prop }
+            if ($DirObj.local_path) {
+                $ResolvedSyncPath = Resolve-VariableString -InputString $DirObj.local_path -VariableMap $VarMap
+                $SyncDrive = ([System.IO.Path]::GetPathRoot($ResolvedSyncPath)).TrimEnd('\')
+                if ($SyncDrive) { $AllowedTargetDrives.Add($SyncDrive) | Out-Null }
+            }
+        }
+    }
+
+    $AllJunctions = [System.Collections.Generic.List[PSCustomObject]]::new()
+
+    # Collect from applications
+    if ($Blueprint.applications) {
+        $AppProps = @($Blueprint.applications.PSObject.Properties)
+        foreach ($Prop in $AppProps) {
+            $AppId = $Prop.Name
+            $AppConfig = $Prop.Value
+            $CatalogApp = $Catalog | Where-Object { $_.app_id -eq $AppId } | Select-Object -First 1
+
+            if ($CatalogApp -and $CatalogApp.directories) {
+                foreach ($Dir in $CatalogApp.directories) {
+                    $ConfiguredTarget = $null
+                    $ConfiguredLink = $null
+                    $IsOmitted = $false
+
+                    if ($AppConfig.directories -and $AppConfig.directories.$($Dir.id)) {
+                        $DirConf = $AppConfig.directories.$($Dir.id)
+                        $ConfiguredTarget = $DirConf.target
+                        if ($DirConf.link) { $ConfiguredLink = $DirConf.link }
+                        if ($DirConf.override -and $DirConf.override.action -eq "omit") { $IsOmitted = $true }
+                    }
+
+                    if ($IsOmitted) { continue }
+                    if (-not $ConfiguredLink) { $ConfiguredLink = $Dir.default_path }
+
+                    if ($ConfiguredTarget) {
+                        $ResolvedLink = Resolve-VariableString -InputString $ConfiguredLink -VariableMap $VarMap
+                        $ResolvedTarget = Resolve-VariableString -InputString $ConfiguredTarget -VariableMap $VarMap
+
+                        $AllJunctions.Add([PSCustomObject]@{
+                            AppId            = $AppId
+                            DirectoryId      = $Dir.id
+                            Link             = $ResolvedLink
+                            Target           = $ResolvedTarget
+                            RawTarget        = $ConfiguredTarget
+                            RawLink          = $ConfiguredLink
+                            SafeForStream    = [bool]$Dir.safe_for_stream
+                        })
+                    }
+                }
+            }
+        }
+    }
+
+    # Collect from custom
+    if ($Blueprint.custom -and $Blueprint.custom -is [System.Collections.IEnumerable]) {
+        foreach ($CustomApp in $Blueprint.custom) {
+            if ($CustomApp.directories) {
+                foreach ($CustDir in $CustomApp.directories) {
+                    if ($CustDir.link -and $CustDir.target) {
+                        $ResolvedLink = Resolve-VariableString -InputString $CustDir.link -VariableMap $VarMap
+                        $ResolvedTarget = Resolve-VariableString -InputString $CustDir.target -VariableMap $VarMap
+
+                        $AllJunctions.Add([PSCustomObject]@{
+                            AppId            = "custom"
+                            DirectoryId      = if ($CustDir.name) { $CustDir.name } else { "custom" }
+                            Link             = $ResolvedLink
+                            Target           = $ResolvedTarget
+                            RawTarget        = $CustDir.target
+                            RawLink          = $CustDir.link
+                            SafeForStream    = $true
+                        })
+                    }
+                }
+            }
+        }
+    }
+
+    # Validate individual junction rules
+    foreach ($Junc in $AllJunctions) {
+        $AppId = $Junc.AppId
+        $DirId = $Junc.DirectoryId
+        $Link = $Junc.Link
+        $Target = $Junc.Target
+
+        # 1. Unresolved tokens
+        $LinkUnresolved = Test-UnresolvedTokens -InputString $Link
+        if ($LinkUnresolved.Count -gt 0) {
+            $Errors.Add("Unresolvable variable token(s) in junction link for app '$AppId', directory '$DirId': $($LinkUnresolved -join ', ')")
+        }
+        $TargetUnresolved = Test-UnresolvedTokens -InputString $Target
+        if ($TargetUnresolved.Count -gt 0) {
+            $Errors.Add("Unresolvable variable token(s) in junction target for app '$AppId', directory '$DirId': $($TargetUnresolved -join ', ')")
+        }
+
+        # 2. Syntax & Absolute Path Rules
+        if ($Link -notmatch '^[a-zA-Z]:\\') {
+            $Errors.Add("Junction link (source) for app '$AppId', directory '$DirId' must be an absolute path with a drive letter: '$Link'")
+        }
+        if ($Target -notmatch '^[a-zA-Z]:\\') {
+            # Check if network UNC path
+            if ($Junc.RawTarget -like "\\\\*" -or $Target -like "\\\\*") {
+                $Errors.Add("Junction target for app '$AppId', directory '$DirId' points to a network UNC path: '$Target'. Windows NTFS directory junctions strictly require local drive letter paths and do not support UNC network targets.")
+            } else {
+                $Errors.Add("Junction target (destination) for app '$AppId', directory '$DirId' must be an absolute path with a drive letter: '$Target'")
+            }
+        }
+
+        # 3. Bare drive root check
+        if ($Link -match '^[a-zA-Z]:\\?$') {
+            $Errors.Add("Junction link (source) cannot replace an entire drive root: '$Link'")
+        }
+        if ($Target -match '^[a-zA-Z]:\\?$') {
+            $Errors.Add("Junction target (destination) cannot point to an entire drive root: '$Target'")
+        }
+
+        # 4. Source and target identical check
+        if ($Link.TrimEnd('\').Equals($Target.TrimEnd('\'), [System.StringComparison]::OrdinalIgnoreCase)) {
+            $Errors.Add("Junction source (Link) and destination (Target) cannot be the same path for app '$AppId', directory '$DirId': '$Link'")
+        }
+
+        # 5. Target drive existence check
+        $TargetDrive = ([System.IO.Path]::GetPathRoot($Target)).TrimEnd('\')
+        if ($TargetDrive -and -not $AllowedTargetDrives.Contains($TargetDrive)) {
+            $Errors.Add("Junction target drive '$TargetDrive' for app '$AppId', directory '$DirId' ('$Target') is not declared in blueprint storage topology (target_os_disk, preserved_disks, or streaming mount).")
+        }
+
+        # 6. Circular reference check
+        $LinkDrive = ([System.IO.Path]::GetPathRoot($Link)).TrimEnd('\')
+        if ($LinkDrive -and $TargetDrive -and $LinkDrive.Equals($TargetDrive, [System.StringComparison]::OrdinalIgnoreCase)) {
+            $NormLink = $Link.TrimEnd('\') + "\"
+            $NormTarget = $Target.TrimEnd('\') + "\"
+            if ($NormTarget.StartsWith($NormLink, [System.StringComparison]::OrdinalIgnoreCase) -or $NormLink.StartsWith($NormTarget, [System.StringComparison]::OrdinalIgnoreCase)) {
+                $Errors.Add("Circular loop detected: Junction link '$Link' and target '$Target' are nested within each other on the same drive '$LinkDrive'.")
+            }
+        }
+    }
+
+    # Cross-junction collision and nesting validation
+    for ($i = 0; $i -lt $AllJunctions.Count; $i++) {
+        for ($j = $i + 1; $j -lt $AllJunctions.Count; $j++) {
+            $JuncA = $AllJunctions[$i]
+            $JuncB = $AllJunctions[$j]
+            $NormLinkA = $JuncA.Link.TrimEnd('\')
+            $NormLinkB = $JuncB.Link.TrimEnd('\')
+
+            # Duplicate Link collision
+            if ($NormLinkA.Equals($NormLinkB, [System.StringComparison]::OrdinalIgnoreCase)) {
+                $Errors.Add("Duplicate junction link collision: App '$($JuncA.AppId)' and App '$($JuncB.AppId)' both define the same link path: '$NormLinkA'")
+            }
+
+            # Parent-Child Nesting
+            if ($NormLinkB.StartsWith($NormLinkA + "\", [System.StringComparison]::OrdinalIgnoreCase)) {
+                $Errors.Add("Nested junction collision: Link '$NormLinkB' (App '$($JuncB.AppId)', Dir '$($JuncB.DirectoryId)') is nested inside parent link '$NormLinkA' (App '$($JuncA.AppId)', Dir '$($JuncA.DirectoryId)'). Windows directory junctions cannot be created inside another junction. Omit the child directory with override.action: 'omit' or map to a parent.")
+            } elseif ($NormLinkA.StartsWith($NormLinkB + "\", [System.StringComparison]::OrdinalIgnoreCase)) {
+                $Errors.Add("Nested junction collision: Link '$NormLinkA' (App '$($JuncA.AppId)', Dir '$($JuncA.DirectoryId)') is nested inside parent link '$NormLinkB' (App '$($JuncB.AppId)', Dir '$($JuncB.DirectoryId)'). Windows directory junctions cannot be created inside another junction. Omit the child directory with override.action: 'omit' or map to a parent.")
+            }
+        }
+    }
+
     return [PSCustomObject]@{
         IsValid   = ($Errors.Count -eq 0)
         Errors    = $Errors.ToArray()

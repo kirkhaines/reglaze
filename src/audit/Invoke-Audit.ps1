@@ -299,12 +299,13 @@ if (-not (Test-Path $BlueprintPath) -or $Force) {
     }
 
     $WslDistroName = if ($WslData.default_distro) { $WslData.default_distro } else { "Ubuntu" }
+    $WslUsername = if ($UserIdentityData.username) { $UserIdentityData.username.ToLower() } else { "user" }
     $YamlLines += @(
         '',
         'wsl2:',
         "  enabled: $($WslData.enabled.ToString().ToLower())",
         "  distro: `"$WslDistroName`"",
-        '  default_user: "developer"',
+        "  default_user: `"$WslUsername`"",
         '  packages:'
     )
     foreach ($WslPkg in $WslData.detected_packages) {

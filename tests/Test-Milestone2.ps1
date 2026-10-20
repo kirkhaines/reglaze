@@ -211,6 +211,100 @@ storage:
         -Condition ($ConflictResult.IsValid -eq $false -and ($ConflictResult.Errors -match "conflict")) `
         -Details ($ConflictResult.Errors -join '; ')
 
+    # Test junction rule: Nested junction collision detection (parent-child conflict)
+    $NestedYamlFile = Join-Path $TestDir "nested_junction.yaml"
+    @"
+version: "1.0.0"
+system:
+  users:
+    local_admin:
+      username: "LocalAdmin"
+    primary_user:
+      username: "kirkh"
+disks:
+  target_os_disk:
+    disk_id: 0
+    serial_number: "NVME_OS_01"
+storage:
+  streaming:
+    mount_point: "E:"
+    verify_folder: "E:\My Drive"
+applications:
+  satisfactory:
+    directories:
+      game_saves:
+        target: "%STREAM%\Backups\satisfactory\game_saves"
+      blueprints:
+        target: "%STREAM%\Backups\satisfactory\blueprints"
+"@ | Set-Content -Path $NestedYamlFile -Encoding UTF8
+
+    $NestedResult = Test-ReglazeBlueprint -Path $NestedYamlFile -RepoRoot $RepoRoot
+    Assert-Test -Name "9. Validator: catches nested directory junction collision (child inside parent link)" `
+        -Condition ($NestedResult.IsValid -eq $false -and ($NestedResult.Errors -match "Nested junction collision")) `
+        -Details ($NestedResult.Errors -join '; ')
+
+    # Test junction rule: Network UNC target rejection
+    $UncYamlFile = Join-Path $TestDir "unc_junction.yaml"
+    @"
+version: "1.0.0"
+system:
+  users:
+    local_admin:
+      username: "LocalAdmin"
+    primary_user:
+      username: "kirkh"
+disks:
+  target_os_disk:
+    disk_id: 0
+    serial_number: "NVME_OS_01"
+storage:
+  streaming:
+    mount_point: "E:"
+    verify_folder: "E:\My Drive"
+custom:
+  - name: "Network Backup Test"
+    directories:
+      - name: "UNC Link"
+        link: "%OS_DRIVE%\Data\Test"
+        target: "\\\\nas\backups\test"
+"@ | Set-Content -Path $UncYamlFile -Encoding UTF8
+
+    $UncResult = Test-ReglazeBlueprint -Path $UncYamlFile -RepoRoot $RepoRoot
+    Assert-Test -Name "10. Validator: rejects network UNC paths as junction targets (NTFS requirement)" `
+        -Condition ($UncResult.IsValid -eq $false -and ($UncResult.Errors -match "UNC")) `
+        -Details ($UncResult.Errors -join '; ')
+
+    # Test junction rule: Target drive not defined in storage topology
+    $BadDriveYamlFile = Join-Path $TestDir "baddrive_junction.yaml"
+    @"
+version: "1.0.0"
+system:
+  users:
+    local_admin:
+      username: "LocalAdmin"
+    primary_user:
+      username: "kirkh"
+disks:
+  target_os_disk:
+    disk_id: 0
+    serial_number: "NVME_OS_01"
+storage:
+  streaming:
+    mount_point: "E:"
+    verify_folder: "E:\My Drive"
+custom:
+  - name: "Unmapped Drive Test"
+    directories:
+      - name: "Z Drive Target"
+        link: "%OS_DRIVE%\Data\Test"
+        target: "Z:\UnmappedDrive\Folder"
+"@ | Set-Content -Path $BadDriveYamlFile -Encoding UTF8
+
+    $BadDriveResult = Test-ReglazeBlueprint -Path $BadDriveYamlFile -RepoRoot $RepoRoot
+    Assert-Test -Name "11. Validator: flags target drive letters not declared in storage topology" `
+        -Condition ($BadDriveResult.IsValid -eq $false -and ($BadDriveResult.Errors -match "not declared in blueprint storage topology")) `
+        -Details ($BadDriveResult.Errors -join '; ')
+
     # -------------------------------------------------------------------------
     # TEST 4: WinGet DSC Manifest Generator
     # -------------------------------------------------------------------------
@@ -233,13 +327,13 @@ storage:
     $DscResult = Build-WinGetDSCManifest -Blueprint $DscBlueprint -RepoRoot $RepoRoot -OutputPath $DscOut
     $DscContent = Get-Content -Raw $DscOut
 
-    Assert-Test -Name "9. WinGet DSC: compiles valid DSC YAML schema with expected package entries" `
+    Assert-Test -Name "12. WinGet DSC: compiles valid DSC YAML schema with expected package entries" `
         -Condition ($DscContent -match "Spotify\.Spotify" -and $DscContent -match "Python\.Python\.3\.12" -and $DscContent -match "Custom\.Package")
 
-    Assert-Test -Name "10. WinGet DSC: assigns msstore source to Microsoft Store IDs (NVIDIA App)" `
+    Assert-Test -Name "13. WinGet DSC: assigns msstore source to Microsoft Store IDs (NVIDIA App)" `
         -Condition ($DscContent -match 'id: "XP8CLZL93F5Z4P"[\s\S]*?source: msstore')
 
-    Assert-Test -Name "11. WinGet DSC: excludes manual install apps and disabled apps" `
+    Assert-Test -Name "14. WinGet DSC: excludes manual install apps and disabled apps" `
         -Condition ($DscContent -notmatch "outfox" -and $DscContent -notmatch "disabled_app")
 
     # -------------------------------------------------------------------------
@@ -261,15 +355,14 @@ storage:
     } catch {
         $XmlValid = $false
     }
-
-    Assert-Test -Name "12. autounattend.xml: parses as valid well-formed XML" `
+    Assert-Test -Name "15. autounattend.xml: parses as valid well-formed XML" `
         -Condition $XmlValid
 
     $AutoLogonUser = $XmlParsed.unattend.settings | Where-Object { $_.pass -eq "oobeSystem" } | 
         ForEach-Object { $_.component } | Where-Object { $_.name -eq "Microsoft-Windows-Shell-Setup" } |
         ForEach-Object { $_.AutoLogon.Username }
 
-    Assert-Test -Name "13. autounattend.xml: configures AutoLogon for LocalAdmin" `
+    Assert-Test -Name "16. autounattend.xml: configures AutoLogon for LocalAdmin" `
         -Condition ($AutoLogonUser -eq "LocalAdmin")
 
     # -------------------------------------------------------------------------
@@ -281,7 +374,7 @@ storage:
 
     $DiskpartOut = Join-Path $TestDir "diskpart.txt"
     $DiskMatchResult = Invoke-DiskMatching -TargetSerialNumber $TargetSer -TargetDiskId $TargetId -PreservedSerialNumbers @("PRESERVED_SAMPLE_999") -DiskpartOutputPath $DiskpartOut
-    Assert-Test -Name "14. DiskMatch: dynamically matches target disk and generates GPT/EFI/MSR/OS/Recovery diskpart layout" `
+    Assert-Test -Name "17. DiskMatch: dynamically matches target disk and generates GPT/EFI/MSR/OS/Recovery diskpart layout" `
         -Condition ((Test-Path $DiskpartOut) -and ((Get-Content -Raw $DiskpartOut) -match "create partition efi") -and ($DiskMatchResult.TargetDiskIndex -eq $TargetId))
 
     $SafetyHaltCaught = $false
@@ -290,7 +383,7 @@ storage:
     } catch {
         $SafetyHaltCaught = ($_.Exception.Message -match "PRESERVED DISKS")
     }
-    Assert-Test -Name "15. DiskMatch: halts setup immediately if target disk is in preserved serial numbers" `
+    Assert-Test -Name "18. DiskMatch: halts setup immediately if target disk is in preserved serial numbers" `
         -Condition $SafetyHaltCaught
 
     # -------------------------------------------------------------------------
@@ -298,7 +391,7 @@ storage:
     # -------------------------------------------------------------------------
     $PayloadOut = Join-Path $TestDir "payload"
     $PayloadRes = Build-ReglazePayload -Blueprint $ValResult.Blueprint -AuditReference $AuditMock -RepoRoot $RepoRoot -PayloadDir $PayloadOut
-    Assert-Test -Name "16. Payload: generates all required provisioning artifacts (bootstrap, hydrate, WSL, DSC, manifest)" `
+    Assert-Test -Name "19. Payload: generates all required provisioning artifacts (bootstrap, hydrate, WSL, DSC, manifest)" `
         -Condition (
             (Test-Path (Join-Path $PayloadOut "bootstrap.ps1")) -and
             (Test-Path (Join-Path $PayloadOut "hydrate.ps1")) -and
@@ -309,12 +402,16 @@ storage:
             (Test-Path (Join-Path $PayloadOut "applications.json"))
         )
 
+    $WslScriptContent = Get-Content -Raw (Join-Path $PayloadOut "setup-wsl.sh")
+    Assert-Test -Name "20. WSL Provisioner: defaults to primary Windows username ('kirkh')" `
+        -Condition ($WslScriptContent -match 'WSL_USER="kirkh"' -and $WslScriptContent -match 'default = kirkh')
+
     # -------------------------------------------------------------------------
     # TEST 8: Full End-to-End Compile Command
     # -------------------------------------------------------------------------
     $E2EMedia = Join-Path $TestDir "media_e2e"
     $CompileRes = Invoke-ReglazeCompilation -ConfigFile $ValidYamlFile -TargetOutputDir $E2EMedia -AuditReferencePath $null -BypassValidation $false
-    Assert-Test -Name "17. End-to-End Compile: generates media tree with autounattend.xml and staged DiskMatch.ps1" `
+    Assert-Test -Name "21. End-to-End Compile: generates media tree with autounattend.xml and staged DiskMatch.ps1" `
         -Condition (
             $CompileRes.Status -eq "Success" -and
             (Test-Path (Join-Path $E2EMedia "autounattend.xml")) -and
