@@ -22,6 +22,20 @@ function Get-BlueprintVariables {
     $OsVar = if ($Blueprint.disks.target_os_disk.drive_variable) { $Blueprint.disks.target_os_disk.drive_variable } else { "OS_DRIVE" }
     $VarMap[$OsVar] = "C:"
 
+    # Standard User & System Folder Variables
+    $PrimaryUser = if ($Blueprint.system -and $Blueprint.system.users -and $Blueprint.system.users.primary_user -and $Blueprint.system.users.primary_user.username) {
+        $Blueprint.system.users.primary_user.username
+    } else {
+        "User"
+    }
+    $VarMap["USERPROFILE"] = "C:\Users\$PrimaryUser"
+    $VarMap["DOCUMENTS"] = "C:\Users\$PrimaryUser\Documents"
+    $VarMap["APPDATA"] = "C:\Users\$PrimaryUser\AppData\Roaming"
+    $VarMap["LOCALAPPDATA"] = "C:\Users\$PrimaryUser\AppData\Local"
+    $VarMap["PROGRAMFILES"] = "C:\Program Files"
+    $VarMap["PROGRAMFILES(X86)"] = "C:\Program Files (x86)"
+    $VarMap["PROGRAMDATA"] = "C:\ProgramData"
+
     # 2. Preserved Disks Variables
     if ($Blueprint.disks.preserved_disks) {
         foreach ($PDisk in $Blueprint.disks.preserved_disks) {
@@ -88,15 +102,19 @@ function Resolve-VariableString {
     $Result = $InputString
     $Depth = 0
 
-    while ($Result -match '%([a-zA-Z0-9_]+)%' -and $Depth -lt $MaxDepth) {
+    while ($Result -match '%([a-zA-Z0-9_\(\)]+)%' -and $Depth -lt $MaxDepth) {
         $Depth++
-        $MatchesList = [regex]::Matches($Result, '%([a-zA-Z0-9_]+)%')
+        $MatchesList = [regex]::Matches($Result, '%([a-zA-Z0-9_\(\)]+)%')
         $ReplacedAny = $false
 
         foreach ($Match in $MatchesList) {
             $Token = $Match.Groups[1].Value
             if ($VariableMap.ContainsKey($Token)) {
                 $Replacement = $VariableMap[$Token]
+                $Result = $Result.Replace("%$Token%", $Replacement)
+                $ReplacedAny = $true
+            } elseif ($null -ne [System.Environment]::GetEnvironmentVariable($Token)) {
+                $Replacement = [System.Environment]::GetEnvironmentVariable($Token)
                 $Result = $Result.Replace("%$Token%", $Replacement)
                 $ReplacedAny = $true
             }
@@ -123,12 +141,12 @@ function Test-UnresolvedTokens {
         [string]$InputString
     )
 
-    $MatchesList = [regex]::Matches($InputString, '%([a-zA-Z0-9_]+)%')
+    $MatchesList = [regex]::Matches($InputString, '%([a-zA-Z0-9_\(\)]+)%')
     $Unresolved = @()
 
     $StandardEnvVars = @(
-        "USERPROFILE", "APPDATA", "LOCALAPPDATA", "PROGRAMFILES", 
-        "PROGRAMFILES(X86)", "TEMP", "TMP", "SYSTEMROOT", "PUBLIC", "ALLUSERSPROFILE"
+        "USERPROFILE", "DOCUMENTS", "APPDATA", "LOCALAPPDATA", "PROGRAMFILES", 
+        "PROGRAMFILES(X86)", "PROGRAMDATA", "TEMP", "TMP", "SYSTEMROOT", "PUBLIC", "ALLUSERSPROFILE"
     )
 
     foreach ($Match in $MatchesList) {

@@ -635,10 +635,16 @@ Write-Host ""
     $HydratePath = Join-Path $PayloadDir "hydrate.ps1"
     $HydrateScript | Set-Content -Path $HydratePath -Encoding UTF8
 
-    # =========================================================================
-    # 6. Generate Non-Interactive WSL2 Setup Script (setup-wsl.sh)
-    # =========================================================================
-    $WslDefaultUser = if ($Blueprint.wsl2 -and $Blueprint.wsl2.default_user) { $Blueprint.wsl2.default_user } else { "developer" }
+    $PrimaryUser = if ($Blueprint.system -and $Blueprint.system.users -and $Blueprint.system.users.primary_user -and $Blueprint.system.users.primary_user.username) {
+        $Blueprint.system.users.primary_user.username
+    } else {
+        "User"
+    }
+    $WslDefaultUser = if ($Blueprint.wsl2 -and $Blueprint.wsl2.default_user -and $Blueprint.wsl2.default_user -ne "developer") {
+        $Blueprint.wsl2.default_user
+    } else {
+        $PrimaryUser.ToLower()
+    }
     $WslPackages = @()
     if ($Blueprint.wsl2 -and $Blueprint.wsl2.packages) {
         $WslPackages = @($Blueprint.wsl2.packages)
