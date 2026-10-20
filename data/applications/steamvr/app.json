@@ -1,28 +1,28 @@
 {
-  "$schema": "../_schema.json",
-  "app_id": "steamvr",
-  "name": "SteamVR",
-  "winget_id": "Valve.SteamVR",
-  "steam_id": 250820,
-  "website": "https://store.steampowered.com/app/250820/SteamVR/",
-  "install": {
-    "method": "steam",
-    "download_url": null,
-    "default_target_directory": null,
-    "guide_file": null,
-    "post_install_script": null,
-    "instructions": []
-  },
-  "directories": [
-    {
-      "id": "configs",
-      "description": "SteamVR user configs, tracker bindings, and workshop assets",
-      "default_path": "%DOCUMENTS%\\steamvr",
-      "category": "configs",
-      "needs_mapping": true,
-      "safe_for_stream": true,
-      "recommended_storage": "streaming",
-      "notes": "SteamVR user configuration and controller bindings."
-    }
-  ]
+    "$schema":  "../_schema.json",
+    "app_id":  "steamvr",
+    "name":  "SteamVR",
+    "website":  "https://store.steampowered.com/app/250820/SteamVR/",
+    "install":  {
+                    "method":  "steam",
+                    "winget_id":  "Valve.SteamVR",
+                    "steam_id":  250820,
+                    "download_url":  null,
+                    "default_target_directory":  null,
+                    "guide_file":  null,
+                    "post_install_script":  null,
+                    "instructions":  []
+                },
+    "directories":  [
+                        {
+                            "id":  "configs",
+                            "description":  "SteamVR user configs, tracker bindings, and workshop assets",
+                            "default_path":  "%DOCUMENTS%\\steamvr",
+                            "category":  "configs",
+                            "needs_mapping":  true,
+                            "safe_for_stream":  true,
+                            "recommended_storage":  "streaming",
+                            "notes":  "SteamVR user configuration and controller bindings."
+                        }
+                    ]
 }

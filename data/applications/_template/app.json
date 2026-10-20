@@ -1,28 +1,28 @@
 {
-  "$schema": "../_schema.json",
-  "app_id": "example_app",
-  "name": "Example Application Name",
-  "winget_id": "Publisher.ExampleApp",
-  "steam_id": null,
-  "website": "https://example.com",
-  "install": {
-    "method": "winget",
-    "download_url": null,
-    "default_target_directory": null,
-    "guide_file": null,
-    "post_install_script": null,
-    "instructions": []
-  },
-  "directories": [
-    {
-      "id": "config",
-      "description": "User configuration, preferences, and state",
-      "default_path": "%APPDATA%\\ExampleApp",
-      "category": "configs",
-      "needs_mapping": true,
-      "safe_for_stream": true,
-      "recommended_storage": "streaming",
-      "notes": "Explain why this storage recommendation is made."
-    }
-  ]
+    "$schema":  "../_schema.json",
+    "app_id":  "example_app",
+    "name":  "Example Application Name",
+    "website":  "https://example.com",
+    "install":  {
+                    "method":  "winget",
+                    "winget_id":  "Publisher.ExampleApp",
+                    "steam_id":  null,
+                    "download_url":  null,
+                    "default_target_directory":  null,
+                    "guide_file":  null,
+                    "post_install_script":  null,
+                    "instructions":  []
+                },
+    "directories":  [
+                        {
+                            "id":  "config",
+                            "description":  "User configuration, preferences, and state",
+                            "default_path":  "%APPDATA%\\ExampleApp",
+                            "category":  "configs",
+                            "needs_mapping":  true,
+                            "safe_for_stream":  true,
+                            "recommended_storage":  "streaming",
+                            "notes":  "Explain why this storage recommendation is made."
+                        }
+                    ]
 }

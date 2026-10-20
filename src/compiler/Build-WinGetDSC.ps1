@@ -66,8 +66,8 @@ function Build-WinGetDSCManifest {
                 if ($CatalogApp) {
                     $AppName = if ($CatalogApp.name) { $CatalogApp.name } else { $AppId }
                     $Method = if ($CatalogApp.install -and $CatalogApp.install.method) { $CatalogApp.install.method } else { "winget" }
-                    if ($Method -eq "winget" -and $CatalogApp.winget_id) {
-                        $PackageId = [string]$CatalogApp.winget_id
+                    if ($Method -eq "winget" -and $CatalogApp.install -and $CatalogApp.install.winget_id) {
+                        $PackageId = [string]$CatalogApp.install.winget_id
                     }
                 }
             }

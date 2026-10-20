@@ -1,0 +1,28 @@
+{
+    "$schema":  "../_schema.json",
+    "app_id":  "brave",
+    "name":  "Brave Browser",
+    "website":  "https://brave.com/",
+    "install":  {
+                    "method":  "winget",
+                    "winget_id":  "Brave.Brave",
+                    "steam_id":  null,
+                    "download_url":  null,
+                    "default_target_directory":  null,
+                    "guide_file":  null,
+                    "post_install_script":  null,
+                    "instructions":  []
+                },
+    "directories":  [
+                        {
+                            "id":  "user_data",
+                            "description":  "Brave browser user profile, extensions, and local web state",
+                            "default_path":  "%LOCALAPPDATA%\\BraveSoftware\\Brave-Browser\\User Data",
+                            "category":  "configs",
+                            "needs_mapping":  false,
+                            "safe_for_stream":  false,
+                            "recommended_storage":  "sync",
+                            "notes":  "Chromium SQLite databases (History, Cookies, Web Data) use WAL locking mode, which causes corruption or lock timeouts on cloud streaming virtual filesystems. Direct filesystem streaming is unsafe. Use Brave Sync Chain natively, or map to a local sync folder if offline state preservation is required."
+                        }
+                    ]
+}

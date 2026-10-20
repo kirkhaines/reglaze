@@ -6,6 +6,8 @@
   "properties": {
     "version": { "type": "string" },
     "profile": { "type": "string" },
+    "generation_date": { "type": "string" },
+    "generated_at": { "type": "string" },
     "system": {
       "type": "object",
       "required": ["computer_name", "users"],

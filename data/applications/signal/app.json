@@ -1,28 +1,28 @@
 {
-  "$schema": "../_schema.json",
-  "app_id": "signal",
-  "name": "Signal",
-  "winget_id": "OpenWhisperSystems.Signal",
-  "steam_id": null,
-  "website": "https://signal.org",
-  "install": {
-    "method": "winget",
-    "download_url": null,
-    "default_target_directory": "%LOCALAPPDATA%\\Programs\\signal-desktop",
-    "guide_file": null,
-    "post_install_script": null,
-    "instructions": []
-  },
-  "directories": [
-    {
-      "id": "app_data",
-      "description": "Signal Desktop SQLite message database, keys, and attachments",
-      "default_path": "%APPDATA%\\Signal",
-      "category": "configs",
-      "needs_mapping": false,
-      "safe_for_stream": false,
-      "recommended_storage": "sync",
-      "notes": "Signal database is tied to Windows DPAPI encryption keys specific to the machine. Live streaming or roaming is not supported by Signal. Back up locally or re-link desktop client on new installations."
-    }
-  ]
+    "$schema":  "../_schema.json",
+    "app_id":  "signal",
+    "name":  "Signal",
+    "website":  "https://signal.org",
+    "install":  {
+                    "method":  "winget",
+                    "winget_id":  "OpenWhisperSystems.Signal",
+                    "steam_id":  null,
+                    "download_url":  null,
+                    "default_target_directory":  "%LOCALAPPDATA%\\Programs\\signal-desktop",
+                    "guide_file":  null,
+                    "post_install_script":  null,
+                    "instructions":  []
+                },
+    "directories":  [
+                        {
+                            "id":  "app_data",
+                            "description":  "Signal Desktop SQLite message database, keys, and attachments",
+                            "default_path":  "%APPDATA%\\Signal",
+                            "category":  "configs",
+                            "needs_mapping":  false,
+                            "safe_for_stream":  false,
+                            "recommended_storage":  "sync",
+                            "notes":  "Signal database is tied to Windows DPAPI encryption keys specific to the machine. Live streaming or roaming is not supported by Signal. Back up locally or re-link desktop client on new installations."
+                        }
+                    ]
 }

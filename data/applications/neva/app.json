@@ -1,19 +1,27 @@
 {
-  "app_id": "neva",
-  "name": "Neva",
-  "winget_id": null,
-  "steam_id": 2420660,
-  "website": "https://www.nomada.studio",
-  "directories": [
-    {
-      "id": "game_saves",
-      "description": "Game saves, chapter progress, and settings",
-      "default_path": "%LOCALAPPDATA%\\Neva",
-      "category": "saves",
-      "needs_mapping": true,
-      "safe_for_stream": true,
-      "recommended_storage": "streaming",
-      "notes": "Standard JSON/binary local game progress and settings."
-    }
-  ]
+    "app_id":  "neva",
+    "name":  "Neva",
+    "website":  "https://www.nomada.studio",
+    "install":  {
+                    "method":  "steam",
+                    "winget_id":  null,
+                    "steam_id":  2420660,
+                    "download_url":  null,
+                    "default_target_directory":  null,
+                    "guide_file":  null,
+                    "post_install_script":  null,
+                    "instructions":  []
+                },
+    "directories":  [
+                        {
+                            "id":  "game_saves",
+                            "description":  "Game saves, chapter progress, and settings",
+                            "default_path":  "%LOCALAPPDATA%\\Neva",
+                            "category":  "saves",
+                            "needs_mapping":  true,
+                            "safe_for_stream":  true,
+                            "recommended_storage":  "streaming",
+                            "notes":  "Standard JSON/binary local game progress and settings."
+                        }
+                    ]
 }

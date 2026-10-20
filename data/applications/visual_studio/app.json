@@ -1,0 +1,38 @@
+{
+    "$schema":  "../_schema.json",
+    "app_id":  "visual_studio",
+    "name":  "Visual Studio 2022 Community",
+    "website":  "https://visualstudio.microsoft.com/",
+    "install":  {
+                    "method":  "winget",
+                    "winget_id":  "Microsoft.VisualStudio.2022.Community",
+                    "steam_id":  null,
+                    "download_url":  null,
+                    "default_target_directory":  null,
+                    "guide_file":  null,
+                    "post_install_script":  null,
+                    "instructions":  []
+                },
+    "directories":  [
+                        {
+                            "id":  "settings",
+                            "description":  "Visual Studio custom IDE settings, snippets, and environment configurations",
+                            "default_path":  "%APPDATA%\\Microsoft\\VisualStudio",
+                            "category":  "configs",
+                            "needs_mapping":  false,
+                            "safe_for_stream":  true,
+                            "recommended_storage":  "streaming",
+                            "notes":  "IDE environment preferences and profile settings. Safe for streaming or sync."
+                        },
+                        {
+                            "id":  "templates",
+                            "description":  "Custom project and item templates",
+                            "default_path":  "%DOCUMENTS%\\Visual Studio 2022\\Templates",
+                            "category":  "configs",
+                            "needs_mapping":  false,
+                            "safe_for_stream":  true,
+                            "recommended_storage":  "streaming",
+                            "notes":  "User-defined project and code item templates."
+                        }
+                    ]
+}

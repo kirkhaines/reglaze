@@ -1,19 +1,27 @@
 {
-  "app_id": "git",
-  "name": "Git for Windows",
-  "winget_id": "Git.Git",
-  "steam_id": null,
-  "website": "https://git-scm.com",
-  "directories": [
-    {
-      "id": "gitconfig",
-      "description": "Global user git configuration and credentials",
-      "default_path": "%USERPROFILE%\\.gitconfig",
-      "category": "configs",
-      "needs_mapping": true,
-      "safe_for_stream": true,
-      "recommended_storage": "streaming",
-      "notes": "Global git settings; safe for streaming or chezmoi management."
-    }
-  ]
+    "app_id":  "git",
+    "name":  "Git for Windows",
+    "website":  "https://git-scm.com",
+    "install":  {
+                    "method":  "winget",
+                    "winget_id":  "Git.Git",
+                    "steam_id":  null,
+                    "download_url":  null,
+                    "default_target_directory":  null,
+                    "guide_file":  null,
+                    "post_install_script":  null,
+                    "instructions":  []
+                },
+    "directories":  [
+                        {
+                            "id":  "gitconfig",
+                            "description":  "Global user git configuration and credentials",
+                            "default_path":  "%USERPROFILE%\\.gitconfig",
+                            "category":  "configs",
+                            "needs_mapping":  true,
+                            "safe_for_stream":  true,
+                            "recommended_storage":  "streaming",
+                            "notes":  "Global git settings; safe for streaming or chezmoi management."
+                        }
+                    ]
 }

@@ -1,28 +1,28 @@
 {
-  "$schema": "../_schema.json",
-  "app_id": "bricklink_studio",
-  "name": "BrickLink Studio",
-  "winget_id": "BrickLink.Studio",
-  "steam_id": null,
-  "website": "https://www.bricklink.com/v3/studio/download.page",
-  "install": {
-    "method": "winget",
-    "download_url": null,
-    "default_target_directory": "%ProgramFiles%\\Studio 2.0",
-    "guide_file": null,
-    "post_install_script": null,
-    "instructions": []
-  },
-  "directories": [
-    {
-      "id": "custom_parts",
-      "description": "Studio 2.0 custom parts, user palette colors, and model templates",
-      "default_path": "%LOCALAPPDATA%\\Studio 2.0",
-      "category": "library",
-      "needs_mapping": true,
-      "safe_for_stream": true,
-      "recommended_storage": "streaming",
-      "notes": "Custom LDraw parts and color definitions; safe for streaming cloud mount."
-    }
-  ]
+    "$schema":  "../_schema.json",
+    "app_id":  "bricklink_studio",
+    "name":  "BrickLink Studio",
+    "website":  "https://www.bricklink.com/v3/studio/download.page",
+    "install":  {
+                    "method":  "winget",
+                    "winget_id":  "BrickLink.Studio",
+                    "steam_id":  null,
+                    "download_url":  null,
+                    "default_target_directory":  "%ProgramFiles%\\Studio 2.0",
+                    "guide_file":  null,
+                    "post_install_script":  null,
+                    "instructions":  []
+                },
+    "directories":  [
+                        {
+                            "id":  "custom_parts",
+                            "description":  "Studio 2.0 custom parts, user palette colors, and model templates",
+                            "default_path":  "%LOCALAPPDATA%\\Studio 2.0",
+                            "category":  "library",
+                            "needs_mapping":  true,
+                            "safe_for_stream":  true,
+                            "recommended_storage":  "streaming",
+                            "notes":  "Custom LDraw parts and color definitions; safe for streaming cloud mount."
+                        }
+                    ]
 }

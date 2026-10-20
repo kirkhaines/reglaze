@@ -1,0 +1,38 @@
+{
+    "$schema":  "../_schema.json",
+    "app_id":  "gimp",
+    "name":  "GIMP",
+    "website":  "https://www.gimp.org/",
+    "install":  {
+                    "method":  "winget",
+                    "winget_id":  "GIMP.GIMP",
+                    "steam_id":  null,
+                    "download_url":  null,
+                    "default_target_directory":  null,
+                    "guide_file":  null,
+                    "post_install_script":  null,
+                    "instructions":  []
+                },
+    "directories":  [
+                        {
+                            "id":  "config_2_10",
+                            "description":  "GIMP 2.10 brushes, curves, gradients, scripts, and gimprc",
+                            "default_path":  "%APPDATA%\\GIMP\\2.10",
+                            "category":  "configs",
+                            "needs_mapping":  true,
+                            "safe_for_stream":  true,
+                            "recommended_storage":  "streaming",
+                            "notes":  "Custom user brushes, palettes, plug-in scripts, tool presets, and user interface preferences. Static files safe for streaming."
+                        },
+                        {
+                            "id":  "config_3_0",
+                            "description":  "GIMP 3.x user preferences, brush presets, and filters",
+                            "default_path":  "%APPDATA%\\GIMP\\3.0",
+                            "category":  "configs",
+                            "needs_mapping":  true,
+                            "safe_for_stream":  true,
+                            "recommended_storage":  "streaming",
+                            "notes":  "GIMP 3.x profile, plug-in assets, and user settings."
+                        }
+                    ]
+}

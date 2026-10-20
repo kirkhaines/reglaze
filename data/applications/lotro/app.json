@@ -1,19 +1,27 @@
 {
-  "app_id": "lotro",
-  "name": "The Lord of the Rings Online",
-  "winget_id": "StandingStoneGames.TheLordoftheRingsOnline",
-  "steam_id": 212500,
-  "website": "https://www.lotro.com",
-  "directories": [
-    {
-      "id": "user_configs",
-      "description": "User preferences, UI layouts, plugins, and screenshots",
-      "default_path": "%USERPROFILE%\\Documents\\The Lord of the Rings Online",
-      "category": "configs",
-      "needs_mapping": true,
-      "safe_for_stream": true,
-      "recommended_storage": "streaming",
-      "notes": "Contains UserPreferences.ini, keybindings, custom UI skins, and ABC music files."
-    }
-  ]
+    "app_id":  "lotro",
+    "name":  "The Lord of the Rings Online",
+    "website":  "https://www.lotro.com",
+    "install":  {
+                    "method":  "winget",
+                    "winget_id":  "StandingStoneGames.TheLordoftheRingsOnline",
+                    "steam_id":  212500,
+                    "download_url":  null,
+                    "default_target_directory":  null,
+                    "guide_file":  null,
+                    "post_install_script":  null,
+                    "instructions":  []
+                },
+    "directories":  [
+                        {
+                            "id":  "user_configs",
+                            "description":  "User preferences, UI layouts, plugins, and screenshots",
+                            "default_path":  "%USERPROFILE%\\Documents\\The Lord of the Rings Online",
+                            "category":  "configs",
+                            "needs_mapping":  true,
+                            "safe_for_stream":  true,
+                            "recommended_storage":  "streaming",
+                            "notes":  "Contains UserPreferences.ini, keybindings, custom UI skins, and ABC music files."
+                        }
+                    ]
 }

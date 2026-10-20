@@ -1,5 +1,6 @@
 version: "1.0"
 profile: "developer-creative-workstation"
+generation_date: "2026-10-20"
 
 system:
   computer_name: "WORKSTATION-01"

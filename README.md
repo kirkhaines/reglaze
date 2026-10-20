@@ -305,8 +305,8 @@ dev_repos:
 
 Applications store critical data in disparate, undocumented local folders. `reglaze` ships with a curated reference catalog specifying known software profiles:
 
-* **Identity & Discoverability:** Captures the unique `app_id` (e.g., `beat_saber`, `outfox`, `satisfactory`, `neva`, `bloodstained`, `lotro`, `steam`, `adobe_lightroom`, `vscode`, `git`, `docker_desktop`), `name`, `winget_id`, Steam App ID (`steam_id`), and official `website`.
-* **Generic Installation Guidance:** For applications requiring human intervention (such as `outfox`), `data/applications.json` houses machine-independent installation metadata (`method: "manual"`, `download_url`, `default_target_directory`, and step-by-step instructions). User blueprints only specify machine-specific parameters (`version`, custom path, `post_install_script`).
+* **Identity & Discoverability:** Captures the unique `app_id` (e.g., `beat_saber`, `outfox`, `satisfactory`, `neva`, `bloodstained`, `lotro`, `steam`, `adobe_lightroom`, `vscode`, `git`, `docker_desktop`), `name`, official `website`, and installation metadata (`method`, WinGet Package ID `winget_id`, Steam App ID `steam_id`).
+* **Generic Installation Guidance:** For applications requiring human intervention (such as `outfox`), `data/applications/` houses machine-independent installation metadata (`method: "manual"`, `download_url`, `default_target_directory`, and step-by-step instructions). User blueprints only specify machine-specific parameters (`version`, custom path, `post_install_script`).
 * **Notable Directories:** Lists specific app paths (`configs`, `saves`, `songs`, `catalogs`, `code`) with default directory locations and variable placeholders (`%GAMES_DIR%`, `%STEAM_LIBRARY%`).
 * **Storage Properties & Safety Rules:**
   * `needs_mapping`: Indicates whether unlinked data is lost during an OS wipe.

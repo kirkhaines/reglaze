@@ -1,31 +1,31 @@
 {
-  "$schema": "../_schema.json",
-  "app_id": "lotro_plugin_compendium",
-  "name": "LOTRO Plugin Compendium",
-  "winget_id": null,
-  "steam_id": null,
-  "website": "https://www.lotrointerface.com/downloads/info491-LOTROPluginCompendium.html",
-  "install": {
-    "method": "manual",
-    "download_url": "https://www.lotrointerface.com/downloads/info491-LOTROPluginCompendium.html",
-    "default_target_directory": null,
-    "guide_file": null,
-    "post_install_script": null,
-    "instructions": [
-      "Download LOTRO Plugin Compendium installer from lotrointerface.com.",
-      "Install and select your LOTRO plugins directory (%DOCUMENTS%\\The Lord of the Rings Online\\Plugins)."
-    ]
-  },
-  "directories": [
-    {
-      "id": "plugins",
-      "description": "LOTRO UI plugins, addons, and configuration files",
-      "default_path": "%DOCUMENTS%\\The Lord of the Rings Online\\Plugins",
-      "category": "configs",
-      "needs_mapping": true,
-      "safe_for_stream": true,
-      "recommended_storage": "streaming",
-      "notes": "Lua plugin scripts and skin configurations for The Lord of the Rings Online."
-    }
-  ]
+    "$schema":  "../_schema.json",
+    "app_id":  "lotro_plugin_compendium",
+    "name":  "LOTRO Plugin Compendium",
+    "website":  "https://www.lotrointerface.com/downloads/info491-LOTROPluginCompendium.html",
+    "install":  {
+                    "method":  "manual",
+                    "winget_id":  null,
+                    "steam_id":  null,
+                    "download_url":  "https://www.lotrointerface.com/downloads/info491-LOTROPluginCompendium.html",
+                    "default_target_directory":  null,
+                    "guide_file":  null,
+                    "post_install_script":  null,
+                    "instructions":  [
+                                         "Download LOTRO Plugin Compendium installer from lotrointerface.com.",
+                                         "Install and select your LOTRO plugins directory (%DOCUMENTS%\\The Lord of the Rings Online\\Plugins)."
+                                     ]
+                },
+    "directories":  [
+                        {
+                            "id":  "plugins",
+                            "description":  "LOTRO UI plugins, addons, and configuration files",
+                            "default_path":  "%DOCUMENTS%\\The Lord of the Rings Online\\Plugins",
+                            "category":  "configs",
+                            "needs_mapping":  true,
+                            "safe_for_stream":  true,
+                            "recommended_storage":  "streaming",
+                            "notes":  "Lua plugin scripts and skin configurations for The Lord of the Rings Online."
+                        }
+                    ]
 }

@@ -1,0 +1,28 @@
+{
+    "$schema":  "../_schema.json",
+    "app_id":  "firefox",
+    "name":  "Mozilla Firefox",
+    "website":  "https://www.mozilla.org/firefox/",
+    "install":  {
+                    "method":  "winget",
+                    "winget_id":  "Mozilla.Firefox",
+                    "steam_id":  null,
+                    "download_url":  null,
+                    "default_target_directory":  null,
+                    "guide_file":  null,
+                    "post_install_script":  null,
+                    "instructions":  []
+                },
+    "directories":  [
+                        {
+                            "id":  "profiles",
+                            "description":  "Firefox user profiles, bookmarks, credentials, and session state",
+                            "default_path":  "%APPDATA%\\Mozilla\\Firefox\\Profiles",
+                            "category":  "configs",
+                            "needs_mapping":  false,
+                            "safe_for_stream":  false,
+                            "recommended_storage":  "sync",
+                            "notes":  "Firefox profile databases (places.sqlite, formhistory.sqlite, cookies.sqlite) maintain active POSIX/Windows file locks and WAL journals that will crash or fail to sync on virtual cloud streaming mounts. Use Firefox Sync (Mozilla Account) for cross-machine sync, or map to a local sync folder."
+                        }
+                    ]
+}

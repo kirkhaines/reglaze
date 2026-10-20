@@ -116,29 +116,61 @@ $AuditJsonPath = Join-Path $TargetDir "audit-reference.json"
 $AuditReference | ConvertTo-Json -Depth 6 | Set-Content -Path $AuditJsonPath -Encoding UTF8
 Write-ReglazeSuccess "Wrote audit profile: $AuditJsonPath"
 
-# 9. Scaffold Initial reglaze.yaml (if not present or if -Force)
+# 9. Archive Existing reglaze.yaml (if present) and Scaffold Fresh Blueprint
 $BlueprintPath = Join-Path $TargetDir "reglaze.yaml"
-if (-not (Test-Path $BlueprintPath) -or $Force) {
-    Write-ReglazeStep "Scaffolding Personalized reglaze.yaml Blueprint..."
-
-    # Identify Target OS Disk (disk hosting C:)
-    $AllDisks = $HardwareData.storage_topology.disks
-    $OsDisk = $AllDisks | Where-Object { 
-        $_.partitions | Where-Object { $_.mount_point -eq "C:" }
-    } | Select-Object -First 1
-
-    if (-not $OsDisk -and $AllDisks.Count -gt 0) {
-        $OsDisk = $AllDisks[0]
+if (Test-Path $BlueprintPath) {
+    $ExistingContent = Get-Content -Raw -Path $BlueprintPath -ErrorAction SilentlyContinue
+    $GenDateStr = $null
+    if ($ExistingContent -and $ExistingContent -match '(?m)^\s*(?:generation_date|generated_at):\s*["'']?([^"''\r\n]+)["'']?') {
+        $RawVal = $Matches[1].Trim()
+        $ParsedDate = [DateTime]::MinValue
+        if ([DateTime]::TryParse($RawVal, [ref]$ParsedDate)) {
+            $GenDateStr = $ParsedDate.ToString("yyyy-MM-dd")
+        } else {
+            $GenDateStr = ($RawVal -replace '[:\\/*?"<>|]', '-')
+        }
+    }
+    if (-not $GenDateStr) {
+        $GenDateStr = (Get-Item $BlueprintPath).LastWriteTime.ToString("yyyy-MM-dd")
     }
 
-    $PreservedDisks = @($AllDisks | Where-Object { $_.disk_number -ne $OsDisk.disk_number })
+    $ArchiveName = "reglaze.$GenDateStr.yaml"
+    $ArchivePath = Join-Path $TargetDir $ArchiveName
+    if (Test-Path $ArchivePath) {
+        $Idx = 1
+        while (Test-Path (Join-Path $TargetDir "reglaze.$GenDateStr.$Idx.yaml")) {
+            $Idx++
+        }
+        $ArchiveName = "reglaze.$GenDateStr.$Idx.yaml"
+        $ArchivePath = Join-Path $TargetDir $ArchiveName
+    }
 
-    # Build Scaffolded Blueprint Content
-    $YamlLines = @(
-        'version: "1.0"',
-        'profile: "workstation"',
-        '',
-        'system:',
+    Rename-Item -Path $BlueprintPath -NewName $ArchiveName -Force
+    Write-ReglazeInfo "Archived existing blueprint to $ArchiveName"
+}
+
+Write-ReglazeStep "Scaffolding Personalized reglaze.yaml Blueprint..."
+
+# Identify Target OS Disk (disk hosting C:)
+$AllDisks = $HardwareData.storage_topology.disks
+$OsDisk = $AllDisks | Where-Object { 
+    $_.partitions | Where-Object { $_.mount_point -eq "C:" }
+} | Select-Object -First 1
+
+if (-not $OsDisk -and $AllDisks.Count -gt 0) {
+    $OsDisk = $AllDisks[0]
+}
+
+$PreservedDisks = @($AllDisks | Where-Object { $_.disk_number -ne $OsDisk.disk_number })
+
+# Build Scaffolded Blueprint Content
+$CurrentDateStr = (Get-Date).ToString("yyyy-MM-dd")
+$YamlLines = @(
+    'version: "1.0"',
+    'profile: "workstation"',
+    "generation_date: `"$CurrentDateStr`"",
+    '',
+    'system:',
         "  computer_name: `"$ComputerName`"",
         "  os_edition: `"$($LicensingData.os_edition)`"",
         "  timezone: `"$([System.TimeZoneInfo]::Local.Id)`"",
@@ -321,9 +353,6 @@ if (-not (Test-Path $BlueprintPath) -or $Force) {
 
     $YamlLines | Set-Content -Path $BlueprintPath -Encoding UTF8
     Write-ReglazeSuccess "Scaffolded starter blueprint: $BlueprintPath"
-} else {
-    Write-ReglazeInfo "Existing blueprint found at $BlueprintPath (preserved)."
-}
 
 Write-Host ""
 Write-ReglazeSuccess "Pre-flight audit complete! You can now review and customize your blueprint."

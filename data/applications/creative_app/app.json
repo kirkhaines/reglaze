@@ -1,28 +1,28 @@
 {
-  "$schema": "../_schema.json",
-  "app_id": "creative_app",
-  "name": "Creative App",
-  "winget_id": "CreativeTechnology.CreativeApp",
-  "steam_id": null,
-  "website": "https://us.creative.com",
-  "install": {
-    "method": "winget",
-    "download_url": null,
-    "default_target_directory": null,
-    "guide_file": null,
-    "post_install_script": null,
-    "instructions": []
-  },
-  "directories": [
-    {
-      "id": "audio_profiles",
-      "description": "Creative Sound Blaster audio profiles, equalizer curves, and acoustic presets",
-      "default_path": "%LOCALAPPDATA%\\Creative",
-      "category": "configs",
-      "needs_mapping": true,
-      "safe_for_stream": true,
-      "recommended_storage": "streaming",
-      "notes": "Sound Blaster sound card user settings and equalizer tuning profiles."
-    }
-  ]
+    "$schema":  "../_schema.json",
+    "app_id":  "creative_app",
+    "name":  "Creative App",
+    "website":  "https://us.creative.com",
+    "install":  {
+                    "method":  "winget",
+                    "winget_id":  "CreativeTechnology.CreativeApp",
+                    "steam_id":  null,
+                    "download_url":  null,
+                    "default_target_directory":  null,
+                    "guide_file":  null,
+                    "post_install_script":  null,
+                    "instructions":  []
+                },
+    "directories":  [
+                        {
+                            "id":  "audio_profiles",
+                            "description":  "Creative Sound Blaster audio profiles, equalizer curves, and acoustic presets",
+                            "default_path":  "%LOCALAPPDATA%\\Creative",
+                            "category":  "configs",
+                            "needs_mapping":  true,
+                            "safe_for_stream":  true,
+                            "recommended_storage":  "streaming",
+                            "notes":  "Sound Blaster sound card user settings and equalizer tuning profiles."
+                        }
+                    ]
 }
