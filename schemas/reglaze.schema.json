@@ -62,7 +62,7 @@
           "type": "array",
           "items": {
             "type": "object",
-            "required": ["drive_variable"],
+            "required": ["disk_id"],
             "properties": {
               "disk_id": { "type": "integer" },
               "serial_number": { "type": "string" },

@@ -1,0 +1,28 @@
+{
+  "$schema": "../_schema.json",
+  "app_id": "wwise_launcher",
+  "name": "Wwise Launcher",
+  "winget_id": "Audiokinetic.WwiseLauncher",
+  "steam_id": null,
+  "website": "https://www.audiokinetic.com/en/products/wwise",
+  "install": {
+    "method": "winget",
+    "download_url": null,
+    "default_target_directory": null,
+    "guide_file": null,
+    "post_install_script": null,
+    "instructions": []
+  },
+  "directories": [
+    {
+      "id": "launcher_config",
+      "description": "Audiokinetic Wwise Launcher local configuration and project cache",
+      "default_path": "%APPDATA%\\Audiokinetic",
+      "category": "configs",
+      "needs_mapping": true,
+      "safe_for_stream": true,
+      "recommended_storage": "streaming",
+      "notes": "Audiokinetic project registrations and launcher session state."
+    }
+  ]
+}

@@ -1,0 +1,17 @@
+{
+  "$schema": "../_schema.json",
+  "app_id": "usbipd",
+  "name": "USBIPD-WIN",
+  "winget_id": "dorssel.usbipd-win",
+  "steam_id": null,
+  "website": "https://github.com/dorssel/usbipd-win",
+  "install": {
+    "method": "winget",
+    "download_url": null,
+    "default_target_directory": "%ProgramFiles%\\usbipd-win",
+    "guide_file": null,
+    "post_install_script": null,
+    "instructions": []
+  },
+  "directories": []
+}

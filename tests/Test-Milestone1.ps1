@@ -22,6 +22,7 @@ $RepoRoot = $Script:RepoRoot
 . (Join-Path $RepoRoot "src\audit\Audit-BitLocker.ps1")
 . (Join-Path $RepoRoot "src\audit\Audit-Apps.ps1")
 . (Join-Path $RepoRoot "src\audit\Audit-Junctions.ps1")
+. (Join-Path $RepoRoot "src\audit\Audit-StorageProviders.ps1")
 
 Write-ReglazeBanner "REGLAZE MILESTONE 1 VERIFICATION SUITE"
 
@@ -100,6 +101,18 @@ Assert-Test "Get-LicensingAudit extracts OS edition and license channel" {
     return ($Lic.os_edition -ne $null -and $Lic.license_channel -ne $null)
 }
 
+Assert-Test "Get-UserIdentityAudit discovers primary user email and account type" {
+    $User = Get-UserIdentityAudit
+    Write-ReglazeInfo "Discovered email: $($User.email) ($($User.account_type))"
+    return ($User.username -ne $null -and $User.email -ne $null -and $User.email.Contains("@"))
+}
+
+Assert-Test "Get-StorageProvidersAudit discovers cloud streaming mount and sync roots" {
+    $Storage = Get-StorageProvidersAudit
+    Write-ReglazeInfo "Streaming Mount: $($Storage.streaming.mount_point), Synced Roots: $($Storage.sync_directories.Count)"
+    return ($Storage.streaming.cloud_provider -ne $null -and $Storage.streaming.mount_point -ne $null)
+}
+
 # Test 5: BitLocker Audit Module
 Write-ReglazeStep "Testing BitLocker Discovery..."
 Assert-Test "Get-BitLockerAudit executes gracefully without unhandled exceptions" {
@@ -153,8 +166,11 @@ Assert-Test "Invoke-Audit.ps1 emits audit-reference.json and scaffolds reglaze.y
     $YamlContent = Get-Content -Raw $Blueprint
     $HasOsDisk = ($YamlContent -match "target_os_disk:")
     $HasUsers = ($YamlContent -match "local_admin:")
+    # Ensure at most one DATA_DRIVE is assigned in preserved_disks
+    $DataDriveMatches = [regex]::Matches($YamlContent, 'drive_variable:\s*"DATA_DRIVE"')
+    $SingleDataDrive = ($DataDriveMatches.Count -le 1)
 
-    return ($HasMetadata -and $HasDisks -and $HasLicensing -and $HasOsDisk -and $HasUsers)
+    return ($HasMetadata -and $HasDisks -and $HasLicensing -and $HasOsDisk -and $HasUsers -and $SingleDataDrive)
 }
 
 # Clean up scratch test output

@@ -114,6 +114,12 @@
     },
     "detected_windows_settings": {
       "type": "object"
+    },
+    "storage_providers": {
+      "type": "object"
+    },
+    "user_identity": {
+      "type": "object"
     }
   }
 }
