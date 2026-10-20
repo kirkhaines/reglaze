@@ -798,15 +798,15 @@ Each entry represents a certified application profile:
 ## 9. Implementation Roadmap & Milestones
 
 ### Milestone 1: CLI Foundation & Pre-Flight Discovery (`reglaze audit`)
-- [ ] Implement `src/audit/` PowerShell modules for hardware, disk, licensing, BitLocker, and junction discovery.
-- [ ] Implement schema validation for `audit-reference.json` and `reglaze.yaml`.
-- [ ] Build automated unit tests verifying hardware signature generation across virtual and physical disks.
+- [x] Implement `src/audit/` PowerShell modules for hardware, disk, licensing, BitLocker, and junction discovery.
+- [x] Implement schema validation for `audit-reference.json` and `reglaze.yaml`.
+- [x] Build automated unit tests verifying hardware signature generation across virtual and physical disks.
 
 ### Milestone 2: Compiler & Artifact Generator (`reglaze compile`)
-- [ ] Implement Jinja2 / template rendering engine for `autounattend.xml` and `configuration.dsc.yaml`.
-- [ ] Build the dynamic WinPE disk matching script.
-- [ ] Implement validation engine enforcing `data/applications.json` safety rules (`safe_for_stream: false` checks).
-- [ ] Implement variable expansion engine (`%OS_DRIVE%`, `%DATA_DRIVE%`, `%STREAM%`, `%SYNC_<ID>%`).
+- [x] Implement template rendering engines for `autounattend.xml` and `configuration.dsc.yaml`.
+- [x] Build the dynamic WinPE disk matching script (`DiskMatch.ps1`).
+- [x] Implement validation engine enforcing application catalog safety rules (`safe_for_stream: false` checks).
+- [x] Implement variable expansion engine (`%OS_DRIVE%`, `%DATA_DRIVE%`, `%STREAM%`, `%SYNC_<ID>%`).
 
 ### Milestone 3: Linking Engine & Machine Bootstrap (`reglaze bootstrap`)
 - [ ] Implement `src/linking/` directory junction management with collision detection and backup logic.
