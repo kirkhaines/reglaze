@@ -67,27 +67,53 @@ function Get-BitLockerAudit {
         $AdminScript = Join-Path $RepoRoot "src\audit\Invoke-AdminAudit.ps1"
         $TempFile = Join-Path $env:TEMP "reglaze_admin_audit_$([Guid]::NewGuid().ToString('N')).json"
 
-        try {
-            Write-Host "  [i] Requesting Administrator elevation via UAC..." -ForegroundColor Cyan
-            $Proc = Start-Process -FilePath "powershell.exe" `
-                -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$AdminScript`" -OutputFile `"$TempFile`"" `
-                -Verb RunAs `
-                -Wait `
-                -PassThru `
-                -WindowStyle Hidden
+        $Candidates = @()
+        if ($PSVersionTable.PSEdition -eq 'Core') {
+            $Candidates += "pwsh.exe"
+            $Candidates += "pwsh"
+            $Candidates += "powershell.exe"
+        } else {
+            $Candidates += "powershell.exe"
+            $Candidates += "pwsh.exe"
+        }
 
-            if (Test-Path $TempFile) {
-                $AdminData = Get-Content -Raw -Path $TempFile -Encoding UTF8 | ConvertFrom-Json
-                Remove-Item -Path $TempFile -Force -ErrorAction SilentlyContinue
-                if ($AdminData.bitlocker_volumes) {
-                    $BitLockerVolumes = @($AdminData.bitlocker_volumes)
+        $Success = $false
+        $LastError = $null
+
+        Write-Host "  [i] Requesting Administrator elevation via UAC..." -ForegroundColor Cyan
+
+        foreach ($Exe in $Candidates) {
+            if (-not (Get-Command $Exe -ErrorAction SilentlyContinue)) { continue }
+
+            try {
+                $Proc = Start-Process -FilePath $Exe `
+                    -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$AdminScript`" -OutputFile `"$TempFile`"" `
+                    -Verb RunAs `
+                    -Wait `
+                    -PassThru `
+                    -WindowStyle Minimized `
+                    -ErrorAction Stop
+
+                if (Test-Path $TempFile) {
+                    $Success = $true
+                    break
                 }
-                return $BitLockerVolumes
-            } else {
-                Write-Warning "Elevated audit completed without generating output file (UAC may have been declined)."
+            } catch {
+                $LastError = $_.Exception.Message
             }
-        } catch {
-            Write-Warning "Administrative elevation was declined or canceled: $($_.Exception.Message)"
+        }
+
+        if ($Success -and (Test-Path $TempFile)) {
+            $AdminData = Get-Content -Raw -Path $TempFile -Encoding UTF8 | ConvertFrom-Json
+            Remove-Item -Path $TempFile -Force -ErrorAction SilentlyContinue
+            if ($AdminData.bitlocker_volumes) {
+                $BitLockerVolumes = @($AdminData.bitlocker_volumes)
+            }
+            return $BitLockerVolumes
+        } elseif ($LastError) {
+            Write-Warning "Administrative elevation failed or was canceled: $LastError"
+        } else {
+            Write-Warning "Elevated audit completed without generating output file (UAC may have been declined)."
         }
     } else {
         Write-Warning "Querying BitLocker recovery keys requires Administrator elevation. Please run an elevated PowerShell session to extract BitLocker keys."
