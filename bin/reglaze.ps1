@@ -26,7 +26,9 @@ param (
     [string]$OutputDir = $null,
 
     [switch]$Force = $false,
-    [switch]$All = $false
+    [switch]$All = $false,
+    [switch]$SkipElevation = $false,
+    [switch]$Elevate = $false
 )
 
 $RepoRoot = Split-Path -Parent $PSScriptRoot
@@ -39,7 +41,7 @@ switch ($Command) {
     "audit" {
         $ResolvedOut = if ($OutputDir) { $OutputDir } elseif ($Target) { $Target } else { $null }
         $AuditScript = Join-Path $RepoRoot "src\audit\Invoke-Audit.ps1"
-        & $AuditScript -OutputDir $ResolvedOut -Force:$Force
+        & $AuditScript -OutputDir $ResolvedOut -Force:$Force -SkipElevation:$SkipElevation -Elevate:$Elevate
     }
 
     "validate" {

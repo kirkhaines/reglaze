@@ -229,13 +229,15 @@ storage:
   streaming:
     mount_point: "E:"
     verify_folder: "E:\My Drive"
-applications:
-  satisfactory:
+custom:
+  - name: "CollisionTestApp"
     directories:
-      game_saves:
-        target: "%STREAM%\Backups\satisfactory\game_saves"
-      blueprints:
-        target: "%STREAM%\Backups\satisfactory\blueprints"
+      - name: "parent_dir"
+        link: "%LOCALAPPDATA%\TestApp\Saves"
+        target: "%STREAM%\Backups\parent"
+      - name: "child_dir"
+        link: "%LOCALAPPDATA%\TestApp\Saves\SubFolder"
+        target: "%STREAM%\Backups\child"
 "@ | Set-Content -Path $NestedYamlFile -Encoding UTF8
 
     $NestedResult = Test-ReglazeBlueprint -Path $NestedYamlFile -RepoRoot $RepoRoot
