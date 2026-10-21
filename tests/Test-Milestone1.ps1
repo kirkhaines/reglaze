@@ -179,32 +179,32 @@ Assert-Test "Invoke-Audit.ps1 emits audit-reference.json and scaffolds reglaze.y
     $DataDriveMatches = [regex]::Matches($YamlContent, 'drive_variable:\s*"DATA_DRIVE"')
     $SingleDataDrive = ($DataDriveMatches.Count -le 1)
 
-    $HasGenDate = ($YamlContent -match 'generation_date:\s*"\d{4}-\d{2}-\d{2}"')
+    $HasGenDate = ($YamlContent -match 'generation_date:\s*"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}"')
 
     return ($HasMetadata -and $HasDisks -and $HasLicensing -and $HasOsDisk -and $HasUsers -and $SingleDataDrive -and $HasGenDate)
 }
 
-Assert-Test "Invoke-Audit.ps1 archives existing reglaze.yaml with generation_date rather than overwriting" {
+Assert-Test "Invoke-Audit.ps1 archives existing reglaze.yaml with second-level precision generation_date" {
     $AuditScript = Join-Path $RepoRoot "src\audit\Invoke-Audit.ps1"
     $Blueprint = Join-Path $TestOutputDir "reglaze.yaml"
     if (-not (Test-Path $Blueprint)) { return $false }
 
-    # Put a specific generation_date into existing file to test archive name
-    $CustomContent = "version: `"1.0`"`r`nprofile: `"test`"`r`ngeneration_date: `"2025-01-15`"`r`nsystem:`r`n  computer_name: `"TEST`"`r`n"
+    # Put a specific generation_date with second-level precision into existing file to test archive name
+    $CustomContent = "version: `"1.0`"`r`nprofile: `"test`"`r`ngeneration_date: `"2025-01-15T14:30:22`"`r`nsystem:`r`n  computer_name: `"TEST`"`r`n"
     Set-Content -Path $Blueprint -Value $CustomContent -Encoding UTF8
 
-    # Second audit run should archive existing to reglaze.2025-01-15.yaml
-    & $AuditScript -OutputDir $TestOutputDir
+    # Second audit run should archive existing to reglaze.2025-01-15T14-30-22.yaml
+    & $AuditScript -OutputDir $TestOutputDir -SkipElevation
 
-    $ExpectedArchive = Join-Path $TestOutputDir "reglaze.2025-01-15.yaml"
+    $ExpectedArchive = Join-Path $TestOutputDir "reglaze.2025-01-15T14-30-22.yaml"
     $ArchiveExists = Test-Path $ExpectedArchive
     $FreshBlueprintExists = Test-Path $Blueprint
 
     $ArchivedContent = if ($ArchiveExists) { Get-Content -Raw $ExpectedArchive } else { "" }
     $FreshContent = if ($FreshBlueprintExists) { Get-Content -Raw $Blueprint } else { "" }
 
-    $ArchivePreserved = ($ArchivedContent -match 'generation_date:\s*"2025-01-15"')
-    $FreshHasDate = ($FreshContent -match 'generation_date:\s*"\d{4}-\d{2}-\d{2}"')
+    $ArchivePreserved = ($ArchivedContent -match 'generation_date:\s*"2025-01-15T14:30:22"')
+    $FreshHasDate = ($FreshContent -match 'generation_date:\s*"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}"')
 
     return ($ArchiveExists -and $FreshBlueprintExists -and $ArchivePreserved -and $FreshHasDate)
 }

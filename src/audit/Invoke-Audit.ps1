@@ -136,13 +136,19 @@ if (Test-Path $BlueprintPath) {
         $RawVal = $Matches[1].Trim()
         $ParsedDate = [DateTime]::MinValue
         if ([DateTime]::TryParse($RawVal, [ref]$ParsedDate)) {
-            $GenDateStr = $ParsedDate.ToString("yyyy-MM-dd")
+            if ($RawVal -match '\d{1,2}:\d{2}' -or $ParsedDate.TimeOfDay.TotalSeconds -gt 0) {
+                $GenDateStr = $ParsedDate.ToString("yyyy-MM-ddTHH-mm-ss")
+            } else {
+                # Legacy date without time: append file LastWriteTime to avoid collisions
+                $GenTime = (Get-Item $BlueprintPath).LastWriteTime.ToString("HH-mm-ss")
+                $GenDateStr = "$($ParsedDate.ToString('yyyy-MM-dd'))T$GenTime"
+            }
         } else {
-            $GenDateStr = ($RawVal -replace '[:\\/*?"<>|]', '-')
+            $GenDateStr = ($RawVal -replace '[:\\/*?"<>| ]', '-')
         }
     }
     if (-not $GenDateStr) {
-        $GenDateStr = (Get-Item $BlueprintPath).LastWriteTime.ToString("yyyy-MM-dd")
+        $GenDateStr = (Get-Item $BlueprintPath).LastWriteTime.ToString("yyyy-MM-ddTHH-mm-ss")
     }
 
     $ArchiveName = "reglaze.$GenDateStr.yaml"
@@ -175,7 +181,7 @@ if (-not $OsDisk -and $AllDisks.Count -gt 0) {
 $PreservedDisks = @($AllDisks | Where-Object { $_.disk_number -ne $OsDisk.disk_number })
 
 # Build Scaffolded Blueprint Content
-$CurrentDateStr = (Get-Date).ToString("yyyy-MM-dd")
+$CurrentDateStr = (Get-Date).ToString("yyyy-MM-ddTHH:mm:ss")
 $YamlLines = @(
     'version: "1.0"',
     'profile: "workstation"',
