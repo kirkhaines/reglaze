@@ -9,7 +9,9 @@
 [CmdletBinding()]
 param(
     [string]$OutputDir = $null,
-    [switch]$Force = $false
+    [switch]$Force = $false,
+    [switch]$SkipElevation = $false,
+    [switch]$Elevate = $false
 )
 
 $RepoRoot = (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
@@ -48,10 +50,19 @@ Write-ReglazeStep "Auditing Windows Operating System & Licensing..."
 $LicensingData = Get-LicensingAudit
 Write-ReglazeSuccess "$($LicensingData.os_edition) (Build $($LicensingData.os_build)) - $($LicensingData.license_channel) Channel"
 
-# 4. Execute BitLocker Audit
+# 4. Execute BitLocker Audit (Elevates via UAC if needed and confirmed)
 Write-ReglazeStep "Auditing BitLocker Volumes & Recovery Protectors..."
-$BitLockerData = Get-BitLockerAudit
-Write-ReglazeSuccess "Captured $($BitLockerData.Count) BitLocker volume status(es)."
+$BitLockerData = Get-BitLockerAudit -RepoRoot $RepoRoot -SkipElevation:$SkipElevation -Elevate:$Elevate
+if ($BitLockerData.Count -gt 0) {
+    Write-ReglazeSuccess "Captured $($BitLockerData.Count) BitLocker volume status(es)."
+} else {
+    $IsAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+    if (-not $IsAdmin) {
+        Write-ReglazeWarning "BitLocker keys require Administrator elevation to extract. If any drive uses BitLocker, rerun audit in an elevated PowerShell session to back up recovery keys."
+    } else {
+        Write-ReglazeInfo "No BitLocker encrypted volumes detected."
+    }
+}
 
 # 5. Execute Comprehensive Application Discovery (WinGet + Add/Remove Programs)
 Write-ReglazeStep "Auditing Applications (WinGet Packages & Add/Remove Programs)..."
