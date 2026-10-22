@@ -552,13 +552,13 @@ if (`$State.CompletedSteps -notcontains "user_junctions") {
                 if (-not (`$Item.Attributes -band [System.IO.FileAttributes]::ReparsePoint)) {
                     `$BackupPath = "`$Link.bak_`$(Get-Date -Format 'yyyyMMdd_HHmmss')"
                     try {
-                        Move-Item -Path `$Link -Destination `$BackupPath -Force
+                        [System.IO.Directory]::Move(`$Link, `$BackupPath)
                         Write-Host "   Collision: Backed up existing directory to `$BackupPath." -ForegroundColor Yellow
                     } catch {
                         Write-Warning "   Could not backup existing folder `$Link: `$(`$_.Exception.Message)"
                     }
                 } else {
-                    Remove-Item -Path `$Link -Force
+                    [System.IO.Directory]::Delete(`$Link)
                 }
             }
 

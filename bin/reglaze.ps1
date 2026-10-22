@@ -28,7 +28,11 @@ param (
     [switch]$Force = $false,
     [switch]$All = $false,
     [switch]$SkipElevation = $false,
-    [switch]$Elevate = $false
+    [switch]$Elevate = $false,
+    [switch]$Simulation = $false,
+    [switch]$NoReboot = $false,
+    [switch]$SkipUpdates = $false,
+    [switch]$SkipDsc = $false
 )
 
 $RepoRoot = Split-Path -Parent $PSScriptRoot
@@ -76,22 +80,24 @@ switch ($Command) {
     }
 
     "bootstrap" {
-        Write-ReglazeBanner "MACHINE PROVISIONING (LOCAL ADMIN)"
+        $ResolvedCfg = if ($Config) { $Config } elseif ($Target) { $Target } else { Resolve-ReglazeConfigFile }
         $BootstrapScript = Join-Path $RepoRoot "src\runner\Start-MachineBootstrap.ps1"
         if (Test-Path $BootstrapScript) {
-            & $BootstrapScript
+            & $BootstrapScript -PayloadDir $OutputDir -ConfigFile $ResolvedCfg -Simulation:$Simulation -NoReboot:$NoReboot -SkipUpdates:$SkipUpdates -SkipDsc:$SkipDsc
         } else {
-            Write-ReglazeWarning "Bootstrap runner scheduled for Milestone 3."
+            Write-ReglazeError "Bootstrap runner not found at: $BootstrapScript"
+            exit 1
         }
     }
 
     "hydrate" {
-        Write-ReglazeBanner "USER HYDRATION & STATE LINKING"
+        $ResolvedCfg = if ($Config) { $Config } elseif ($Target) { $Target } else { Resolve-ReglazeConfigFile }
         $HydrateScript = Join-Path $RepoRoot "src\runner\Start-UserHydration.ps1"
         if (Test-Path $HydrateScript) {
-            & $HydrateScript
+            & $HydrateScript -PayloadDir $OutputDir -ConfigFile $ResolvedCfg -Simulation:$Simulation
         } else {
-            Write-ReglazeWarning "Hydration runner scheduled for Milestone 4."
+            Write-ReglazeError "Hydration runner not found at: $HydrateScript"
+            exit 1
         }
     }
 
@@ -99,15 +105,23 @@ switch ($Command) {
         Write-ReglazeBanner "DIAGNOSTIC TEST SUITE"
         $M1Script = Join-Path $RepoRoot "tests\Test-Milestone1.ps1"
         $M2Script = Join-Path $RepoRoot "tests\Test-Milestone2.ps1"
+        $M3Script = Join-Path $RepoRoot "tests\Test-Milestone3.ps1"
+        $M4Script = Join-Path $RepoRoot "tests\Test-Milestone4.ps1"
 
         if ($Target -eq "m1" -or $Target -eq "milestone1") {
             if (Test-Path $M1Script) { & $M1Script -All:$All }
         } elseif ($Target -eq "m2" -or $Target -eq "milestone2") {
             if (Test-Path $M2Script) { & $M2Script -All:$All }
+        } elseif ($Target -eq "m3" -or $Target -eq "milestone3") {
+            if (Test-Path $M3Script) { & $M3Script -All:$All }
+        } elseif ($Target -eq "m4" -or $Target -eq "milestone4") {
+            if (Test-Path $M4Script) { & $M4Script -All:$All }
         } else {
-            Write-ReglazeInfo "Executing Milestone 1 & Milestone 2 test suites..."
+            Write-ReglazeInfo "Executing Milestone 1, Milestone 2, Milestone 3 & Milestone 4 test suites..."
             $M1Success = $true
             $M2Success = $true
+            $M3Success = $true
+            $M4Success = $true
             if (Test-Path $M1Script) {
                 & $M1Script -All:$All
                 if ($LASTEXITCODE -ne 0) { $M1Success = $false }
@@ -116,7 +130,15 @@ switch ($Command) {
                 & $M2Script -All:$All
                 if ($LASTEXITCODE -ne 0) { $M2Success = $false }
             }
-            if (-not $M1Success -or -not $M2Success) { exit 1 }
+            if (Test-Path $M3Script) {
+                & $M3Script -All:$All
+                if ($LASTEXITCODE -ne 0) { $M3Success = $false }
+            }
+            if (Test-Path $M4Script) {
+                & $M4Script -All:$All
+                if ($LASTEXITCODE -ne 0) { $M4Success = $false }
+            }
+            if (-not $M1Success -or -not $M2Success -or -not $M3Success -or -not $M4Success) { exit 1 }
         }
     }
 

@@ -795,7 +795,51 @@ Each entry represents a certified application profile:
 
 ---
 
-## 9. Implementation Roadmap & Milestones
+## 9. Testing, Verification & Phased Deployment Strategy
+
+To prevent system disruption or unintended modifications to developer workstations while ensuring high deployment fidelity, `reglaze` follows a three-tiered verification and staged rollout strategy:
+
+### 9.1 Tier 1: In-Repo Mocking & Simulation (Milestones 3 & 4 Active Development)
+- **Host OS Isolation:** Active development of directory junction managers, machine bootstrap runners, and user hydration wizards strictly executes against developer workstations using `-Simulation` switches, synthetic mocks, and isolated temporary test folders (`tests/temp_*`).
+- **Human-in-the-Loop (HITL) Micro-Experiments:** When low-level Win32, CIM, WSL, or registry syntax requires empirical verification, the developer reviews and executes isolated, read-only snippets manually rather than allowing automated suites to touch host system configuration.
+- **Fast Feedback Loop:** Automated test suites (`tests/Test-Milestone*.ps1`) execute in seconds, verifying branching logic, path calculations, collision backups, and error handling without mutating host registry hives, BitLocker volumes, or Windows Explorer state.
+
+### 9.2 Tier 2: Staged Real-World Testing (Pre-Milestone 5)
+- **Low-Risk Practical Passes:** Before committing to high-complexity or primary workstation re-imaging, compiled installation media is deployed to a clean, secondary/low-stakes target machine.
+- **Iterative Refinement:** Multiple iterations are conducted to observe real hardware and firmware timings, WinPE disk matching behavior, WinGet DSC package installation reliability, and driver servicing in the wild.
+- **Feedback Loop:** Any edge cases identified during practical deployments (e.g., driver timing, UAC prompts, or cloud mount synchronization delays) are fed back into compiler templates and runner scripts before higher-stakes rollouts.
+
+### 9.3 Tier 3: Automated Hyper-V VM Testing (Milestone 5)
+- **Local Isolated Virtualization:** Milestone 5 builds automated end-to-end integration testing using a dedicated Windows 11 Hyper-V virtual machine (`Reglaze-TestVM`).
+- **Dual-Disk Topology:** The test VM is configured with two virtual hard disks:
+  - **VHDX 1 (`C:`):** Ephemeral OS target disk for clean installation.
+  - **VHDX 2 (`D:`):** Preserved bulk storage disk pre-populated with synthetic game libraries, projects, and BitLocker keys to validate secondary volume retention and auto-unlock re-arming.
+- **PowerShell Direct Automation:** Host test harnesses execute commands and collect diagnostics inside the running VM over Hyper-V VMBus sockets (`Invoke-Command -VMName`, `Copy-Item -ToSession`) without requiring network plumbing.
+- **Instant Checkpoint Rollback:** Test harnesses automatically restore clean VM checkpoints (`Restore-VMSnapshot`) before and after full provisioning runs, enabling continuous regression testing without manual intervention.
+
+### 9.4 Human-in-the-Loop (HITL) Testing Protocol & Comment Standard
+To ensure durability of testing progress across system interruptions, unexpected reboots, or agent context resets, low-level OS manipulation points must be annotated directly in code and tracked in [docs/HITL_TESTING.md](docs/HITL_TESTING.md).
+
+1. **Standardized Inline Annotation Schema:**
+   ```powershell
+   # [HITL-ID]: HITL-M3-01
+   # [HITL-TARGET]: Component / Cmdlet / Subsystem (e.g., Enable-BitLockerAutoUnlock)
+   # [HITL-STATUS]: PENDING | IN_PROGRESS | VERIFIED | TABLED
+   # [HITL-DESCRIPTION]: Explanation of what needs validation and risks involved
+   # [HITL-TEST-SNIPPET]: PowerShell test snippet for the user to run
+   # [HITL-LAST-INPUT]: Arguments/parameters tested in the latest run
+   # [HITL-LAST-RESULT]: Output, error message, or exit code received from the user
+   # [HITL-PATTERN]: Working command pattern to emulate in production code
+   # [HITL-AVOID]: Approaches/cmdlets that failed or caused issues (and why)
+   ```
+2. **Batched Interaction Lifecycle:**
+   - Outstanding tests are collected and presented to the user as a numbered batch in the turn response.
+   - The user returns results (partial or complete).
+   - The agent updates inline annotations and [docs/HITL_TESTING.md](docs/HITL_TESTING.md), records fixes, and returns the updated roster of pending tests until all are verified or tabled.
+
+---
+
+## 10. Implementation Roadmap & Milestones
 
 ### Milestone 1: CLI Foundation & Pre-Flight Discovery (`reglaze audit`)
 - [x] Implement `src/audit/` PowerShell modules for hardware, disk, licensing, BitLocker, and junction discovery.
@@ -809,17 +853,17 @@ Each entry represents a certified application profile:
 - [x] Implement variable expansion engine (`%OS_DRIVE%`, `%DATA_DRIVE%`, `%STREAM%`, `%SYNC_<ID>%`).
 
 ### Milestone 3: Linking Engine & Machine Bootstrap (`reglaze bootstrap`)
-- [ ] Implement `src/linking/` directory junction management with collision detection and backup logic.
-- [ ] Implement BitLocker recovery key injection and `Enable-BitLockerAutoUnlock` automation.
-- [ ] Build machine-level orchestration script (`bootstrap.ps1`) executing under `LocalAdmin`.
-- [ ] Build AutoLogon cleanup logic.
+- [x] Implement `src/linking/` directory junction management with collision detection and backup logic.
+- [x] Implement BitLocker recovery key injection and `Enable-BitLockerAutoUnlock` automation.
+- [x] Build machine-level orchestration script (`bootstrap.ps1`) executing under `LocalAdmin`.
+- [x] Build AutoLogon cleanup logic.
 
 ### Milestone 4: User Hydration & WSL2 Integration (`reglaze hydrate`)
-- [ ] Build user-level staged interactive wizard (Cloud mount verification, Steam launch, manual app guidance).
-- [ ] Implement non-interactive WSL2 bootstrap script using root `useradd` and `rclone bisync` configuration.
-- [ ] Implement `dev_repos` cloning and Chezmoi dotfiles application.
+- [x] Build user-level staged interactive wizard (Cloud mount verification, Steam launch, manual app guidance).
+- [x] Implement non-interactive WSL2 bootstrap script using root `useradd` and `rclone bisync` configuration.
+- [x] Implement `dev_repos` cloning and Chezmoi dotfiles application.
 
 ### Milestone 5: End-to-End Validation & Packaging
-- [ ] Hyper-V / Proxmox VM end-to-end automated testing with secondary virtual disks.
+- [ ] Hyper-V / Proxmox VM end-to-end automated testing with secondary virtual disks and PowerShell Direct.
 - [ ] Bare-metal test pass on physical workstation hardware.
 - [ ] CLI packaging and installation documentation.
