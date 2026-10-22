@@ -9,6 +9,7 @@ bin/*.exe
 *.bak
 *.log
 audit-output/
+tests/temp_*/
 
 # Secrets and environment configs
 .env

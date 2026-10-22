@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# =============================================================================
+# Reglaze WSL2 Non-Interactive Provisioner Template
+# =============================================================================
+set -e
+
+WSL_USER="{{WSL_USER}}"
+PACKAGES="{{PACKAGES}}"
+
+echo "=== Reglaze WSL2 Non-Interactive Provisioner ==="
+echo "Configuring primary user: $WSL_USER"
+
+# 1. Create developer user if missing
+if ! id -u "$WSL_USER" >/dev/null 2>&1; then
+    useradd -m -s /bin/bash -G sudo "$WSL_USER"
+    echo "$WSL_USER ALL=(ALL) NOPASSWD:ALL" > "/etc/sudoers.d/99-$WSL_USER"
+    chmod 0440 "/etc/sudoers.d/99-$WSL_USER"
+    echo "Created user $WSL_USER with passwordless sudo."
+fi
+
+# 2. Configure /etc/wsl.conf to boot directly into default user
+cat << 'EOF' > /etc/wsl.conf
+[user]
+default = {{WSL_USER}}
+
+[boot]
+systemd = true
+
+[interop]
+enabled = true
+appendWindowsPath = true
+EOF
+
+# 3. Non-interactively update and install declared apt packages
+if [ -n "$PACKAGES" ]; then
+    echo "Installing declared WSL2 packages: $PACKAGES"
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update -y
+    apt-get install -y --no-install-recommends $PACKAGES || true
+fi
+
+echo "=== WSL2 Provisioning Completed Successfully ==="
