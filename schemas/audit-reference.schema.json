@@ -123,6 +123,9 @@
     },
     "detected_wsl": {
       "type": "object"
+    },
+    "detected_game_libraries": {
+      "type": "array"
     }
   }
 }

@@ -45,6 +45,46 @@ function Build-ReglazePayload {
         New-Item -ItemType Directory -Path $PayloadDir -Force | Out-Null
     }
 
+    # Stage modular Windows settings scripts
+    $WindowsDataDir = Join-Path $RepoRoot "data\windows"
+    $PayloadWindowsDir = Join-Path $PayloadDir "windows"
+    if (Test-Path $WindowsDataDir) {
+        if (-not (Test-Path $PayloadWindowsDir)) {
+            New-Item -ItemType Directory -Path $PayloadWindowsDir -Force | Out-Null
+        }
+        Copy-Item -Path (Join-Path $WindowsDataDir "*") -Destination $PayloadWindowsDir -Force
+    }
+
+    # Extract & compile Windows settings configuration
+    $WinSettings = $null
+    if ($Blueprint.windows_settings) {
+        $WinSettings = $Blueprint.windows_settings
+    } elseif ($Blueprint.system -and $Blueprint.system.windows_settings) {
+        $WinSettings = $Blueprint.system.windows_settings
+    } elseif ($AuditReference -and $AuditReference.detected_windows_settings) {
+        $WinSettings = $AuditReference.detected_windows_settings
+    } else {
+        $WinSettings = [PSCustomObject]@{
+            explorer = [PSCustomObject]@{
+                show_hidden_files    = $true
+                show_file_extensions = $true
+                launch_to            = "ThisPC"
+            }
+            taskbar = [PSCustomObject]@{
+                alignment       = "Left"
+                search_mode     = "IconOnly"
+                widgets_visible = $false
+                chat_visible    = $false
+            }
+            power = [PSCustomObject]@{
+                active_scheme_name = "High Performance"
+                ac_sleep_minutes   = 0
+            }
+        }
+    }
+    $WinSettingsPath = Join-Path $PayloadDir "windows-settings.json"
+    $WinSettings | ConvertTo-Json -Depth 4 | Set-Content -Path $WinSettingsPath -Encoding UTF8
+
     $VarMap = Get-BlueprintVariables -Blueprint $Blueprint
     $PrimaryUser = if ($Blueprint.system.users.primary_user.username) { $Blueprint.system.users.primary_user.username } else { "User" }
 
@@ -304,14 +344,43 @@ if (Test-Path `$JunctionsManifest) {
     }
 }
 
-# 7. Destroy AutoLogon Credentials
-Write-Host "[7/8] Destroying temporary LocalAdmin AutoLogon credentials..." -ForegroundColor Yellow
+# 7. Apply Windows Explorer, Taskbar & Power Preferences
+Write-Host "[7/9] Applying Windows system preferences & options..." -ForegroundColor Yellow
+`$WinSettingsFile = Join-Path `$PayloadDir "windows-settings.json"
+`$WinScriptsDir = Join-Path `$PayloadDir "windows"
+if (Test-Path `$WinSettingsFile) {
+    try {
+        `$WinCfg = Get-Content -Raw `$WinSettingsFile | ConvertFrom-Json
+        # Explorer
+        `$ExpScript = Join-Path `$WinScriptsDir "explorer-folder-options.ps1"
+        if (Test-Path `$ExpScript) {
+            & `$ExpScript -ShowHiddenFiles:([bool]`$WinCfg.explorer.show_hidden_files) -ShowFileExtensions:([bool]`$WinCfg.explorer.show_file_extensions) -LaunchTo `$WinCfg.explorer.launch_to
+        }
+        # Taskbar
+        `$TbScript = Join-Path `$WinScriptsDir "taskbar-system-tray.ps1"
+        if (Test-Path `$TbScript) {
+            & `$TbScript -TaskbarAlignment `$WinCfg.taskbar.alignment -SearchMode `$WinCfg.taskbar.search_mode -HideWidgets:(-not [bool]`$WinCfg.taskbar.widgets_visible) -HideChat:(-not [bool]`$WinCfg.taskbar.chat_visible)
+        }
+        # Power
+        `$PwrScript = Join-Path `$WinScriptsDir "performance-power.ps1"
+        if (Test-Path `$PwrScript) {
+            `$Plan = (`$WinCfg.power.active_scheme_name -replace '\s+', '')
+            & `$PwrScript -PowerPlan `$Plan -AcSleepTimeoutMinutes ([int]`$WinCfg.power.ac_sleep_minutes)
+        }
+        Write-Host "   Windows preferences applied successfully." -ForegroundColor Green
+    } catch {
+        Write-Warning "   Could not apply Windows preferences: `$(`$_.Exception.Message)"
+    }
+}
+
+# 8. Destroy AutoLogon Credentials
+Write-Host "[8/9] Destroying temporary LocalAdmin AutoLogon credentials..." -ForegroundColor Yellow
 Remove-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" -Name "DefaultPassword" -ErrorAction SilentlyContinue
 Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" -Name "AutoAdminLogon" -Value "0" -ErrorAction SilentlyContinue
 Write-Host "   AutoLogon deactivated." -ForegroundColor Green
 
-# 8. Schedule Phase 5 Hydration on User Logon & Stage Desktop Shortcut
-Write-Host "[8/8] Scheduling Phase 5 User Hydration..." -ForegroundColor Yellow
+# 9. Schedule Phase 5 Hydration on User Logon & Stage Desktop Shortcut
+Write-Host "[9/9] Scheduling Phase 5 User Hydration..." -ForegroundColor Yellow
 `$HydrateCmd = "powershell.exe -ExecutionPolicy Bypass -File C:\Reglaze\payload\hydrate.ps1"
 Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce" -Name "ReglazeHydrate" -Value `$HydrateCmd -ErrorAction SilentlyContinue
 
@@ -459,30 +528,76 @@ if (`$State.CompletedSteps -notcontains "cloud_mount") {
     Write-Host "[✓] Step 2: Cloud Storage Mount (Already completed)" -ForegroundColor DarkGray
 }
 
-# --- STEP 3: Steam Library Auto-Discovery ---
+# --- STEP 3: Game Managers & Multi-Library Discovery / Fresh Installs ---
 if (`$State.CompletedSteps -notcontains "steam_signin") {
     Write-Host ""
     Write-Host "--------------------------------------------------------------------------------" -ForegroundColor Yellow
-    Write-Host "  STEP 3: Steam Sign-In & Library Rediscovery" -ForegroundColor Yellow
+    Write-Host "  STEP 3: Steam Multi-Library Rediscovery & Fresh Game Installs" -ForegroundColor Yellow
     Write-Host "--------------------------------------------------------------------------------" -ForegroundColor Yellow
     `$SteamExe = "`$env:ProgramFiles(x86)\Steam\steam.exe"
-    `$PreExistingLib = "$DataDrive\SteamLibrary"
 
-    if (Test-Path `$PreExistingLib) {
-        Write-Host "Pre-existing game library detected on preserved drive: `$PreExistingLib" -ForegroundColor Cyan
+    # Discover all Steam libraries across all drives
+    `$DiscoveredLibs = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    `$Drives = Get-PSDrive -PSProvider FileSystem -ErrorAction SilentlyContinue
+    foreach (`$Drv in `$Drives) {
+        if (`$Drv.Root) {
+            foreach (`$Sub in @("SteamLibrary", "Steam", "Games\SteamLibrary", "Games\Steam")) {
+                `$Cand = Join-Path `$Drv.Root `$Sub
+                if ((Test-Path `$Cand) -and (Test-Path (Join-Path `$Cand "steamapps"))) {
+                    `$DiscoveredLibs.Add(`$Cand) | Out-Null
+                }
+            }
+        }
+    }
+    if (`$DiscoveredLibs.Count -gt 0) {
+        Write-Host "Discovered `$(`$DiscoveredLibs.Count) Steam library folder(s) across drives:" -ForegroundColor Green
+        foreach (`$Lib in `$DiscoveredLibs) {
+            Write-Host " - `$Lib" -ForegroundColor Cyan
+        }
     }
 
     if (Test-Path `$SteamExe) {
         Write-Host "Launching Steam for user sign-in and Steam Guard verification..."
         Start-Process `$SteamExe
-        Write-Host "Once signed in, Steam will instantly discover games in your preserved library without re-downloading."
         Read-Host "Press [Enter] when signed in to Steam to proceed..."
     } else {
         Write-Host "Steam client not found at `$SteamExe; skipping launch." -ForegroundColor DarkGray
     }
+
+    # Inspect games declared in applications catalog or blueprint
+    `$CatalogFile = Join-Path `$PayloadDir "applications.json"
+    if (Test-Path `$CatalogFile) {
+        `$CatApps = Get-Content -Raw `$CatalogFile | ConvertFrom-Json
+        `$SteamGames = `$CatApps | Where-Object { `$_.install -and (`$_.install.method -eq "steam" -or `$_.install.steam_id) }
+        foreach (`$Game in `$SteamGames) {
+            `$SId = `$Game.install.steam_id
+            `$GName = if (`$Game.name) { `$Game.name } else { `$Game.app_id }
+            if (`$SId) {
+                # Check if game is in ANY discovered library
+                `$FoundLib = `$null
+                foreach (`$Lib in `$DiscoveredLibs) {
+                    `$Mf = Join-Path `$Lib "steamapps\appmanifest_`$SId.acf"
+                    if (Test-Path `$Mf) {
+                        `$FoundLib = `$Lib
+                        break
+                    }
+                }
+                if (`$FoundLib) {
+                    Write-Host " [✓] Game '`$GName' (`$SId) present in reattached library: `$FoundLib" -ForegroundColor Green
+                } else {
+                    Write-Host " [+] Game '`$GName' (`$SId) not found in any library. Triggering fresh install..." -ForegroundColor Cyan
+                    try {
+                        Start-Process "steam://install/`$SId"
+                    } catch {
+                        Write-Warning "Could not trigger steam://install/`$SId"
+                    }
+                }
+            }
+        }
+    }
     Save-HydrateState "steam_signin"
 } else {
-    Write-Host "[✓] Step 3: Steam Sign-In (Already completed)" -ForegroundColor DarkGray
+    Write-Host "[✓] Step 3: Steam Multi-Library & Game Provisioning (Already completed)" -ForegroundColor DarkGray
 }
 
 # --- STEP 4: Manual Application Installs Walkthrough ---
@@ -707,15 +822,16 @@ echo "=== WSL2 Provisioning Completed Successfully ==="
     $Catalog | ConvertTo-Json -Depth 6 | Set-Content -Path $CatalogJsonPath -Encoding UTF8
 
     return [PSCustomObject]@{
-        PayloadDir        = $PayloadDir
-        DscPath           = $DscPath
-        BitLockerPath     = $BitLockerPath
-        JunctionsPath     = $JunctionsPath
-        BootstrapPath     = $BootstrapPath
-        HydratePath       = $HydratePath
-        WslScriptPath     = $WslPath
-        CatalogPath       = $CatalogJsonPath
-        JunctionCount     = $JunctionsList.Count
-        BitLockerKeyCount = $BitLockerEntries.Count
+        PayloadDir          = $PayloadDir
+        DscPath             = $DscPath
+        BitLockerPath       = $BitLockerPath
+        JunctionsPath       = $JunctionsPath
+        BootstrapPath       = $BootstrapPath
+        HydratePath         = $HydratePath
+        WslScriptPath       = $WslPath
+        CatalogPath         = $CatalogJsonPath
+        WindowsSettingsPath = $WinSettingsPath
+        JunctionCount       = $JunctionsList.Count
+        BitLockerKeyCount   = $BitLockerEntries.Count
     }
 }

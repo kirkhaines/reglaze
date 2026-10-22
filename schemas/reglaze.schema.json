@@ -49,7 +49,8 @@
             "drivers": { "type": "boolean" },
             "windows_updates": { "type": "boolean" }
           }
-        }
+        },
+        "windows_settings": { "type": "object" }
       }
     },
     "disks": {
@@ -118,6 +119,35 @@
     "applications": { "type": "object" },
     "custom": { "type": "array" },
     "wsl2": { "type": "object" },
-    "dev_repos": { "type": "object" }
+    "dev_repos": { "type": "object" },
+    "windows_settings": {
+      "type": "object",
+      "properties": {
+        "explorer": {
+          "type": "object",
+          "properties": {
+            "show_hidden_files": { "type": "boolean" },
+            "show_file_extensions": { "type": "boolean" },
+            "launch_to": { "enum": ["ThisPC", "QuickAccess"] }
+          }
+        },
+        "taskbar": {
+          "type": "object",
+          "properties": {
+            "alignment": { "enum": ["Left", "Center"] },
+            "search_mode": { "enum": ["Hidden", "IconOnly", "Box"] },
+            "widgets_visible": { "type": "boolean" },
+            "chat_visible": { "type": "boolean" }
+          }
+        },
+        "power": {
+          "type": "object",
+          "properties": {
+            "active_scheme_name": { "type": "string" },
+            "ac_sleep_minutes": { "type": "integer" }
+          }
+        }
+      }
+    }
   }
 }

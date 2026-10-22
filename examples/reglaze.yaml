@@ -27,6 +27,24 @@ system:
     developer_mode: true
     virtual_machine_platform: true
     subsystem_for_linux: true
+  updates:
+    drivers: true
+    windows_updates: true
+
+# Developer-friendly Windows Explorer, Taskbar, and Power Scheme Preferences
+windows_settings:
+  explorer:
+    show_hidden_files: true
+    show_file_extensions: true
+    launch_to: "ThisPC" # "ThisPC" or "QuickAccess"
+  taskbar:
+    alignment: "Left" # "Left" or "Center"
+    search_mode: "IconOnly" # "Hidden", "IconOnly", or "Box"
+    widgets_visible: false
+    chat_visible: false
+  power:
+    active_scheme_name: "High Performance" # "High Performance", "Balanced", or "Ultimate Performance"
+    ac_sleep_minutes: 0 # 0 = Never sleep on AC power
 
 disks:
   target_os_disk:
@@ -82,8 +100,9 @@ applications:
   # Pattern 2: Database Catalog requiring Local Sync + Inline Directory Override
   adobe_lightroom:
     directories:
+      # Satisfies 'recommended_storage: sync' (safe_for_stream: false)
       catalog:
-        target: "%SYNC_CATALOGS%\\Lightroom" # Satisfies 'recommended_storage: sync' (safe_for_stream: false)
+        target: "%SYNC_CATALOGS%\\Lightroom"
       presets:
         override:
           action: "omit"
@@ -106,7 +125,7 @@ applications:
       post_install_script: "./scripts/post-install-outfox.ps1"
     directories:
       songs:
-        target: "%GAMES_DIR%\\OutFox\\Songs"
+        target: "%STREAM%\\Music\\OutFoxSongs"
       save:
         target: "%STREAM%\\Backups\\OutFox\\Save"
 

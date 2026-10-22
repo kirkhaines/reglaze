@@ -27,6 +27,7 @@ $RepoRoot = Split-Path -Parent $PSScriptRoot
 . (Join-Path $RepoRoot "src\linking\New-DirectoryJunction.ps1")
 . (Join-Path $RepoRoot "src\wsl\Initialize-WSLDistro.ps1")
 . (Join-Path $RepoRoot "src\wsl\Sync-WSLRclone.ps1")
+. (Join-Path $RepoRoot "src\common\GameLibraries.ps1")
 
 $PassCount = 0
 $FailCount = 0
@@ -216,6 +217,39 @@ try {
     Assert-Test -Name "8. Manual Apps: identifies applications requiring manual guidance (outfox)" `
         -Condition ($ManualAppsList.Count -eq 1 -and $ManualAppsList[0].app_id -eq "outfox") `
         -Details "Manual apps count: $($ManualAppsList.Count), AppId: $($ManualAppsList[0].app_id)"
+
+    # =========================================================================
+    # Test 8b: Game Managers Multi-Library Discovery & Installation Orchestration
+    # =========================================================================
+    $MockLibA = Join-Path $TestDir "mock_steam_lib_a"
+    $MockLibB = Join-Path $TestDir "mock_steam_lib_b"
+    $MockLibASteamApps = Join-Path $MockLibA "steamapps"
+    $MockLibBSteamApps = Join-Path $MockLibB "steamapps"
+
+    New-Item -ItemType Directory -Path $MockLibASteamApps -Force | Out-Null
+    New-Item -ItemType Directory -Path $MockLibBSteamApps -Force | Out-Null
+
+    # Stage Satisfactory (526870) in Library A
+    '"AppState" { "appid" "526870" "name" "Satisfactory" "installdir" "Satisfactory" }' | Set-Content (Join-Path $MockLibASteamApps "appmanifest_526870.acf") -Encoding UTF8
+    # Stage Beat Saber (620980) in Library B
+    '"AppState" { "appid" "620980" "name" "Beat Saber" "installdir" "Beat Saber" }' | Set-Content (Join-Path $MockLibBSteamApps "appmanifest_620980.acf") -Encoding UTF8
+
+    $CheckA = Test-SteamGameInLibraries -SteamId 526870 -Libraries @($MockLibA, $MockLibB)
+    $CheckB = Test-SteamGameInLibraries -SteamId 620980 -Libraries @($MockLibA, $MockLibB)
+    $CheckMissing = Test-SteamGameInLibraries -SteamId 2420660 -Libraries @($MockLibA, $MockLibB)
+
+    $InstallExisting = Install-SteamGame -SteamId 526870 -GameName "Satisfactory" -Libraries @($MockLibA, $MockLibB) -Simulation:$true
+    $InstallMissing = Install-SteamGame -SteamId 2420660 -GameName "Neva" -Libraries @($MockLibA, $MockLibB) -Simulation:$true
+
+    $MultiLibPass = ($CheckA.IsInstalled -and $CheckA.LibraryPath -eq $MockLibA) -and `
+                    ($CheckB.IsInstalled -and $CheckB.LibraryPath -eq $MockLibB) -and `
+                    (-not $CheckMissing.IsInstalled) -and `
+                    ($InstallExisting.Status -eq "AlreadyInstalled") -and `
+                    ($InstallMissing.Status -eq "Simulated" -and $InstallMissing.LibraryPath -eq "Default")
+
+    Assert-Test -Name "8b. Game Managers: discovers games across multiple libraries and triggers default install for missing" `
+        -Condition $MultiLibPass `
+        -Details "CheckA: $($CheckA.IsInstalled), CheckB: $($CheckB.IsInstalled), Missing: $($CheckMissing.IsInstalled), InstallExisting: $($InstallExisting.Status), InstallMissing: $($InstallMissing.Status)"
 
     # =========================================================================
     # Test 8: End-to-End Start-UserHydration in Simulation Mode
