@@ -121,6 +121,7 @@ $AuditReference = [PSCustomObject]@{
     installed_winget_packages        = $AppsData.installed_winget_packages
     detected_non_winget_applications = $AppsData.detected_non_winget_applications
     detected_windows_settings        = $WindowsSettings
+    detected_game_libraries          = $AppsData.detected_game_libraries
 }
 
 $AuditJsonPath = Join-Path $TargetDir "audit-reference.json"
@@ -212,6 +213,20 @@ $YamlLines = @(
         '  updates:',
         '    drivers: true',
         '    windows_updates: true',
+        '',
+        'windows_settings:',
+        '  explorer:',
+        "    show_hidden_files: $(if ($WindowsSettings.explorer.show_hidden_files) { 'true' } else { 'false' })",
+        "    show_file_extensions: $(if ($WindowsSettings.explorer.show_file_extensions) { 'true' } else { 'false' })",
+        "    launch_to: `"$($WindowsSettings.explorer.launch_to)`"",
+        '  taskbar:',
+        "    alignment: `"$($WindowsSettings.taskbar.alignment)`"",
+        "    search_mode: `"$($WindowsSettings.taskbar.search_mode)`"",
+        "    widgets_visible: $(if ($WindowsSettings.taskbar.widgets_visible) { 'true' } else { 'false' })",
+        "    chat_visible: $(if ($WindowsSettings.taskbar.chat_visible) { 'true' } else { 'false' })",
+        '  power:',
+        "    active_scheme_name: `"$($WindowsSettings.power.active_scheme_name)`"",
+        "    ac_sleep_minutes: $($WindowsSettings.power.ac_sleep_minutes)",
         '',
         'disks:',
         '  target_os_disk:',

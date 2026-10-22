@@ -46,6 +46,8 @@ if (-not $RepoRoot) {
 # Source common modules
 . (Join-Path $RepoRoot "src\common\Logging.ps1")
 . (Join-Path $RepoRoot "src\common\ConfigResolver.ps1")
+. (Join-Path $RepoRoot "src\common\Catalog.ps1")
+. (Join-Path $RepoRoot "src\common\GameLibraries.ps1")
 . (Join-Path $RepoRoot "src\linking\New-DirectoryJunction.ps1")
 . (Join-Path $RepoRoot "src\wsl\Initialize-WSLDistro.ps1")
 . (Join-Path $RepoRoot "src\wsl\Sync-WSLRclone.ps1")
@@ -243,17 +245,22 @@ if (-not $HydrateState.cloud_mount_verified) {
 }
 
 # =============================================================================
-# Step 3: Steam Library Auto-Discovery
+# Step 3: Game Managers & Multi-Library Discovery / Fresh Installs
 # =============================================================================
-Write-ReglazeStep "Step 3/8: Steam Sign-In & Preserved Library Discovery..."
+Write-ReglazeStep "Step 3/8: Game Managers (Steam) Discovery & Game Provisioning..."
 if (-not $HydrateState.steam_library_connected) {
-    $SteamDir = "D:\SteamLibrary"
-    $SteamExe = Join-Path ${env:ProgramFiles(x86)} "Steam\steam.exe"
-
-    if (Test-Path -LiteralPath $SteamDir) {
-        Write-ReglazeSuccess "Detected preserved Steam library folder at: $SteamDir"
+    # 1. Discover all Steam libraries across all drives
+    $DiscoveredLibraries = @(Get-SteamLibraries)
+    if ($DiscoveredLibraries.Count -gt 0) {
+        Write-ReglazeSuccess "Discovered $($DiscoveredLibraries.Count) Steam library location(s):"
+        foreach ($Lib in $DiscoveredLibraries) {
+            Write-ReglazeInfo " - $Lib"
+        }
+    } else {
+        Write-ReglazeInfo "No existing Steam libraries detected."
     }
 
+    $SteamExe = Join-Path ${env:ProgramFiles(x86)} "Steam\steam.exe"
     if (-not $IsSimulated -and -not $NonInteractive) {
         if (Test-Path -LiteralPath $SteamExe) {
             Write-ReglazeInfo "Launching Steam for GUI authentication and library re-indexing..."
@@ -265,10 +272,52 @@ if (-not $HydrateState.steam_library_connected) {
     } else {
         Write-ReglazeInfo "Simulated Steam sign-in and library discovery."
     }
+
+    # 2. Check games declared in Blueprint across all detected libraries
+    if ($Blueprint -and $Blueprint.applications) {
+        $Catalog = Get-ReglazeCatalog -RepoRoot $RepoRoot
+        $AppProperties = @($Blueprint.applications.PSObject.Properties)
+        foreach ($Prop in $AppProperties) {
+            $AppId = $Prop.Name
+            $AppConfig = $Prop.Value
+
+            # Check if installation explicitly disabled
+            if ($null -ne $AppConfig.install -and ($AppConfig.install -eq $false -or $AppConfig.install.enabled -eq $false)) {
+                continue
+            }
+
+            $SteamId = $null
+            $GameName = $AppId
+
+            if ($AppConfig.install -and $AppConfig.install.steam_id) {
+                $SteamId = [int]$AppConfig.install.steam_id
+            } else {
+                $CatApp = $Catalog | Where-Object { $_.app_id -eq $AppId } | Select-Object -First 1
+                if ($CatApp -and $CatApp.install -and ($CatApp.install.method -eq "steam" -or $CatApp.install.steam_id)) {
+                    $SteamId = [int]$CatApp.install.steam_id
+                    if ($CatApp.name) { $GameName = $CatApp.name }
+                }
+            }
+
+            if ($SteamId) {
+                $InstallResult = Install-SteamGame -SteamId $SteamId -GameName $GameName -Libraries $DiscoveredLibraries -Simulation:$IsSimulated -Live:(-not $IsSimulated)
+                if ($InstallResult.Status -eq "AlreadyInstalled") {
+                    Write-ReglazeSuccess "Steam Game '$GameName' (ID: $SteamId): Found in reattached library ($($InstallResult.LibraryPath))"
+                } elseif ($InstallResult.Status -eq "Simulated") {
+                    Write-ReglazeInfo "Steam Game '$GameName' (ID: $SteamId): Not in any library. Simulated fresh install into default library."
+                } elseif ($InstallResult.Status -eq "Triggered") {
+                    Write-ReglazeSuccess "Steam Game '$GameName' (ID: $SteamId): Triggered fresh installation into default library."
+                } else {
+                    Write-ReglazeWarning "Steam Game '$GameName' (ID: $SteamId): $($InstallResult.Message)"
+                }
+            }
+        }
+    }
+
     $HydrateState.steam_library_connected = $true
     Save-HydrationCheckpoint "steam_library_connected"
 } else {
-    Write-ReglazeSuccess "Steam library discovery already completed."
+    Write-ReglazeSuccess "Steam library discovery and game verification already completed."
 }
 
 # =============================================================================

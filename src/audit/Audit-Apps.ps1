@@ -9,6 +9,7 @@
 
 
 . (Join-Path (Join-Path $PSScriptRoot "..") "common\Catalog.ps1")
+. (Join-Path (Join-Path $PSScriptRoot "..") "common\GameLibraries.ps1")
 
 function Get-InstalledApplicationsAudit {
     [CmdletBinding()]
@@ -170,9 +171,33 @@ function Get-InstalledApplicationsAudit {
         }
     }
 
+    # 3. Discover Game Libraries across all drives & detect installed games
+    $SteamLibs = Get-SteamLibraries
+    $SteamGames = Get-SteamInstalledGames -Libraries $SteamLibs
+
+    $GameLibraryEntries = [System.Collections.Generic.List[PSCustomObject]]::new()
+    foreach ($Lib in $SteamLibs) {
+        $LibGames = @($SteamGames | Where-Object { $_.LibraryPath -eq $Lib })
+        $GameLibraryEntries.Add([PSCustomObject]@{
+            manager     = "steam"
+            path        = $Lib
+            game_count  = $LibGames.Count
+            games       = @($LibGames | ForEach-Object {
+                $GameAppId = $_.SteamId
+                $CatalogMatch = $Catalog | Where-Object { $_.install -and $_.install.steam_id -eq $GameAppId } | Select-Object -First 1
+                [PSCustomObject]@{
+                    steam_id       = $GameAppId
+                    name           = $_.GameName
+                    matched_app_id = if ($CatalogMatch) { $CatalogMatch.app_id } else { $null }
+                }
+            })
+        })
+    }
+
     return [PSCustomObject]@{
         installed_winget_packages        = $WinGetPackages
         detected_non_winget_applications = $NonWinGetApps
+        detected_game_libraries          = $GameLibraryEntries
     }
 }
 

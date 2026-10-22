@@ -146,6 +146,7 @@ function Invoke-ReglazeCompilation {
     Write-ReglazeSuccess "Compiled: Machine bootstrap runner ($($PayloadResult.BootstrapPath))"
     Write-ReglazeSuccess "Compiled: User hydration wizard ($($PayloadResult.HydratePath))"
     Write-ReglazeSuccess "Compiled: WSL2 non-interactive provisioner ($($PayloadResult.WslScriptPath))"
+    Write-ReglazeSuccess "Compiled: Windows preferences configuration ($($PayloadResult.WindowsSettingsPath))"
 
     # 9. Completion Summary
     Write-Host ""

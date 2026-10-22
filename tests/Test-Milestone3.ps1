@@ -237,11 +237,16 @@ try {
     # =========================================================================
     # Test 10: Windows Settings Application
     # =========================================================================
-    $SettingsSimResults = @(Invoke-WindowsSettingsApplication -RepoRoot $RepoRoot -Simulation)
+    $CustomSettings = [PSCustomObject]@{
+        explorer = [PSCustomObject]@{ show_hidden_files = $true; show_file_extensions = $true; launch_to = "ThisPC" }
+        taskbar  = [PSCustomObject]@{ alignment = "Center"; search_mode = "IconOnly"; widgets_visible = $false; chat_visible = $false }
+        power    = [PSCustomObject]@{ active_scheme_name = "High Performance"; ac_sleep_minutes = 0 }
+    }
+    $SettingsSimResults = @(Invoke-WindowsSettingsApplication -RepoRoot $RepoRoot -Settings $CustomSettings -Simulation)
     $SettingsCount = $SettingsSimResults.Count
     $AllSimulated = @($SettingsSimResults | Where-Object { $_.Status -eq "Simulated" }).Count -eq $SettingsCount
 
-    Assert-Test "10. Windows Settings: executes modular Explorer, Taskbar, and Power settings in simulation" `
+    Assert-Test "10. Windows Settings: executes modular Explorer, Taskbar, and Power settings with declared blueprint settings" `
         ($SettingsCount -ge 3 -and $AllSimulated)
 
     # =========================================================================

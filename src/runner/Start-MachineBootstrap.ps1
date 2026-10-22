@@ -239,7 +239,8 @@ if ($JunctionsManifest -and (Test-Path -LiteralPath $JunctionsManifest)) {
 # Step 7: Apply Windows Explorer, Taskbar & Power Preferences
 # =============================================================================
 Write-ReglazeStep "Step 7/9: Applying Windows Preferences & System Settings..."
-$SettingsResults = Invoke-WindowsSettingsApplication -RepoRoot $RepoRoot -Simulation:$IsSimulated -Live:(-not $IsSimulated)
+$SettingsFile = if ($ResolvedPayload) { Join-Path $ResolvedPayload "windows-settings.json" } else { $null }
+$SettingsResults = Invoke-WindowsSettingsApplication -RepoRoot $RepoRoot -SettingsFile $SettingsFile -Simulation:$IsSimulated -Live:(-not $IsSimulated)
 foreach ($Setting in $SettingsResults) {
     Write-ReglazeSuccess "$($Setting.SettingName): $($Setting.Status)"
 }
