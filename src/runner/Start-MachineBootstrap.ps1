@@ -120,6 +120,20 @@ if (-not $SkipUpdates -and -not $IsSimulated) {
         Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force -ForceBootstrap -Scope CurrentUser -ErrorAction SilentlyContinue | Out-Null
         Set-PSRepository -Name 'PSGallery' -InstallationPolicy Trusted -ErrorAction SilentlyContinue
         Install-Module -Name PSWindowsUpdate -Force -Scope CurrentUser -ErrorAction Stop
+
+        # Bypass untrusted publisher prompts for format/type definitions and unblock module files
+        Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope Process -Force -ErrorAction SilentlyContinue
+        $ModulePaths = @(
+            (Join-Path $env:ProgramFiles "WindowsPowerShell\Modules\PSWindowsUpdate"),
+            (Join-Path $env:USERPROFILE "Documents\WindowsPowerShell\Modules\PSWindowsUpdate")
+        )
+        foreach ($ModPath in $ModulePaths) {
+            if (Test-Path -LiteralPath $ModPath) {
+                Get-ChildItem -Path $ModPath -Recurse -ErrorAction SilentlyContinue | Unblock-File -ErrorAction SilentlyContinue
+            }
+        }
+        Import-Module -Name PSWindowsUpdate -Force -DisableNameChecking -ErrorAction SilentlyContinue
+
         Write-ReglazeInfo "Scanning and installing WHQL drivers (GPU, Audio, Chipset, Storage)..."
         Get-WindowsUpdate -Category "Drivers" -Install -AcceptAll -IgnoreReboot -ErrorAction SilentlyContinue
         Write-ReglazeSuccess "WHQL driver servicing completed."
