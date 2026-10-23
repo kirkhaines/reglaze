@@ -13,7 +13,7 @@
 [CmdletBinding()]
 param (
     [Parameter(Position=0)]
-    [ValidateSet("audit", "validate", "compile", "bootstrap", "hydrate", "test", "version", "help")]
+    [ValidateSet("audit", "validate", "compile", "bootstrap", "hydrate", "media", "iso", "test", "version", "help")]
     [string]$Command = "help",
 
     [Parameter(Position=1)]
@@ -25,6 +25,14 @@ param (
     [Alias("o")]
     [string]$OutputDir = $null,
 
+    [Parameter(Mandatory=$false)]
+    [string]$UsbDrive = $null,
+
+    [Parameter(Mandatory=$false)]
+    [string]$IsoPath = $null,
+
+    [switch]$DownloadIso = $false,
+    [switch]$OpenBrowser = $false,
     [switch]$Force = $false,
     [switch]$All = $false,
     [switch]$SkipElevation = $false,
@@ -73,8 +81,72 @@ switch ($Command) {
         $CompilerScript = Join-Path $RepoRoot "src\compiler\Compile-Reglaze.ps1"
         if (Test-Path $CompilerScript) {
             & $CompilerScript -Config $ResolvedCfg -OutputDir $ResolvedOut
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         } else {
             Write-ReglazeError "Compiler engine not found at: $CompilerScript"
+            exit 1
+        }
+
+        # If -UsbDrive specified during compile, chain into USB media creation
+        if ($UsbDrive) {
+            Write-Host ""
+            Write-ReglazeInfo "Proceeding directly to bootable USB media creation on $UsbDrive..."
+            $ResolvedIso = $IsoPath
+            if (-not $ResolvedIso) {
+                . (Join-Path $RepoRoot "src\media\Get-WindowsIso.ps1")
+                $IsoResult = Get-Windows11Iso -DestinationDir (Join-Path $RepoRoot "downloads") -OpenBrowser:$OpenBrowser -Simulation:$Simulation -Live:(-not $Simulation)
+                $ResolvedIso = $IsoResult.IsoPath
+            }
+            . (Join-Path $RepoRoot "src\media\Build-Media.ps1")
+            New-ReglazeBootableUsb -UsbDrive $UsbDrive -IsoPath $ResolvedIso -MediaArtifactsDir $ResolvedOut -Force:$Force -Simulation:$Simulation -Live:(-not $Simulation)
+        }
+    }
+
+    "iso" {
+        $IsoScript = Join-Path $RepoRoot "src\media\Get-WindowsIso.ps1"
+        if (Test-Path $IsoScript) {
+            . $IsoScript
+            $TargetDest = if ($OutputDir) { $OutputDir } else { Join-Path $RepoRoot "downloads" }
+            Get-Windows11Iso -IsoPath $IsoPath -DestinationDir $TargetDest -OpenBrowser:$OpenBrowser -Simulation:$Simulation -Live:(-not $Simulation)
+        } else {
+            Write-ReglazeError "ISO discovery engine not found at: $IsoScript"
+            exit 1
+        }
+    }
+
+    "media" {
+        $ResolvedCfg = if ($Config) { $Config } elseif ($Target) { $Target } else { Resolve-ReglazeConfigFile }
+        $ResolvedOut = if ($OutputDir) { $OutputDir } else { (Join-Path $RepoRoot "dist\media") }
+
+        # Ensure media artifacts are compiled first
+        if (-not (Test-Path (Join-Path $ResolvedOut "autounattend.xml"))) {
+            Write-ReglazeInfo "Compiling deployment media artifacts first..."
+            $CompilerScript = Join-Path $RepoRoot "src\compiler\Compile-Reglaze.ps1"
+            & $CompilerScript -Config $ResolvedCfg -OutputDir $ResolvedOut
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        }
+
+        # Resolve ISO if not specified
+        $ResolvedIso = $IsoPath
+        if (-not $ResolvedIso) {
+            $IsoModule = Join-Path $RepoRoot "src\media\Get-WindowsIso.ps1"
+            . $IsoModule
+            $IsoResult = Get-Windows11Iso -DestinationDir (Join-Path $RepoRoot "downloads") -OpenBrowser:$OpenBrowser -Simulation:$Simulation -Live:(-not $Simulation)
+            $ResolvedIso = $IsoResult.IsoPath
+        }
+
+        if (-not $UsbDrive -and -not $Simulation) {
+            Write-ReglazeError "Missing required -UsbDrive parameter (e.g. -UsbDrive E:)."
+            exit 1
+        }
+        $TargetUsb = if ($UsbDrive) { $UsbDrive } else { "E:" }
+
+        $MediaModule = Join-Path $RepoRoot "src\media\Build-Media.ps1"
+        if (Test-Path $MediaModule) {
+            . $MediaModule
+            New-ReglazeBootableUsb -UsbDrive $TargetUsb -IsoPath $ResolvedIso -MediaArtifactsDir $ResolvedOut -Force:$Force -Simulation:$Simulation -Live:(-not $Simulation)
+        } else {
+            Write-ReglazeError "Media builder module not found at: $MediaModule"
             exit 1
         }
     }
@@ -155,6 +227,8 @@ switch ($Command) {
         Write-Host "    audit        Pre-flight discovery sweep (emits audit-reference.json and scaffolds reglaze.yaml)"
         Write-Host "    validate     Validates blueprint against application catalog & safety constraints"
         Write-Host "    compile      Compiles declarative blueprint into installation media artifacts"
+        Write-Host "    media        Builds vanilla UEFI bootable USB installation media with DISM split"
+        Write-Host "    iso          Discovers or downloads official Microsoft Windows 11 installation ISO"
         Write-Host "    bootstrap    Machine-level unattended provisioning run under LocalAdmin (Phase 4)"
         Write-Host "    hydrate      Staged user-level interactive hydration wizard (Phase 5)"
         Write-Host "    test         Runs verification and diagnostic test suite"

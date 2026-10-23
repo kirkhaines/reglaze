@@ -214,6 +214,7 @@ sequenceDiagram
     participant Audit as Phase 0: Audit
     participant Blueprint as Phase 1: Blueprint
     participant Compiler as Phase 2: Compiler
+    participant Media as Phase 2.5: UEFI Media Builder
     participant WinPE as Phase 3: WinPE Setup
     participant Machine as Phase 4: Machine Bootstrap
     participant User as Phase 5: User Hydration
@@ -223,7 +224,11 @@ sequenceDiagram
     Dev->>Blueprint: Customizes apps, drives & sync roots
     Dev->>Compiler: Run reglaze compile
     Compiler-->>Compiler: Validates against data/applications.json
-    Compiler-->>WinPE: Emits autounattend.xml & deployment media
+    Compiler-->>Compiler: Emits autounattend.xml & payload/
+    Dev->>Media: Run reglaze media -UsbDrive E:
+    Media-->>Media: Acquires Windows 11 ISO (BITS/download)
+    Media-->>Media: Formats USB as FAT32 & splits install.wim via DISM
+    Media-->>WinPE: Injects autounattend.xml & payload/ into bootable USB
     Dev->>WinPE: Boots machine via USB media
     WinPE->>WinPE: Multi-factor disk identification (Match Serial & Model)
     WinPE->>WinPE: Partitions C:, applies Windows image, creates LocalAdmin
@@ -355,6 +360,50 @@ dist/media/
 * **`windowsPE` Pass**: Executes WinPE pre-installation script to identify the target OS disk using multi-factor criteria. Partitions the drive into EFI (100MB), MSR (16MB), Windows OS (NTFS), and Recovery (1000MB).
 * **`specialize` Pass**: Sets computer name, timezone, product key from `audit-reference.json`, and enables base features (`Microsoft-Windows-Subsystem-Linux`, `VirtualMachinePlatform`).
 * **`oobeSystem` Pass**: Creates `LocalAdmin` and the standard user (`local_to_msa`). Sets `AutoLogon` for `LocalAdmin` with `LogonCount: 1`. Directs `FirstLogonCommands` to launch `C:\Reglaze\bootstrap.ps1`.
+
+---
+
+### Phase 2.5: Official Windows 11 ISO Acquisition & Native UEFI Bootable Media Creation (`reglaze media`, `reglaze iso`)
+
+To eliminate reliance on fragile third-party flashing utilities (Rufus, Ventoy) and avoid the manual multi-step Microsoft Media Creation Tool (MCT) GUI wizard, `reglaze` provides a native, 100% Microsoft-compliant UEFI bootable USB flashing engine.
+
+#### 1. Why Native UEFI FAT32 with DISM Split-Wim?
+* **Universal UEFI Boot Compatibility**: UEFI firmware implementations across modern motherboards natively support booting from FAT32 partitions. Formatting the USB drive as FAT32 ensures zero firmware incompatibilities across AMD and Intel platforms.
+* **The 4GB FAT32 Limitation**: Modern Windows 11 installation ISOs contain an `install.wim` file that exceeds FAT32's 4GB file size limit (often 4.8 GB – 5.5 GB).
+* **Native DISM Image Splitting**: Third-party tools often work around this limit by creating complex dual-partition drives or NTFS bootloaders requiring custom UEFI drivers (UEFI:NTFS). Instead, `reglaze` uses Windows' built-in DISM command:
+  ```cmd
+  dism.exe /Split-Image /ImageFile:"D:\sources\install.wim" /SWMFile:"E:\sources\install.swm" /FileSize:3800
+  ```
+  Windows Setup natively recognizes split `.swm` files (`install.swm`, `install2.swm`) out of the box without requiring any registry hacks, modified bootloaders, or bypass scripts.
+* **Preserving Annual Windows Feature Updates**: Flashing tools like Rufus often inject setup-time registry bypasses (bypassing TPM 2.0, Secure Boot, or CPU requirements). These registry hacks frequently break subsequent major Windows feature updates (e.g. 23H2 &rarr; 24H2). `reglaze` produces completely vanilla, standard installation media that satisfies all native Windows servicing pipelines.
+
+#### 2. Workflow & Step-by-Step Execution:
+```mermaid
+flowchart TD
+    Invoke["reglaze media -UsbDrive E:"] --> SafeCheck{"Test-ValidUsbDrive: Is drive C: or internal NVMe/SATA?"}
+    SafeCheck -- Yes --> Abort["CRITICAL SAFETY ABORT: Rejects internal/system drives"]
+    SafeCheck -- No --> FindIso{"Get-Windows11Iso: Local ISO found?"}
+    
+    FindIso -- No --> Download["BITS Background Intelligent Transfer / Browser Helper"] --> MountIso
+    FindIso -- Yes --> MountIso["Mount-DiskImage -ImagePath Win11.iso"]
+    
+    MountIso --> FormatFat32["Format-Volume -FileSystem FAT32 -Label REGLAZE"]
+    FormatFat32 --> CopyBase["robocopy /XF install.wim (extract bootloaders, EFI, setup)"]
+    CopyBase --> DismSplit["dism /Split-Image /ImageFile:install.wim /SWMFile:install.swm /FileSize:3800"]
+    DismSplit --> Inject["Copy autounattend.xml, DiskMatch.ps1, payload/ to USB root"]
+    Inject --> Dismount["Dismount-DiskImage Win11.iso"]
+    Dismount --> Done["Vanilla UEFI Bootable USB Ready"]
+```
+
+#### 3. Strict Safety Guardrails (`Test-ValidUsbDrive`):
+Before issuing any formatting command, `Test-ValidUsbDrive` inspects physical disk topology using CIM and storage cmdlets:
+1. **System Drive Protection**: Evaluates drive letter against `$env:SystemDrive` and strictly rejects `C:` with a fatal error.
+2. **Fixed Internal Disk Protection**: Queries `(Get-Disk).BusType` and `(Get-Disk).IsRemovable`. If the drive is located on an internal NVMe, SATA, or RAID bus (`BusType -ne 'USB'`), formatting is rejected unless `-Force` is explicitly passed.
+
+#### 4. ISO Acquisition Engine (`Get-WindowsIso.ps1`):
+* **Local Discovery**: Scans working directories, `./downloads/`, and standard user `Downloads` folders for existing official ISOs (`Win11*.iso` > 3GB).
+* **Automated BITS Transfer**: If a direct URL is supplied or available, uses Background Intelligent Transfer Service (`Start-BitsTransfer`) with pause/resume support.
+* **Interactive Browser Helper**: If manual download is preferred (`-OpenBrowser`), opens the official Microsoft software download portal (`https://www.microsoft.com/software-download/windows11`) and monitors the target directory with active file-lock polling until download completion.
 
 ---
 
@@ -594,6 +643,11 @@ reglaze/
 │   │   ├── Build-WinGetDSC.ps1
 
 │   │   └── Build-MediaPayload.ps1
+│   ├── media/                     # Phase 2.5 UEFI Media Builder Engine
+│   │   ├── Get-WindowsIso.ps1     # Official ISO discovery & BITS downloader
+│   │   └── Build-Media.ps1        # Universal FAT32 builder with DISM split-wim
+│   ├── common/                    # Shared Subsystems & Discovery
+│   │   └── GameLibraries.ps1      # Multi-library game discovery & fresh install engine
 │   ├── linking/                   # Junction & Redirection Engine
 │   │   ├── New-DirectoryJunction.ps1
 │   │   ├── Test-ReparsePoint.ps1
