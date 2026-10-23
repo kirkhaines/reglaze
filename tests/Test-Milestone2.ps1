@@ -32,6 +32,8 @@ $RepoRoot = Split-Path -Parent $PSScriptRoot
 . (Join-Path $RepoRoot "src\compiler\DiskMatch.ps1")
 . (Join-Path $RepoRoot "src\compiler\Build-Payload.ps1")
 . (Join-Path $RepoRoot "src\compiler\Compile-Reglaze.ps1")
+. (Join-Path $RepoRoot "src\media\Get-WindowsIso.ps1")
+. (Join-Path $RepoRoot "src\media\Build-Media.ps1")
 
 $PassCount = 0
 $FailCount = 0
@@ -420,6 +422,53 @@ custom:
             (Test-Path (Join-Path $E2EMedia "Reglaze\DiskMatch.ps1")) -and
             (Test-Path (Join-Path $E2EMedia "payload\bootstrap.ps1"))
         )
+
+    # -------------------------------------------------------------------------
+    # TEST 9: Windows 11 ISO Discovery & Download Simulation
+    # -------------------------------------------------------------------------
+    $IsoSimRes = Get-Windows11Iso -DestinationDir (Join-Path $TestDir "downloads") -Simulation:$true
+    Assert-Test -Name "22. ISO Acquisition: simulates official Windows 11 ISO discovery and destination resolution" `
+        -Condition ($IsoSimRes.Status -eq "Simulated" -and $IsoSimRes.IsoPath -like "*Win11*.iso") `
+        -Details "Status: $($IsoSimRes.Status), Path: $($IsoSimRes.IsoPath)"
+
+    # -------------------------------------------------------------------------
+    # TEST 10: UEFI Bootable Media Builder Simulation
+    # -------------------------------------------------------------------------
+    $MediaSimRes = New-ReglazeBootableUsb -UsbDrive "E:" -IsoPath $IsoSimRes.IsoPath -MediaArtifactsDir $E2EMedia -Simulation:$true
+    Assert-Test -Name "23. Media Builder: creates vanilla UEFI bootable USB payload with FAT32 & DISM split simulation" `
+        -Condition ($MediaSimRes.Status -eq "Success" -and $MediaSimRes.Format -eq "FAT32" -and $MediaSimRes.IsSimulated -eq $true) `
+        -Details "Status: $($MediaSimRes.Status), Format: $($MediaSimRes.Format)"
+
+    # -------------------------------------------------------------------------
+    # TEST 11: Safety Constraint - Target USB Rejects System Drive
+    # -------------------------------------------------------------------------
+    $RejectedC = $false
+    try {
+        Test-ValidUsbDrive -DriveLetter "C:"
+    } catch {
+        $RejectedC = ($_.Exception.Message -match "CRITICAL SAFETY VIOLATION")
+    }
+    Assert-Test -Name "24. Media Safety: Test-ValidUsbDrive strictly rejects C: system drive with critical safety violation" `
+        -Condition $RejectedC `
+        -Details "Rejected C: $RejectedC"
+
+    # -------------------------------------------------------------------------
+    # TEST 12: Dynamic Most Recent ISO Selection
+    # -------------------------------------------------------------------------
+    $MultiIsoDir = Join-Path $TestDir "multi_iso"
+    New-Item -ItemType Directory -Path $MultiIsoDir -Force | Out-Null
+    $OlderIsoPath = Join-Path $MultiIsoDir "Win11_23H2_English_x64.iso"
+    $NewerIsoPath = Join-Path $MultiIsoDir "Win11_24H2_English_x64.iso"
+
+    $Stream1 = [System.IO.File]::Create($OlderIsoPath); $Stream1.SetLength(4GB); $Stream1.Close()
+    $Stream2 = [System.IO.File]::Create($NewerIsoPath); $Stream2.SetLength(4GB); $Stream2.Close()
+    (Get-Item $OlderIsoPath).LastWriteTime = (Get-Date).AddDays(-30)
+    (Get-Item $NewerIsoPath).LastWriteTime = (Get-Date)
+
+    $SelectedIso = Find-LocalWindowsIso -SearchDir $MultiIsoDir
+    Assert-Test -Name "25. ISO Selection: Find-LocalWindowsIso scans candidates and selects the most recent release" `
+        -Condition ($SelectedIso -eq $NewerIsoPath) `
+        -Details "Selected: $SelectedIso, Expected: $NewerIsoPath"
 
 } finally {
     # Cleanup temporary test files

@@ -430,4 +430,35 @@
   ```
 - **Avoid Notes:** Omission of `--accept-package-agreements` or `--disable-interactivity` which can cause WinGet to hang waiting on stdin.
 
+---
+
+## Milestone 5 HITL Summary Table (Automated VM & USB Installation)
+
+| Test ID | Subsystem / Target | File Reference | Status | Last Run | Result Summary |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **HITL-M5-01** | USB Media Creation / Format-Volume & DISM Split-Image | `src/media/Build-Media.ps1` | `PENDING` | - | Formats target USB as FAT32, splits install.wim with DISM, injects autounattend.xml + payload |
+| **HITL-M5-02** | Hyper-V Automated VM Deployment | `tests/Test-Milestone5-VM.ps1` | `PENDING` | - | End-to-end OS install and bootstrap verification via PowerShell Direct |
+
+---
+
+### HITL-M5-01: USB Media Creation / Format-Volume & DISM Split-Image
+- **Target:** `Format-Volume`, `Mount-DiskImage`, `dism.exe /Split-Image`
+- **File:** `src/media/Build-Media.ps1`
+- **Description:** Creates vanilla UEFI bootable USB flash drive formatted with FAT32, splits `install.wim` into `.swm` slices via DISM, and stages deployment artifacts (`autounattend.xml`, `DiskMatch.ps1`, `payload/`).
+- **Status:** `PENDING`
+- **Test Snippet (Safe / Read-Only):**
+  ```powershell
+  # Safe inspection of connected USB storage devices:
+  Get-Disk | Where-Object { $_.BusType -eq 'USB' } | Select-Object Number, FriendlyName, BusType, Size, OperationalStatus
+  ```
+- **Last Input:** Read-only query of physical disks on developer host
+- **Last Result:** PENDING (Automated simulation verified; awaiting user live USB flash run)
+- **Verified Pattern:**
+  ```powershell
+  Format-Volume -DriveLetter $CleanLetter -FileSystem FAT32 -NewFileSystemLabel "REGLAZE" -Force
+  dism.exe /Split-Image /ImageFile:"$SourceWim" /SWMFile:"$TargetSwm" /FileSize:3800
+  ```
+- **Avoid Notes:** Creating media on non-removable internal NVMe/SATA disks; using Rufus registry bypasses that break annual Windows feature updates.
+
+
 
