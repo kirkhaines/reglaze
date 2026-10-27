@@ -11,6 +11,9 @@ bin/*.exe
 audit-output/
 tests/temp_*/
 
+# Downloads (Windows ISOs)
+downloads/
+
 # Secrets and environment configs
 .env
 .env.*
