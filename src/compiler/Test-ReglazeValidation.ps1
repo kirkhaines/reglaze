@@ -62,6 +62,13 @@ function Test-ReglazeBlueprint {
 
     # 2. Check Top-Level Structure
     if (-not $Blueprint.version) { $Errors.Add("Missing required root property 'version'.") }
+    if ($Blueprint.PSObject.Properties.Name -contains "profile") {
+        if ([string]::IsNullOrWhiteSpace([string]$Blueprint.profile)) {
+            $Errors.Add("Root property 'profile' cannot be empty.")
+        }
+    } else {
+        $Warnings.Add("Blueprint does not declare a top-level 'profile' property (recommended for computer-to-profile sync tracking).")
+    }
     if (-not $Blueprint.system) { $Errors.Add("Missing required root section 'system'.") }
     if (-not $Blueprint.disks) { $Errors.Add("Missing required root section 'disks'.") }
     if (-not $Blueprint.storage) { $Errors.Add("Missing required root section 'storage'.") }
@@ -78,23 +85,93 @@ function Test-ReglazeBlueprint {
         $Errors.Add("Missing required section 'system.users'.")
     }
 
-    # 4. Check Disks & Target OS Isolation
+    # 4. Check Disks, Mount Points & Target OS Isolation
+    $ForbiddenMountLetters = @("C:", "X:", "A:", "B:")
+    $DeclaredPhysicalDrives = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    [void]$DeclaredPhysicalDrives.Add("C:")
+
     $OsDiskId = $null
+    $OsDiskSerial = $null
     if ($Blueprint.disks.target_os_disk) {
         $OsDiskId = $Blueprint.disks.target_os_disk.disk_id
-        if ($null -eq $OsDiskId -and -not $Blueprint.disks.target_os_disk.serial_number) {
+        $OsDiskSerial = if ($Blueprint.disks.target_os_disk.serial_number) { $Blueprint.disks.target_os_disk.serial_number.Trim() } else { $null }
+        if ($null -eq $OsDiskId -and -not $OsDiskSerial) {
             $Errors.Add("Target OS disk must specify either 'disk_id' or 'serial_number'.")
         }
     } else {
         $Errors.Add("Missing required section 'disks.target_os_disk'.")
     }
 
+    $SeenPreservedMounts = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    $SeenPreservedSerials = @{}
+
     if ($Blueprint.disks.preserved_disks) {
         foreach ($PDisk in $Blueprint.disks.preserved_disks) {
-            if ($null -ne $OsDiskId -and $PDisk.disk_id -eq $OsDiskId) {
+            if ($null -ne $OsDiskId -and $null -ne $PDisk.disk_id -and $PDisk.disk_id -eq $OsDiskId) {
                 $Errors.Add("Disk conflict: Preserved disk ID $($PDisk.disk_id) matches Target OS disk ID $($OsDiskId).")
             }
+            $PSerial = if ($PDisk.serial_number) { $PDisk.serial_number.Trim() } else { "" }
+            $PGuid = if ($PDisk.partition_guid) { $PDisk.partition_guid.Trim() } else { "" }
+            $PPartNum = $PDisk.partition_number
+
+            if ($OsDiskSerial -and $PSerial -and $PSerial -ieq $OsDiskSerial) {
+                $Errors.Add("Disk conflict: Preserved disk serial_number '$PSerial' matches Target OS disk serial_number.")
+            }
+
+            if ($PDisk.expected_mount) {
+                $RawMount = $PDisk.expected_mount.ToString().Trim().TrimEnd('\')
+                if ($RawMount -notmatch '^[a-zA-Z]:$') {
+                    $Errors.Add("Invalid expected_mount '$($PDisk.expected_mount)' on preserved disk. Must be a drive letter like 'D:'.")
+                } else {
+                    $NormMount = $RawMount.ToUpperInvariant()
+                    if ($ForbiddenMountLetters -contains $NormMount) {
+                        $Errors.Add("Invalid expected_mount '$NormMount' on preserved disk: '$NormMount' is reserved by Windows/WinPE and cannot be assigned to a preserved disk.")
+                    }
+                    if (-not $SeenPreservedMounts.Add($NormMount)) {
+                        $Errors.Add("Duplicate expected_mount '$NormMount' declared across multiple preserved_disks.")
+                    }
+                    [void]$DeclaredPhysicalDrives.Add($NormMount)
+                }
+
+                if ([string]::IsNullOrWhiteSpace($PSerial) -and [string]::IsNullOrWhiteSpace($PGuid)) {
+                    $Errors.Add("Preserved disk with expected_mount '$($PDisk.expected_mount)' must specify 'serial_number' (or 'partition_guid') for deterministic identification.")
+                }
+            }
+
+            if ($PSerial) {
+                if ($SeenPreservedSerials.ContainsKey($PSerial)) {
+                    $PrevDisk = $SeenPreservedSerials[$PSerial]
+                    $HasDisambiguator = (($null -ne $PPartNum -or $PGuid) -and ($null -ne $PrevDisk.partition_number -or $PrevDisk.partition_guid)) -and
+                                        (($PPartNum -ne $PrevDisk.partition_number) -or ($PGuid -and $PGuid -ine $PrevDisk.partition_guid))
+                    if (-not $HasDisambiguator) {
+                        $Errors.Add("Ambiguous preserved disk identification: Duplicate serial_number '$PSerial' across preserved_disks without distinct 'partition_number' or 'partition_guid'.")
+                    }
+                } else {
+                    $SeenPreservedSerials[$PSerial] = $PDisk
+                }
+            }
         }
+    }
+
+    $StreamDrive = $null
+    if ($Blueprint.storage -and $Blueprint.storage.streaming -and $Blueprint.storage.streaming.mount_point) {
+        $RawStreamMount = $Blueprint.storage.streaming.mount_point.ToString().Trim().TrimEnd('\')
+        if ($RawStreamMount -notmatch '^[a-zA-Z]:$') {
+            $Errors.Add("Invalid storage.streaming.mount_point '$($Blueprint.storage.streaming.mount_point)'. Must be a drive letter like 'E:' or 'G:'.")
+        } else {
+            $StreamDrive = $RawStreamMount.ToUpperInvariant()
+            if ($ForbiddenMountLetters -contains $StreamDrive) {
+                $Errors.Add("Invalid storage.streaming.mount_point '$StreamDrive': '$StreamDrive' is reserved by Windows/WinPE.")
+            }
+            if ($SeenPreservedMounts.Contains($StreamDrive)) {
+                $Errors.Add("Drive letter collision: storage.streaming.mount_point '$StreamDrive' conflicts with a preserved_disks.expected_mount.")
+            }
+        }
+    }
+
+    $AllowedTargetDrives = [System.Collections.Generic.HashSet[string]]::new($DeclaredPhysicalDrives, [System.StringComparer]::OrdinalIgnoreCase)
+    if ($StreamDrive) {
+        [void]$AllowedTargetDrives.Add($StreamDrive)
     }
 
     # 5. Extract & Test Variable Resolution Map
@@ -157,44 +234,103 @@ function Test-ReglazeBlueprint {
         }
     }
 
-    # 7. Check dev_repos variable tokens
-    if ($Blueprint.dev_repos -and $Blueprint.dev_repos.root) {
-        $ResolvedDevRoot = Resolve-VariableString -InputString $Blueprint.dev_repos.root -VariableMap $VarMap
-        $DevUnresolved = Test-UnresolvedTokens -InputString $ResolvedDevRoot
-        if ($DevUnresolved.Count -gt 0) {
-            $Errors.Add("Unresolvable variable token(s) in dev_repos.root '$($Blueprint.dev_repos.root)': $($DevUnresolved -join ', ')")
-        }
-    }
-
-    # 8. Directory Junction Integrity & Filesystem Rules Validation
-    # Enforces Windows NTFS Reparse Point constraints, filesystem rules, target drive existence,
-    # UNC rejection, circular loop prevention, and parent/child nesting prevention.
-    $AllowedTargetDrives = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
-    $AllowedTargetDrives.Add("C:") | Out-Null
-    if ($Blueprint.storage -and $Blueprint.storage.streaming -and $Blueprint.storage.streaming.mount_point) {
-        $StreamDrive = ([System.IO.Path]::GetPathRoot($Blueprint.storage.streaming.mount_point)).TrimEnd('\')
-        if ($StreamDrive) { $AllowedTargetDrives.Add($StreamDrive) | Out-Null }
-    }
-    if ($Blueprint.disks -and $Blueprint.disks.preserved_disks) {
-        foreach ($PDisk in $Blueprint.disks.preserved_disks) {
-            if ($PDisk.expected_mount) {
-                $PDrive = ([System.IO.Path]::GetPathRoot($PDisk.expected_mount)).TrimEnd('\')
-                if ($PDrive) { $AllowedTargetDrives.Add($PDrive) | Out-Null }
+    # 7. Check Custom Variables, Synced Directories, App Install Targets & dev_repos
+    if ($Blueprint.variables -and $VarMap) {
+        $CustomVars = $Blueprint.variables
+        $VarProps = if ($CustomVars -is [System.Collections.IDictionary]) { $CustomVars.Keys } else { $CustomVars.PSObject.Properties.Name }
+        foreach ($VarName in $VarProps) {
+            $RawVarVal = if ($CustomVars -is [System.Collections.IDictionary]) { [string]$CustomVars[$VarName] } else { [string]$CustomVars.$VarName }
+            if ($RawVarVal) {
+                $ResolvedVarVal = Resolve-VariableString -InputString $RawVarVal -VariableMap $VarMap
+                $VarUnresolved = Test-UnresolvedTokens -InputString $ResolvedVarVal
+                if ($VarUnresolved.Count -gt 0) {
+                    $Errors.Add("Unresolvable or circular variable token(s) in variables.$VarName ('$RawVarVal'): $($VarUnresolved -join ', ')")
+                } elseif ($ResolvedVarVal -match '^([a-zA-Z]:)(?:\\|$)') {
+                    $VarDrive = $Matches[1].ToUpperInvariant()
+                    if (-not $AllowedTargetDrives.Contains($VarDrive)) {
+                        $Errors.Add("Variable '$VarName' ('$RawVarVal' -> '$ResolvedVarVal') references undeclared drive '$VarDrive'.")
+                    }
+                }
             }
         }
     }
+
+    $ResolvedSyncRoots = [System.Collections.Generic.List[PSCustomObject]]::new()
+    $SeenSyncLocalPaths = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+
     if ($Blueprint.storage -and $Blueprint.storage.sync -and $Blueprint.storage.sync.directories) {
+        if ($Blueprint.storage.sync.migration_mode -and $Blueprint.storage.sync.migration_mode -notin @("copy", "move", "skip")) {
+            $Errors.Add("Invalid storage.sync.migration_mode '$($Blueprint.storage.sync.migration_mode)'. Allowed values: 'copy', 'move', 'skip'.")
+        }
         $SyncDirs = $Blueprint.storage.sync.directories
         $DirProps = if ($SyncDirs -is [System.Collections.IDictionary]) { $SyncDirs.Keys } else { $SyncDirs.PSObject.Properties.Name }
         foreach ($Prop in $DirProps) {
             $DirObj = if ($SyncDirs -is [System.Collections.IDictionary]) { $SyncDirs[$Prop] } else { $SyncDirs.$Prop }
             if ($DirObj.local_path) {
                 $ResolvedSyncPath = Resolve-VariableString -InputString $DirObj.local_path -VariableMap $VarMap
+                $SyncUnresolved = Test-UnresolvedTokens -InputString $ResolvedSyncPath
+                if ($SyncUnresolved.Count -gt 0) {
+                    $Errors.Add("Unresolvable variable token(s) in storage.sync.directories.$Prop.local_path '$($DirObj.local_path)': $($SyncUnresolved -join ', ')")
+                    continue
+                }
+
                 $SyncDrive = ([System.IO.Path]::GetPathRoot($ResolvedSyncPath)).TrimEnd('\')
-                if ($SyncDrive) { $AllowedTargetDrives.Add($SyncDrive) | Out-Null }
+                if ($DirObj.local_path -like "*%STREAM%*" -or ($StreamDrive -and $SyncDrive -ieq $StreamDrive)) {
+                    $Errors.Add("Invalid sync directory '$Prop': local_path '$($DirObj.local_path)' ('$ResolvedSyncPath') cannot reside on the virtual streaming mount '$StreamDrive'. Synced directories must reside on a physical drive (C: or preserved_disks).")
+                } elseif (-not $SyncDrive -or -not $DeclaredPhysicalDrives.Contains($SyncDrive)) {
+                    $Errors.Add("Sync directory '$Prop' local_path '$($DirObj.local_path)' ('$ResolvedSyncPath') references undeclared physical drive '$SyncDrive'. Must reside on C: or a declared preserved_disks.expected_mount.")
+                }
+
+                $NormSyncPath = $ResolvedSyncPath.TrimEnd('\')
+                if (-not $SeenSyncLocalPaths.Add($NormSyncPath)) {
+                    $Errors.Add("Duplicate storage.sync.directories local_path '$NormSyncPath' on sync entry '$Prop'.")
+                } else {
+                    $ResolvedSyncRoots.Add([PSCustomObject]@{
+                        Id        = $Prop
+                        LocalPath = $NormSyncPath
+                    })
+                }
             }
         }
     }
+
+    if ($Blueprint.applications) {
+        $AppProps = @($Blueprint.applications.PSObject.Properties)
+        foreach ($Prop in $AppProps) {
+            $AppId = $Prop.Name
+            $AppConfig = $Prop.Value
+            if ($AppConfig -and $AppConfig.install -and $AppConfig.install.target_directory) {
+                $RawInstallDir = [string]$AppConfig.install.target_directory
+                $ResolvedInstallDir = Resolve-VariableString -InputString $RawInstallDir -VariableMap $VarMap
+                $InstUnresolved = Test-UnresolvedTokens -InputString $ResolvedInstallDir
+                if ($InstUnresolved.Count -gt 0) {
+                    $Errors.Add("Unresolvable variable token(s) in applications.$AppId.install.target_directory '$RawInstallDir': $($InstUnresolved -join ', ')")
+                } else {
+                    $InstDrive = ([System.IO.Path]::GetPathRoot($ResolvedInstallDir)).TrimEnd('\')
+                    if (-not $InstDrive -or -not $DeclaredPhysicalDrives.Contains($InstDrive)) {
+                        $Errors.Add("Application '$AppId' install.target_directory '$RawInstallDir' ('$ResolvedInstallDir') references drive '$InstDrive', which is not a declared physical drive (C: or preserved_disks).")
+                    }
+                }
+            }
+        }
+    }
+
+    if ($Blueprint.dev_repos -and $Blueprint.dev_repos.root) {
+        $ResolvedDevRoot = Resolve-VariableString -InputString $Blueprint.dev_repos.root -VariableMap $VarMap
+        $DevUnresolved = Test-UnresolvedTokens -InputString $ResolvedDevRoot
+        if ($DevUnresolved.Count -gt 0) {
+            $Errors.Add("Unresolvable variable token(s) in dev_repos.root '$($Blueprint.dev_repos.root)': $($DevUnresolved -join ', ')")
+        } else {
+            $DevDrive = ([System.IO.Path]::GetPathRoot($ResolvedDevRoot)).TrimEnd('\')
+            if ($DevDrive -and -not $AllowedTargetDrives.Contains($DevDrive)) {
+                $Errors.Add("dev_repos.root '$($Blueprint.dev_repos.root)' ('$ResolvedDevRoot') references undeclared drive '$DevDrive'.")
+            }
+        }
+    }
+
+    # 8. Directory Junction Integrity & Filesystem Rules Validation
+    # Enforces Windows NTFS Reparse Point constraints, filesystem rules, target drive existence,
+    # UNC rejection, circular loop prevention, and parent/child nesting prevention.
 
     $AllJunctions = [System.Collections.Generic.List[PSCustomObject]]::new()
 
@@ -321,6 +457,16 @@ function Test-ReglazeBlueprint {
             $NormTarget = $Target.TrimEnd('\') + "\"
             if ($NormTarget.StartsWith($NormLink, [System.StringComparison]::OrdinalIgnoreCase) -or $NormLink.StartsWith($NormTarget, [System.StringComparison]::OrdinalIgnoreCase)) {
                 $Errors.Add("Circular loop detected: Junction link '$Link' and target '$Target' are nested within each other on the same drive '$LinkDrive'.")
+            }
+        }
+
+        # 7. Check if junction Link collides with or is nested inside a synced directory
+        $CleanLink = $Link.TrimEnd('\')
+        foreach ($SyncRoot in $ResolvedSyncRoots) {
+            if ($CleanLink.Equals($SyncRoot.LocalPath, [System.StringComparison]::OrdinalIgnoreCase)) {
+                $Errors.Add("Junction link '$CleanLink' (App '$AppId', Dir '$DirId') collides directly with storage.sync.directories root '$($SyncRoot.Id)' ('$($SyncRoot.LocalPath)').")
+            } elseif ($CleanLink.StartsWith($SyncRoot.LocalPath + "\", [System.StringComparison]::OrdinalIgnoreCase)) {
+                $Warnings.Add("Junction link '$CleanLink' (App '$AppId', Dir '$DirId') is nested inside synced directory '$($SyncRoot.Id)' ('$($SyncRoot.LocalPath)'). This switches '$DirId' from sync behavior to stream/junction behavior.")
             }
         }
     }

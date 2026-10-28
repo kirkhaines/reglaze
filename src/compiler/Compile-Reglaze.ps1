@@ -138,10 +138,12 @@ function Invoke-ReglazeCompilation {
     Copy-Item -Path $SourceDiskMatch -Destination $TargetDiskMatch2 -Force
     Write-ReglazeSuccess "Staged: $TargetDiskMatch1"
 
-    # 8. Compile Deployment Payload (WinGet DSC, BitLocker, Junctions, Bootstrap, Hydrate, WSL2)
+    # 8. Compile Deployment Payload (WinGet DSC, Disk Config, BitLocker, Junctions, Google Drive Setup, Bootstrap, Hydrate, WSL2)
     Write-ReglazeInfo "Compiling deployment payload artifacts..."
-    $PayloadResult = Build-ReglazePayload -Blueprint $Blueprint -AuditReference $AuditReference -RepoRoot $RepoRoot -PayloadDir $PayloadDir
+    $PayloadResult = Build-ReglazePayload -Blueprint $Blueprint -AuditReference $AuditReference -RepoRoot $RepoRoot -PayloadDir $PayloadDir -BlueprintFile $BlueprintFile
     Write-ReglazeSuccess "Compiled: $($PayloadResult.JunctionCount) directory junctions in junctions-manifest.json"
+    Write-ReglazeSuccess "Compiled: Preserved disk & drive letter reconciliation config ($($PayloadResult.DiskConfigPath))"
+    Write-ReglazeSuccess "Compiled: Google Drive streaming & sync migration payload ($($PayloadResult.GoogleDriveSetupPath))"
     Write-ReglazeSuccess "Compiled: WinGet DSC application configuration ($($PayloadResult.DscPath))"
     Write-ReglazeSuccess "Compiled: Machine bootstrap runner ($($PayloadResult.BootstrapPath))"
     Write-ReglazeSuccess "Compiled: User hydration wizard ($($PayloadResult.HydratePath))"

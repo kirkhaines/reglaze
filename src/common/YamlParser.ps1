@@ -28,8 +28,24 @@ function ConvertFrom-ReglazeYaml {
         while ($indent -lt $raw.Length -and $raw[$indent] -eq ' ') { $indent++ }
         
         $content = $raw.Trim()
-        if ($content -match '^(.*?)\s+#(?![^"]*"|[^'']*'').*$') {
-            $content = $Matches[1].Trim()
+        $inDouble = $false
+        $inSingle = $false
+        $commentPos = -1
+        for ($cIdx = 0; $cIdx -lt $content.Length; $cIdx++) {
+            $ch = $content[$cIdx]
+            if ($ch -eq '"' -and -not $inSingle) {
+                $inDouble = -not $inDouble
+            } elseif ($ch -eq "'" -and -not $inDouble) {
+                $inSingle = -not $inSingle
+            } elseif ($ch -eq '#' -and -not $inDouble -and -not $inSingle) {
+                if ($cIdx -eq 0 -or [char]::IsWhiteSpace($content[$cIdx - 1])) {
+                    $commentPos = $cIdx
+                    break
+                }
+            }
+        }
+        if ($commentPos -ge 0) {
+            $content = $content.Substring(0, $commentPos).Trim()
         }
 
         $lines.Add([PSCustomObject]@{

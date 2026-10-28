@@ -254,6 +254,29 @@ try {
     # =========================================================================
     # Test 8: End-to-End Start-UserHydration in Simulation Mode
     # =========================================================================
+    $MockGDriveSetup = [PSCustomObject]@{
+        Profile              = "workstation"
+        TargetComputerName   = "NEW-PC"
+        SourceComputerName   = "OLD-PC"
+        PrimaryUserEmail     = "user@example.com"
+        StreamMountPoint     = "E:"
+        StreamVerifyFolder   = "E:\My Drive"
+        MigrationMode        = "copy"
+        SyncDirectories      = @(
+            [PSCustomObject]@{
+                Id                       = "documents"
+                LocalPath                = "C:\Users\developer\Documents"
+                CloudFolder              = "Documents"
+                VerifyFolder             = "C:\Users\developer\Documents"
+                SyncVariable             = "SYNC_DOCUMENTS"
+                SourceComputerStreamPath = "E:\Other computers\OLD-PC\Documents"
+            }
+        )
+        RenderedInstructions = @("Sign in to Google Drive as user@example.com and verify E:\My Drive.")
+        GuideFile            = "google-drive-guide.md"
+    }
+    $MockGDriveSetup | ConvertTo-Json -Depth 6 | Set-Content -Path (Join-Path $TestDir "google-drive-setup.json") -Encoding UTF8
+
     $EndToEndStateFile = Join-Path $TestDir "e2e-hydration-state.json"
     $StartHydrationScript = Join-Path $RepoRoot "src\runner\Start-UserHydration.ps1"
 

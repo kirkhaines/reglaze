@@ -22,7 +22,8 @@ function Invoke-DiskMatching {
         [string]$TargetBusType,
         [int]$TargetDiskId = -1,
         [string[]]$PreservedSerialNumbers = @(),
-        [string]$DiskpartOutputPath = "X:\diskpart.txt"
+        [string]$DiskpartOutputPath = "X:\diskpart.txt",
+        [array]$MockDisks = $null
     )
 
     Write-Host "================================================================"
@@ -31,23 +32,40 @@ function Invoke-DiskMatching {
 
     # 1. Query Physical Disks in WinPE
     $Disks = @()
-    try {
-        $Disks = Get-PhysicalDisk -ErrorAction Stop
-    } catch {
+    if ($null -ne $MockDisks) {
+        $Disks = @($MockDisks)
+    } else {
         try {
-            $CimDisks = Get-CimInstance Win32_DiskDrive
-            foreach ($cd in $CimDisks) {
+            $RawDisks = @(Get-Disk -ErrorAction Stop | Sort-Object Number)
+            foreach ($rd in $RawDisks) {
                 $Disks += [PSCustomObject]@{
-                    DeviceId     = $cd.Index
-                    FriendlyName = $cd.Model
-                    SerialNumber = $cd.SerialNumber
-                    BusType      = $cd.InterfaceType
-                    Size         = $cd.Size
+                    DeviceId     = $rd.Number
+                    FriendlyName = $rd.FriendlyName
+                    SerialNumber = if ($rd.SerialNumber) { $rd.SerialNumber.Trim() } else { "" }
+                    BusType      = "$($rd.BusType)"
+                    Size         = $rd.Size
                 }
             }
         } catch {
-            Write-Error "CRITICAL: Unable to query physical disk topology in WinPE environment."
-            exit 1
+            try {
+                $Disks = Get-PhysicalDisk -ErrorAction Stop
+            } catch {
+                try {
+                    $CimDisks = Get-CimInstance Win32_DiskDrive -ErrorAction Stop
+                    foreach ($cd in $CimDisks) {
+                        $Disks += [PSCustomObject]@{
+                            DeviceId     = $cd.Index
+                            FriendlyName = $cd.Model
+                            SerialNumber = $cd.SerialNumber
+                            BusType      = $cd.InterfaceType
+                            Size         = $cd.Size
+                        }
+                    }
+                } catch {
+                    Write-Error "CRITICAL: Unable to query physical disk topology in WinPE environment."
+                    exit 1
+                }
+            }
         }
     }
 

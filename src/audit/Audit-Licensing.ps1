@@ -12,13 +12,28 @@ function Get-LicensingAudit {
     [CmdletBinding()]
     param()
 
-    $OsInfo = Get-CimInstance Win32_OperatingSystem -ErrorAction SilentlyContinue
-    $LicenseProduct = Get-CimInstance SoftwareLicensingProduct -Filter "PartialProductKey IS NOT NULL" -ErrorAction SilentlyContinue |
-        Where-Object { $_.Name -like "*Windows*" } | Select-Object -First 1
+    $OsInfo = try { Get-CimInstance Win32_OperatingSystem -ErrorAction Stop } catch { $null }
+    $LicenseProduct = try {
+        Get-CimInstance SoftwareLicensingProduct -Filter "PartialProductKey IS NOT NULL" -ErrorAction Stop |
+            Where-Object { $_.Name -like "*Windows*" } | Select-Object -First 1
+    } catch { $null }
 
-    $Edition = if ($OsInfo) { $OsInfo.Caption.Replace("Microsoft ", "").Trim() } else { "Windows 11 Pro" }
-    $Build = if ($OsInfo) { $OsInfo.BuildNumber } else { "26100" }
-    $FullVersion = if ($OsInfo) { "$($OsInfo.Caption) $($OsInfo.Version) (Build $Build)" } else { "Microsoft Windows 11 Build $Build" }
+    $NtCurrentVersion = try { Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion" -ErrorAction SilentlyContinue } catch { $null }
+    $Edition = if ($OsInfo) {
+        $OsInfo.Caption.Replace("Microsoft ", "").Trim()
+    } elseif ($NtCurrentVersion -and $NtCurrentVersion.ProductName) {
+        $NtCurrentVersion.ProductName.Replace("Microsoft ", "").Trim()
+    } else {
+        "Windows 11 Pro"
+    }
+    $Build = if ($OsInfo) {
+        $OsInfo.BuildNumber
+    } elseif ($NtCurrentVersion -and $NtCurrentVersion.CurrentBuildNumber) {
+        $NtCurrentVersion.CurrentBuildNumber
+    } else {
+        "26100"
+    }
+    $FullVersion = if ($OsInfo) { "$($OsInfo.Caption) $($OsInfo.Version) (Build $Build)" } else { "Microsoft $Edition (Build $Build)" }
 
     $Channel = "Retail"
     $Status = "Licensed"

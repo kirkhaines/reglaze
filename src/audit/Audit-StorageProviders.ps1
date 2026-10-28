@@ -58,8 +58,25 @@ function Get-StorageProvidersAudit {
 import sqlite3, json, sys
 temp_db = sys.argv[1]
 conn = sqlite3.connect(temp_db)
-cursor = conn.execute("SELECT title, root_path, last_seen_absolute_path FROM roots WHERE state = 2;")
-rows = [{'title': r[0], 'root_path': r[1], 'absolute_path': r[2]} for r in cursor.fetchall()]
+cols = [c[1] for c in conn.execute("PRAGMA table_info(roots);").fetchall()]
+has_doc_id = 'doc_id' in cols
+has_media_id = 'media_id' in cols
+query_cols = ['title', 'root_path', 'last_seen_absolute_path']
+if has_doc_id:
+    query_cols.append('doc_id')
+if has_media_id:
+    query_cols.append('media_id')
+cursor = conn.execute(f"SELECT {', '.join(query_cols)} FROM roots WHERE state = 2;")
+rows = []
+for r in cursor.fetchall():
+    item = {'title': r[0], 'root_path': r[1], 'absolute_path': r[2], 'doc_id': None, 'media_id': None}
+    idx = 3
+    if has_doc_id:
+        item['doc_id'] = r[idx]
+        idx += 1
+    if has_media_id:
+        item['media_id'] = r[idx]
+    rows.append(item)
 conn.close()
 print(json.dumps(rows))
 '@
@@ -79,6 +96,8 @@ print(json.dumps(rows))
                             cloud_folder  = $Root.title
                             verify_folder = $Root.absolute_path
                             sync_variable = $VarName
+                            cloud_doc_id  = $Root.doc_id
+                            media_id      = $Root.media_id
                         }
                     }
                 }

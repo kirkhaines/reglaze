@@ -155,19 +155,35 @@ if (Test-Path $TestOutputDir) {
     Remove-Item -Path $TestOutputDir -Recurse -Force
 }
 
-Assert-Test "Invoke-Audit.ps1 emits audit-reference.json and scaffolds reglaze.yaml" {
+Assert-Test "Invoke-Audit.ps1 requires -Profile when no existing reglaze.yaml is present" {
     $AuditScript = Join-Path $RepoRoot "src\audit\Invoke-Audit.ps1"
-    & $AuditScript -OutputDir $TestOutputDir -Force
+    $ThrewMissingProfile = $false
+    try {
+        & $AuditScript -OutputDir $TestOutputDir -SkipElevation 2>$null
+    } catch {
+        if ($_.Exception.Message -match "Profile") {
+            $ThrewMissingProfile = $true
+        }
+    }
+    return $ThrewMissingProfile
+}
+
+Assert-Test "Invoke-Audit.ps1 emits audit-reference.json, profile-computers.json, and scaffolds reglaze.yaml" {
+    $AuditScript = Join-Path $RepoRoot "src\audit\Invoke-Audit.ps1"
+    & $AuditScript -OutputDir $TestOutputDir -Profile "workstation" -Force -SkipElevation
 
     $AuditJson = Join-Path $TestOutputDir "audit-reference.json"
+    $ProfileRegJson = Join-Path $TestOutputDir "profile-computers.json"
     $Blueprint = Join-Path $TestOutputDir "reglaze.yaml"
 
     if (-not (Test-Path $AuditJson)) { return $false }
+    if (-not (Test-Path $ProfileRegJson)) { return $false }
     if (-not (Test-Path $Blueprint)) { return $false }
 
     # Validate audit-reference.json content
     $AuditData = Get-Content -Raw $AuditJson | ConvertFrom-Json
-    $HasMetadata = ($AuditData.audit_metadata -ne $null)
+    $HasMetadata = ($AuditData.audit_metadata -ne $null -and $AuditData.audit_metadata.profile -eq "workstation")
+    $HasProfileAssoc = ($AuditData.profile_association -ne $null -and $AuditData.profile_association.latest_computer_name -eq $env:COMPUTERNAME)
     $HasDisks = ($AuditData.storage_topology.disks.Count -gt 0)
     $HasLicensing = ($AuditData.system_and_licensing.os_edition -ne $null)
 
@@ -175,25 +191,26 @@ Assert-Test "Invoke-Audit.ps1 emits audit-reference.json and scaffolds reglaze.y
     $YamlContent = Get-Content -Raw $Blueprint
     $HasOsDisk = ($YamlContent -match "target_os_disk:")
     $HasUsers = ($YamlContent -match "local_admin:")
+    $HasSourceComp = ($YamlContent -match 'source_computer:')
     # Ensure at most one DATA_DRIVE is assigned in preserved_disks
     $DataDriveMatches = [regex]::Matches($YamlContent, 'drive_variable:\s*"DATA_DRIVE"')
     $SingleDataDrive = ($DataDriveMatches.Count -le 1)
 
     $HasGenDate = ($YamlContent -match 'generation_date:\s*"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}"')
 
-    return ($HasMetadata -and $HasDisks -and $HasLicensing -and $HasOsDisk -and $HasUsers -and $SingleDataDrive -and $HasGenDate)
+    return ($HasMetadata -and $HasProfileAssoc -and $HasDisks -and $HasLicensing -and $HasOsDisk -and $HasUsers -and $HasSourceComp -and $SingleDataDrive -and $HasGenDate)
 }
 
-Assert-Test "Invoke-Audit.ps1 archives existing reglaze.yaml with second-level precision generation_date" {
+Assert-Test "Invoke-Audit.ps1 inherits profile from existing reglaze.yaml and archives with second-level precision generation_date" {
     $AuditScript = Join-Path $RepoRoot "src\audit\Invoke-Audit.ps1"
     $Blueprint = Join-Path $TestOutputDir "reglaze.yaml"
     if (-not (Test-Path $Blueprint)) { return $false }
 
-    # Put a specific generation_date with second-level precision into existing file to test archive name
+    # Put a specific generation_date with second-level precision and profile: "test" into existing file
     $CustomContent = "version: `"1.0`"`r`nprofile: `"test`"`r`ngeneration_date: `"2025-01-15T14:30:22`"`r`nsystem:`r`n  computer_name: `"TEST`"`r`n"
     Set-Content -Path $Blueprint -Value $CustomContent -Encoding UTF8
 
-    # Second audit run should archive existing to reglaze.2025-01-15T14-30-22.yaml
+    # Second audit run without -Profile should inherit 'test' and archive existing to reglaze.2025-01-15T14-30-22.yaml
     & $AuditScript -OutputDir $TestOutputDir -SkipElevation
 
     $ExpectedArchive = Join-Path $TestOutputDir "reglaze.2025-01-15T14-30-22.yaml"
@@ -205,8 +222,9 @@ Assert-Test "Invoke-Audit.ps1 archives existing reglaze.yaml with second-level p
 
     $ArchivePreserved = ($ArchivedContent -match 'generation_date:\s*"2025-01-15T14:30:22"')
     $FreshHasDate = ($FreshContent -match 'generation_date:\s*"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}"')
+    $InheritedProfile = ($FreshContent -match 'profile:\s*"test"')
 
-    return ($ArchiveExists -and $FreshBlueprintExists -and $ArchivePreserved -and $FreshHasDate)
+    return ($ArchiveExists -and $FreshBlueprintExists -and $ArchivePreserved -and $FreshHasDate -and $InheritedProfile)
 }
 
 # Clean up scratch test output

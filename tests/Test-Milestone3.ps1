@@ -26,6 +26,7 @@ $RepoRoot = Split-Path -Parent $PSScriptRoot
 . (Join-Path $RepoRoot "src\linking\Test-ReparsePoint.ps1")
 . (Join-Path $RepoRoot "src\linking\Backup-CollisionFolder.ps1")
 . (Join-Path $RepoRoot "src\linking\New-DirectoryJunction.ps1")
+. (Join-Path $RepoRoot "src\linking\Set-ReglazeDriveLetters.ps1")
 . (Join-Path $RepoRoot "src\linking\Unlock-BitLockerVolumes.ps1")
 . (Join-Path $RepoRoot "src\runner\Apply-WindowsSettings.ps1")
 
@@ -283,6 +284,91 @@ try {
 
     Assert-Test "12. End-to-End Bootstrap: Start-MachineBootstrap.ps1 completes all 9 steps in simulation" `
         ($RanStep1 -and $RanStep6 -and $RanStep9 -and $Completed)
+
+    # =========================================================================
+    # Test 13: 3-Phase Atomic Drive Letter Reconciliation (Swap, Clear & USB Reassign)
+    # =========================================================================
+    $TestDiskConfig = [PSCustomObject]@{
+        TargetOsDisk = [PSCustomObject]@{ DiskId = 1; SerialNumber = "OS_SN_990PRO"; BusType = "NVMe"; ExpectedMount = "C:" }
+        PreservedDisks = @(
+            [PSCustomObject]@{ DiskId = 0; SerialNumber = "3GKZ8VGE"; BusType = "SATA"; PartitionNumber = 1; ExpectedMount = $null; Label = "OldDisk"; Required = $false },
+            [PSCustomObject]@{ DiskId = 2; SerialNumber = "DATA_SN_D"; BusType = "NVMe"; PartitionNumber = 1; ExpectedMount = "D:"; Label = "DataDrive"; Required = $true },
+            [PSCustomObject]@{ DiskId = 3; SerialNumber = "BULK_SN_F"; BusType = "SATA"; PartitionNumber = 1; ExpectedMount = "F:"; Label = "BulkDrive"; Required = $true }
+        )
+        StreamMountPoint  = "E:"
+        ReferencedLetters = @("C", "D", "E", "F")
+    }
+
+    # Simulate shuffled boot state:
+    # - Disk 0 (3GKZ8VGE, supposed to be unmounted) took D:
+    # - Disk 2 (DATA_SN_D, supposed to be D:) took F:
+    # - Disk 3 (BULK_SN_F, supposed to be F:) took G:
+    # - Disk 4 (REGLAZE USB, removable) took E: (colliding with Google Drive streaming mount E:)
+    $MockShuffledDisks = @(
+        [PSCustomObject]@{
+            DiskNumber = 1; SerialNumber = "OS_SN_990PRO"; BusType = "NVMe"; FriendlyName = "OS"; IsRemovable = $false
+            Partitions = @([PSCustomObject]@{ DiskNumber = 1; PartitionNumber = 1; DriveLetter = "C"; Label = "OS"; IsSystem = $true })
+        },
+        [PSCustomObject]@{
+            DiskNumber = 0; SerialNumber = "3GKZ8VGE"; BusType = "SATA"; FriendlyName = "OldDisk"; IsRemovable = $false
+            Partitions = @([PSCustomObject]@{ DiskNumber = 0; PartitionNumber = 1; DriveLetter = "D"; Label = "OldDisk"; IsSystem = $false })
+        },
+        [PSCustomObject]@{
+            DiskNumber = 2; SerialNumber = "DATA_SN_D"; BusType = "NVMe"; FriendlyName = "DataDrive"; IsRemovable = $false
+            Partitions = @([PSCustomObject]@{ DiskNumber = 2; PartitionNumber = 1; DriveLetter = "F"; Label = "DataDrive"; IsSystem = $false })
+        },
+        [PSCustomObject]@{
+            DiskNumber = 3; SerialNumber = "BULK_SN_F"; BusType = "SATA"; FriendlyName = "BulkDrive"; IsRemovable = $false
+            Partitions = @([PSCustomObject]@{ DiskNumber = 3; PartitionNumber = 1; DriveLetter = "G"; Label = "BulkDrive"; IsSystem = $false })
+        },
+        [PSCustomObject]@{
+            DiskNumber = 4; SerialNumber = "USB_REGLAZE_01"; BusType = "USB"; FriendlyName = "REGLAZE USB"; IsRemovable = $true
+            Partitions = @([PSCustomObject]@{ DiskNumber = 4; PartitionNumber = 1; DriveLetter = "E"; Label = "REGLAZE"; IsSystem = $false })
+        }
+    )
+
+    $ReconcileRes = Invoke-DriveLetterReconciliation -DiskConfig $TestDiskConfig -MockSystemDisks $MockShuffledDisks -Simulation
+    $FinalDisk0Letter = ($ReconcileRes.SimulatedSystemDisks | Where-Object { $_.DiskNumber -eq 0 }).Partitions[0].DriveLetter
+    $FinalDisk2Letter = ($ReconcileRes.SimulatedSystemDisks | Where-Object { $_.DiskNumber -eq 2 }).Partitions[0].DriveLetter
+    $FinalDisk3Letter = ($ReconcileRes.SimulatedSystemDisks | Where-Object { $_.DiskNumber -eq 3 }).Partitions[0].DriveLetter
+    $FinalUsbLetter   = ($ReconcileRes.SimulatedSystemDisks | Where-Object { $_.DiskNumber -eq 4 }).Partitions[0].DriveLetter
+
+    Assert-Test "13. Drive Letter Engine: swaps shuffled preserved drives (D:/F:), clears unmounted disk, and moves USB off E: to I:" `
+        (
+            $ReconcileRes.Status -eq "Reconciled" -and
+            $ReconcileRes.RequiresReconnectShutdown -eq $false -and
+            $null -eq $FinalDisk0Letter -and
+            $FinalDisk2Letter -eq "D" -and
+            $FinalDisk3Letter -eq "F" -and
+            $FinalUsbLetter -eq "I"
+        ) `
+        "Disk0=$FinalDisk0Letter, Disk2=$FinalDisk2Letter, Disk3=$FinalDisk3Letter, USB=$FinalUsbLetter"
+
+    # =========================================================================
+    # Test 14: Missing Required vs. Optional Preserved Disks Detection
+    # =========================================================================
+    $TestDiskConfigFile = Join-Path $MockPayloadDir "disk-config.json"
+    $TestDiskConfig | ConvertTo-Json -Depth 6 | Set-Content -Path $TestDiskConfigFile -Encoding UTF8
+
+    # Case A: Optional Disk 0 (3GKZ8VGE) is disconnected, but required Disk 2 (D:) and Disk 3 (F:) are connected -> No shutdown needed
+    $MockOptionalMissing = @($MockShuffledDisks | Where-Object { $_.DiskNumber -in @(1, 2, 3) })
+    $OptRes = Invoke-DriveLetterReconciliation -DiskConfigPath $TestDiskConfigFile -MockSystemDisks $MockOptionalMissing -Simulation
+    Assert-Test "14. Drive Letter Engine: skips power-down/reconnect step when only optional/unreferenced disks are disconnected" `
+        ($OptRes.RequiresReconnectShutdown -eq $false -and $OptRes.MissingOptionalDisks.Count -eq 1 -and $OptRes.MissingRequiredDisks.Count -eq 0)
+
+    # Case B: Required Disk 2 (DATA_SN_D -> D:) is physically disconnected during install -> Triggers reconnect shutdown
+    $MockRequiredMissing = @($MockShuffledDisks | Where-Object { $_.DiskNumber -in @(1, 3) })
+    $BootstrapMissingRes = & (Join-Path $RepoRoot "src\runner\Start-MachineBootstrap.ps1") `
+        -PayloadDir $MockPayloadDir `
+        -MockSystemDisks $MockRequiredMissing `
+        -HaltOnMissingDisks `
+        -Simulation `
+        -NoReboot `
+        -SkipUpdates `
+        -SkipDsc
+
+    Assert-Test "15. Bootstrap Reconnect Checkpoint: halts for power-down & drive reconnection when a required preserved disk is disconnected" `
+        ($BootstrapMissingRes.Status -eq "AwaitingDriveReconnectShutdown" -and $BootstrapMissingRes.MissingRequiredDisks.Count -eq 1 -and $BootstrapMissingRes.MissingRequiredDisks[0].SerialNumber -eq "DATA_SN_D")
 
 } finally {
     # Cleanup scratch test directory safely by clearing child junctions first

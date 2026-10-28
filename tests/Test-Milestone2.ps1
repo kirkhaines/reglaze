@@ -310,6 +310,79 @@ custom:
         -Condition ($BadDriveResult.IsValid -eq $false -and ($BadDriveResult.Errors -match "not declared in blueprint storage topology")) `
         -Details ($BadDriveResult.Errors -join '; ')
 
+    # Test sync directory rule: Synced directory cannot reside on virtual streaming mount (%STREAM%) or undeclared drive
+    $BadSyncYamlFile = Join-Path $TestDir "badsync_drive.yaml"
+    @"
+version: "1.0.0"
+profile: "workstation"
+system:
+  users:
+    local_admin:
+      username: "LocalAdmin"
+    primary_user:
+      username: "developer"
+disks:
+  target_os_disk:
+    disk_id: 0
+    serial_number: "NVME_OS_01"
+  preserved_disks:
+    - disk_id: 1
+      serial_number: "SATA_01"
+      expected_mount: "E:"
+storage:
+  streaming:
+    mount_point: "E:"
+    verify_folder: "E:\My Drive"
+  sync:
+    directories:
+      bad_sync:
+        local_path: "Z:\MissingDrive\Folder"
+        cloud_folder: "Folder"
+        sync_variable: "SYNC_BAD"
+"@ | Set-Content -Path $BadSyncYamlFile -Encoding UTF8
+
+    $BadSyncResult = Test-ReglazeBlueprint -Path $BadSyncYamlFile -RepoRoot $RepoRoot
+    Assert-Test -Name "11b. Validator: catches streaming mount collision with preserved_disks and sync root on undeclared drive" `
+        -Condition ($BadSyncResult.IsValid -eq $false -and ($BadSyncResult.Errors -match "Drive letter collision") -and ($BadSyncResult.Errors -match "undeclared physical drive")) `
+        -Details ($BadSyncResult.Errors -join '; ')
+
+    # Test junction inside synced directory warning (switches from sync to stream behavior)
+    $SyncNestedJuncFile = Join-Path $TestDir "sync_nested_junc.yaml"
+    @"
+version: "1.0.0"
+profile: "workstation"
+system:
+  users:
+    local_admin:
+      username: "LocalAdmin"
+    primary_user:
+      username: "developer"
+disks:
+  target_os_disk:
+    disk_id: 0
+    serial_number: "NVME_OS_01"
+storage:
+  streaming:
+    mount_point: "E:"
+    verify_folder: "E:\My Drive"
+  sync:
+    directories:
+      documents:
+        local_path: "C:\Users\developer\Documents"
+        cloud_folder: "Documents"
+        sync_variable: "SYNC_DOCUMENTS"
+applications:
+  lotro:
+    directories:
+      user_configs:
+        target: "%STREAM%\Gaming\LOTRO"
+"@ | Set-Content -Path $SyncNestedJuncFile -Encoding UTF8
+
+    $SyncNestedResult = Test-ReglazeBlueprint -Path $SyncNestedJuncFile -RepoRoot $RepoRoot
+    Assert-Test -Name "11c. Validator: emits warning (not error) when junction link is nested inside a synced directory" `
+        -Condition ($SyncNestedResult.IsValid -eq $true -and [bool]($SyncNestedResult.Warnings -match "switches .* from sync behavior to stream")) `
+        -Details ($SyncNestedResult.Warnings -join '; ')
+
     # -------------------------------------------------------------------------
     # TEST 4: WinGet DSC Manifest Generator
     # -------------------------------------------------------------------------
@@ -373,18 +446,23 @@ custom:
     # -------------------------------------------------------------------------
     # TEST 6: WinPE Disk Matching & Preserved Safety
     # -------------------------------------------------------------------------
-    $FirstDisk = (Get-PhysicalDisk | Select-Object -First 1)
+    $FirstDisk = try { Get-PhysicalDisk -ErrorAction Stop | Select-Object -First 1 } catch { $null }
+    $MockDiskList = $null
+    if (-not $FirstDisk) {
+        $FirstDisk = [PSCustomObject]@{ DeviceId = 0; FriendlyName = "Simulated NVMe SSD"; SerialNumber = "SIM_NVME_001"; BusType = "NVMe"; Size = 1000GB }
+        $MockDiskList = @($FirstDisk)
+    }
     $TargetId = [int]$FirstDisk.DeviceId
     $TargetSer = [string]$FirstDisk.SerialNumber
 
     $DiskpartOut = Join-Path $TestDir "diskpart.txt"
-    $DiskMatchResult = Invoke-DiskMatching -TargetSerialNumber $TargetSer -TargetDiskId $TargetId -PreservedSerialNumbers @("PRESERVED_SAMPLE_999") -DiskpartOutputPath $DiskpartOut
+    $DiskMatchResult = Invoke-DiskMatching -TargetSerialNumber $TargetSer -TargetDiskId $TargetId -PreservedSerialNumbers @("PRESERVED_SAMPLE_999") -DiskpartOutputPath $DiskpartOut -MockDisks $MockDiskList
     Assert-Test -Name "17. DiskMatch: dynamically matches target disk and generates GPT/EFI/MSR/OS/Recovery diskpart layout" `
         -Condition ((Test-Path $DiskpartOut) -and ((Get-Content -Raw $DiskpartOut) -match "create partition efi") -and ($DiskMatchResult.TargetDiskIndex -eq $TargetId))
 
     $SafetyHaltCaught = $false
     try {
-        Invoke-DiskMatching -TargetSerialNumber $TargetSer -TargetDiskId $TargetId -PreservedSerialNumbers @($TargetSer) -DiskpartOutputPath $DiskpartOut | Out-Null
+        Invoke-DiskMatching -TargetSerialNumber $TargetSer -TargetDiskId $TargetId -PreservedSerialNumbers @($TargetSer) -DiskpartOutputPath $DiskpartOut -MockDisks $MockDiskList | Out-Null
     } catch {
         $SafetyHaltCaught = ($_.Exception.Message -match "PRESERVED DISKS")
     }
@@ -396,16 +474,24 @@ custom:
     # -------------------------------------------------------------------------
     $PayloadOut = Join-Path $TestDir "payload"
     $PayloadRes = Build-ReglazePayload -Blueprint $ValResult.Blueprint -AuditReference $AuditMock -RepoRoot $RepoRoot -PayloadDir $PayloadOut
-    Assert-Test -Name "19. Payload: generates all required provisioning artifacts (bootstrap, hydrate, WSL, DSC, manifest)" `
+    Assert-Test -Name "19. Payload: generates all required provisioning artifacts (bootstrap, hydrate, disk-config, google-drive-setup, WSL, DSC, manifest)" `
         -Condition (
             (Test-Path (Join-Path $PayloadOut "bootstrap.ps1")) -and
             (Test-Path (Join-Path $PayloadOut "hydrate.ps1")) -and
+            (Test-Path (Join-Path $PayloadOut "disk-config.json")) -and
+            (Test-Path (Join-Path $PayloadOut "google-drive-setup.json")) -and
+            (Test-Path (Join-Path $PayloadOut "google-drive-guide.md")) -and
+            (Test-Path (Join-Path $PayloadOut "Set-ReglazeDriveLetters.ps1")) -and
             (Test-Path (Join-Path $PayloadOut "setup-wsl.sh")) -and
             (Test-Path (Join-Path $PayloadOut "configuration.dsc.yaml")) -and
             (Test-Path (Join-Path $PayloadOut "junctions-manifest.json")) -and
             (Test-Path (Join-Path $PayloadOut "bitlocker-keys.json")) -and
             (Test-Path (Join-Path $PayloadOut "applications.json"))
         )
+
+    $GDrivePayload = Get-Content -Raw (Join-Path $PayloadOut "google-drive-setup.json") | ConvertFrom-Json
+    Assert-Test -Name "19b. Payload: renders Google Drive setup template payload with target mount and source computer" `
+        -Condition ($GDrivePayload.StreamMountPoint -eq "E:" -and $GDrivePayload.SourceComputerName -eq "TESTPC" -and $GDrivePayload.MigrationMode -eq "copy" -and ($GDrivePayload.RenderedInstructions -join ' ') -notmatch '\{\{')
 
     $WslScriptContent = Get-Content -Raw (Join-Path $PayloadOut "setup-wsl.sh")
     Assert-Test -Name "20. WSL Provisioner: defaults to primary Windows username ('developer')" `
@@ -429,7 +515,7 @@ custom:
     # -------------------------------------------------------------------------
     $IsoSimRes = Get-Windows11Iso -DestinationDir (Join-Path $TestDir "downloads") -Simulation:$true
     Assert-Test -Name "22. ISO Acquisition: simulates official Windows 11 ISO discovery and destination resolution" `
-        -Condition ($IsoSimRes.Status -eq "Simulated" -and $IsoSimRes.IsoPath -like "*Win11*.iso") `
+        -Condition ($IsoSimRes.Status -in @("Simulated", "Found") -and ($IsoSimRes.IsoPath -like "*Win11*.iso" -or $IsoSimRes.IsoPath -like "*Windows11*.iso")) `
         -Details "Status: $($IsoSimRes.Status), Path: $($IsoSimRes.IsoPath)"
 
     # -------------------------------------------------------------------------

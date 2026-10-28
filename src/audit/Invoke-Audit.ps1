@@ -9,6 +9,8 @@
 [CmdletBinding()]
 param(
     [string]$OutputDir = $null,
+    [Alias("p")]
+    [string]$Profile = $null,
     [switch]$Force = $false,
     [switch]$SkipElevation = $false,
     [switch]$Elevate = $false
@@ -33,12 +35,37 @@ if (-not (Test-Path (Join-Path $RepoRoot "data\applications"))) {
 
 Write-ReglazeBanner "PRE-FLIGHT SYSTEM AUDIT"
 
-# 1. Resolve Target Output Directory
+# 1. Resolve Target Output Directory & Profile Association
 $TargetDir = Resolve-ReglazeTargetDirectory -ExplicitDirectory $OutputDir
 if (-not (Test-Path $TargetDir)) {
     New-Item -ItemType Directory -Path $TargetDir -Force | Out-Null
 }
 Write-ReglazeInfo "Audit artifacts will be saved to: $TargetDir"
+
+$BlueprintPath = Join-Path $TargetDir "reglaze.yaml"
+$ExistingBlueprintContent = $null
+$ExistingProfile = $null
+if (Test-Path $BlueprintPath) {
+    $ExistingBlueprintContent = Get-Content -Raw -Path $BlueprintPath -ErrorAction SilentlyContinue
+    if ($ExistingBlueprintContent -and $ExistingBlueprintContent -match '(?m)^\s*profile:\s*["'']?([^"''\r\n#]+)["'']?') {
+        $ExistingProfile = $Matches[1].Trim()
+    }
+}
+
+$ResolvedProfile = $null
+if (-not [string]::IsNullOrWhiteSpace($Profile)) {
+    $ResolvedProfile = $Profile.Trim()
+} elseif (-not [string]::IsNullOrWhiteSpace($ExistingProfile)) {
+    $ResolvedProfile = $ExistingProfile
+    Write-ReglazeInfo "Inherited profile '$ResolvedProfile' from existing reglaze.yaml."
+} elseif (-not [string]::IsNullOrWhiteSpace($env:REGLAZE_PROFILE)) {
+    $ResolvedProfile = $env:REGLAZE_PROFILE.Trim()
+    Write-ReglazeInfo "Using profile '$ResolvedProfile' from `$env:REGLAZE_PROFILE."
+} else {
+    Write-ReglazeError "Missing required -Profile parameter. When no existing reglaze.yaml is present in '$TargetDir', you must specify -Profile <name> (e.g. -Profile 'workstation')."
+    throw "Missing required -Profile parameter for initial audit in '$TargetDir'."
+}
+Write-ReglazeInfo "Active Reglaze Profile: $ResolvedProfile"
 
 # 2. Execute Hardware & Storage Audit
 Write-ReglazeStep "Auditing Hardware & Storage Topology..."
@@ -99,18 +126,94 @@ Write-ReglazeStep "Auditing WSL Distributions & Packages..."
 $WslData = Get-WslAudit
 Write-ReglazeSuccess "WSL Enabled: $($WslData.enabled), Default Distro: $($WslData.default_distro), Packages: $($WslData.detected_packages.Count)."
 
-# 10. Assemble and Emit audit-reference.json
-Write-ReglazeStep "Compiling Audit Reference Document..."
+# 10. Assemble Profile-to-Computer Association and Emit audit-reference.json
+Write-ReglazeStep "Compiling Audit Reference Document & Profile Registry..."
 $ComputerName = $env:COMPUTERNAME
+$AuditTimestamp = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+
+# Update persistent profile-computers.json registry in TargetDir
+$ProfileRegistryPath = Join-Path $TargetDir "profile-computers.json"
+$ProfileRegistry = @{
+    profiles = @{}
+}
+if (Test-Path $ProfileRegistryPath) {
+    try {
+        $LoadedReg = Get-Content -Raw -Path $ProfileRegistryPath -ErrorAction Stop | ConvertFrom-Json
+        if ($LoadedReg -and $LoadedReg.profiles) {
+            foreach ($Prop in $LoadedReg.profiles.PSObject.Properties) {
+                $ExistingComputers = @()
+                if ($Prop.Value.computers) {
+                    $ExistingComputers = @($Prop.Value.computers)
+                }
+                $ProfileRegistry.profiles[$Prop.Name] = @{
+                    latest_computer_name   = $Prop.Value.latest_computer_name
+                    previous_computer_name = $Prop.Value.previous_computer_name
+                    latest_audit_timestamp = $Prop.Value.latest_audit_timestamp
+                    computers              = $ExistingComputers
+                }
+            }
+        }
+    } catch {
+        Write-ReglazeWarning "Could not parse existing profile-computers.json; reinitializing registry."
+    }
+}
+
+$SyncDirEntries = @()
+foreach ($SyncDir in $StorageProvidersData.sync_directories) {
+    $SyncDirEntries += [PSCustomObject]@{
+        id           = $SyncDir.id
+        cloud_folder = $SyncDir.cloud_folder
+        local_path   = $SyncDir.local_path
+        cloud_doc_id = $SyncDir.cloud_doc_id
+    }
+}
+
+$ExistingProfileEntry = $ProfileRegistry.profiles[$ResolvedProfile]
+$PreviousComputerName = $null
+$ComputerHistory = @()
+if ($ExistingProfileEntry) {
+    if ($ExistingProfileEntry.latest_computer_name -and $ExistingProfileEntry.latest_computer_name -ne $ComputerName) {
+        $PreviousComputerName = $ExistingProfileEntry.latest_computer_name
+    } elseif ($ExistingProfileEntry.previous_computer_name) {
+        $PreviousComputerName = $ExistingProfileEntry.previous_computer_name
+    }
+    foreach ($CompEntry in $ExistingProfileEntry.computers) {
+        if ($CompEntry.computer_name -ne $ComputerName) {
+            $ComputerHistory += $CompEntry
+        }
+    }
+}
+
+$CurrentComputerRecord = [PSCustomObject]@{
+    computer_name    = $ComputerName
+    audited_at       = $AuditTimestamp
+    sync_directories = $SyncDirEntries
+}
+$ComputerHistory = @($CurrentComputerRecord) + $ComputerHistory
+
+$ProfileAssociation = [PSCustomObject]@{
+    profile                = $ResolvedProfile
+    latest_computer_name   = $ComputerName
+    previous_computer_name = $PreviousComputerName
+    latest_audit_timestamp = $AuditTimestamp
+    computers              = $ComputerHistory
+}
+
+$ProfileRegistry.profiles[$ResolvedProfile] = $ProfileAssociation
+$ProfileRegistry | ConvertTo-Json -Depth 8 | Set-Content -Path $ProfileRegistryPath -Encoding UTF8
+Write-ReglazeSuccess "Updated profile-to-computer association registry: $ProfileRegistryPath"
+
 $AuditMetadata = [PSCustomObject]@{
-    timestamp       = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+    timestamp       = $AuditTimestamp
     reglaze_version = "1.0.0"
+    profile         = $ResolvedProfile
     host_name       = $ComputerName
     os_version      = $LicensingData.os_version
 }
 
 $AuditReference = [PSCustomObject]@{
     audit_metadata                   = $AuditMetadata
+    profile_association              = $ProfileAssociation
     system_and_licensing             = $LicensingData
     user_identity                    = $UserIdentityData
     storage_providers                = $StorageProvidersData
@@ -128,10 +231,9 @@ $AuditJsonPath = Join-Path $TargetDir "audit-reference.json"
 $AuditReference | ConvertTo-Json -Depth 6 | Set-Content -Path $AuditJsonPath -Encoding UTF8
 Write-ReglazeSuccess "Wrote audit profile: $AuditJsonPath"
 
-# 9. Archive Existing reglaze.yaml (if present) and Scaffold Fresh Blueprint
-$BlueprintPath = Join-Path $TargetDir "reglaze.yaml"
+# 11. Archive Existing reglaze.yaml (if present) and Scaffold Fresh Blueprint
 if (Test-Path $BlueprintPath) {
-    $ExistingContent = Get-Content -Raw -Path $BlueprintPath -ErrorAction SilentlyContinue
+    $ExistingContent = if ($ExistingBlueprintContent) { $ExistingBlueprintContent } else { Get-Content -Raw -Path $BlueprintPath -ErrorAction SilentlyContinue }
     $GenDateStr = $null
     if ($ExistingContent -and $ExistingContent -match '(?m)^\s*(?:generation_date|generated_at):\s*["'']?([^"''\r\n]+)["'']?') {
         $RawVal = $Matches[1].Trim()
@@ -185,7 +287,7 @@ $PreservedDisks = @($AllDisks | Where-Object { $_.disk_number -ne $OsDisk.disk_n
 $CurrentDateStr = (Get-Date).ToString("yyyy-MM-ddTHH:mm:ss")
 $YamlLines = @(
     'version: "1.0"',
-    'profile: "workstation"',
+    "profile: `"$ResolvedProfile`"",
     "generation_date: `"$CurrentDateStr`"",
     '',
     'system:',
@@ -253,8 +355,19 @@ $YamlLines = @(
 
             $YamlLines += "    - disk_id: $($PDisk.disk_number)"
             $YamlLines += "      serial_number: `"$($PDisk.serial_number)`""
+            if ($PDisk.bus_type) {
+                $YamlLines += "      bus_type: `"$($PDisk.bus_type)`""
+            }
+            if ($FirstPart -and $FirstPart.partition_number) {
+                $YamlLines += "      partition_number: $($FirstPart.partition_number)"
+            }
+            if ($FirstPart -and $FirstPart.partition_guid) {
+                $YamlLines += "      partition_guid: `"$($FirstPart.partition_guid)`""
+            }
             if ($Mount) {
                 $YamlLines += "      expected_mount: `"$Mount`""
+            } else {
+                $YamlLines += "      expected_mount: null"
             }
             if ($DriveVar) {
                 $YamlLines += "      drive_variable: `"$DriveVar`""
@@ -279,6 +392,8 @@ $YamlLines = @(
         '    stream_variable: "STREAM"',
         '  sync:',
         '    provider: "google-drive-sync"',
+        "    source_computer: `"$ComputerName`"",
+        '    migration_mode: "copy"',
         '    directories:'
     )
 

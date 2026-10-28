@@ -438,6 +438,7 @@
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | **HITL-M5-01** | USB Media Creation / Format-Volume & DISM Split-Image | `src/media/Build-Media.ps1` | `PENDING` | - | Formats target USB as FAT32, splits install.wim with DISM, injects autounattend.xml + payload |
 | **HITL-M5-02** | Hyper-V Automated VM Deployment | `tests/Test-Milestone5-VM.ps1` | `PENDING` | - | End-to-end OS install and bootstrap verification via PowerShell Direct |
+| **HITL-M5-03** | Preserved Disk Drive Letter Reconciliation | `src/linking/Set-ReglazeDriveLetters.ps1` | `VERIFIED` | 2026-10-28 | `Get-Disk` provides unique `SerialNumber` and `BusType` across NVMe, SATA, and USB SSDs; `Get-Partition` confirms `Guid` (GPT) and `PartitionNumber` (MBR/GPT) |
 
 ---
 
@@ -459,6 +460,33 @@
   dism.exe /Split-Image /ImageFile:"$SourceWim" /SWMFile:"$TargetSwm" /FileSize:3800
   ```
 - **Avoid Notes:** Creating media on non-removable internal NVMe/SATA disks; using Rufus registry bypasses that break annual Windows feature updates.
+
+---
+
+### HITL-M5-03: Preserved Disk Drive Letter Reconciliation
+- **Target:** `Get-Disk`, `Get-Partition`, `Remove-PartitionAccessPath`, `Set-Partition`
+- **File:** `src/linking/Set-ReglazeDriveLetters.ps1`, `src/audit/Audit-Hardware.ps1`
+- **Description:** Identifies preserved disks by hardware `SerialNumber`, `BusType`, `PartitionGuid`, `PartitionNumber`, and `Label` in Phase 4 (`bootstrap.ps1`). Evicts colliding drive letters (including on the Google Drive streaming mount letter), clears drive letters on unconfigured internal disks or `preserved_disks` with `expected_mount: null`, assigns `expected_mount` letters to preserved disk partitions, and reassigns displaced removable USB volumes to free letters (`I:`–`Z:`). Detects disconnected required preserved disks and offers a safe power-down (`Stop-Computer`) checkpoint while preserving `LocalAdmin` `AutoLogon` and `HKLM RunOnce`.
+- **Status:** `VERIFIED`
+- **Test Snippet (Safe / Read-Only):**
+  ```powershell
+  Get-Disk | Select-Object Number, FriendlyName, SerialNumber, BusType, IsBoot, IsSystem | Format-Table -AutoSize
+  Get-Partition | Where-Object { $_.DriveLetter } | Select-Object DiskNumber, PartitionNumber, DriveLetter, Guid, Size | Format-Table -AutoSize
+  ```
+- **Last Input:** Read-only inspection of multi-disk layout and mounted partitions on test host (2026-10-28)
+- **Last Result:**
+  - `Get-Disk` returned unique hardware `SerialNumber` and accurate `BusType` for all disks, including USB-attached external NVMe SSDs (`BusType = USB`), whereas `Get-PhysicalDisk` previously reported `"000000000000"` and `"RAID"` across USB UASP bridges.
+  - `Get-Partition` confirmed partition numbering and showed that MBR-formatted disks have an empty `Guid` while GPT-formatted disks have unique partition `Guid` values.
+- **Verified Pattern:**
+  ```powershell
+  # Prefer Get-Disk over Get-PhysicalDisk for SerialNumber and BusType
+  $DiskObj = Get-Disk -Number $DiskNumber
+  # Match PartitionGuid (when GPT) -> PartitionNumber -> Label -> largest non-system partition
+  Remove-PartitionAccessPath -DiskNumber $d -PartitionNumber $p -AccessPath "${OldLetter}:\"
+  Set-Partition -DiskNumber $d -PartitionNumber $p -NewDriveLetter $NewLetter
+  ```
+- **Avoid Notes:** Do not rely solely on `Get-PhysicalDisk` for `SerialNumber` or `BusType` on USB-attached SSDs; do not require `PartitionGuid` to be non-null (MBR partitions have null `Guid`); never run `Remove-PartitionAccessPath` or `Set-Partition` against the host workstation OS.
+
 
 
 

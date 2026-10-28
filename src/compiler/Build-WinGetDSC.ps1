@@ -122,6 +122,28 @@ function Build-WinGetDSCManifest {
         }
     }
 
+    # 2b. Auto-include Google Drive for Desktop if cloud streaming or sync uses Google Drive
+    $UsesGoogleDrive = (
+        ($Blueprint.storage -and $Blueprint.storage.streaming -and $Blueprint.storage.streaming.cloud_provider -eq "google-drive") -or
+        ($Blueprint.storage -and $Blueprint.storage.sync -and $Blueprint.storage.sync.provider -eq "google-drive-sync")
+    )
+    $GDriveExplicitlyDisabled = (
+        $Blueprint.applications -and
+        $Blueprint.applications.google_drive -and
+        $null -ne $Blueprint.applications.google_drive.install -and
+        ($Blueprint.applications.google_drive.install -eq $false -or $Blueprint.applications.google_drive.install.enabled -eq $false)
+    )
+    if ($UsesGoogleDrive -and -not $GDriveExplicitlyDisabled -and -not $SeenPackageIds.Contains("Google.GoogleDrive")) {
+        $SeenPackageIds.Add("Google.GoogleDrive") | Out-Null
+        $PackagesToInstall.Add([PSCustomObject]@{
+            AppId      = "google_drive"
+            AppName    = "Google Drive"
+            PackageId  = "Google.GoogleDrive"
+            ResourceId = "WinGetPackage_Google_GoogleDrive"
+            Source     = "winget"
+        })
+    }
+
     # 3. Format WinGet DSC YAML (Schema 0.2)
     $YamlLines = [System.Collections.Generic.List[string]]::new()
     $YamlLines.Add("# yaml-language-server: `$schema=https://aka.ms/configuration-dsc-schema/0.2")

@@ -34,7 +34,10 @@ function Build-ReglazePayload {
         [string]$RepoRoot = $null,
 
         [Parameter(Mandatory=$true)]
-        [string]$PayloadDir
+        [string]$PayloadDir,
+
+        [Parameter(Mandatory=$false)]
+        [string]$BlueprintFile = $null
     )
 
     if (-not $RepoRoot) {
@@ -43,6 +46,17 @@ function Build-ReglazePayload {
 
     if (-not (Test-Path $PayloadDir)) {
         New-Item -ItemType Directory -Path $PayloadDir -Force | Out-Null
+    }
+
+    # Stage linking & drive letter reconciliation modules into payload
+    $LinkingDir = Join-Path $RepoRoot "src\linking"
+    if (Test-Path $LinkingDir) {
+        foreach ($LinkScript in @("Set-ReglazeDriveLetters.ps1", "Unlock-BitLockerVolumes.ps1", "New-DirectoryJunction.ps1", "Test-ReparsePoint.ps1", "Backup-CollisionFolder.ps1")) {
+            $SrcScript = Join-Path $LinkingDir $LinkScript
+            if (Test-Path $SrcScript) {
+                Copy-Item -Path $SrcScript -Destination (Join-Path $PayloadDir $LinkScript) -Force
+            }
+        }
     }
 
     # Stage modular Windows settings scripts
@@ -103,35 +117,228 @@ function Build-ReglazePayload {
     Build-WinGetDSCManifest -Blueprint $Blueprint -RepoRoot $RepoRoot -OutputPath $DscPath | Out-Null
 
     # =========================================================================
-    # 2. Extract BitLocker Recovery Keys (bitlocker-keys.json)
+    # 2. Generate Preserved Disk & Drive Letter Reconciliation Config (disk-config.json)
+    # =========================================================================
+    $ReferencedLetterSet = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    [void]$ReferencedLetterSet.Add("C")
+
+    $AddReferencedDrive = {
+        param([string]$PathStr)
+        if ([string]::IsNullOrWhiteSpace($PathStr)) { return }
+        $Resolved = Resolve-VariableString -InputString $PathStr -VariableMap $VarMap
+        if ($Resolved -match '^([a-zA-Z]):') {
+            [void]$ReferencedLetterSet.Add($Matches[1].ToUpperInvariant())
+        }
+    }
+
+    $StreamMountPoint = if ($Blueprint.storage -and $Blueprint.storage.streaming -and $Blueprint.storage.streaming.mount_point) {
+        ([System.IO.Path]::GetPathRoot($Blueprint.storage.streaming.mount_point)).TrimEnd('\')
+    } elseif ($VarMap.ContainsKey("STREAM")) {
+        ([System.IO.Path]::GetPathRoot($VarMap["STREAM"])).TrimEnd('\')
+    } else {
+        "E:"
+    }
+    $StreamDriveLetter = $StreamMountPoint.TrimEnd(':').ToUpperInvariant()
+
+    $SyncRootPaths = [System.Collections.Generic.List[string]]::new()
+    if ($Blueprint.storage -and $Blueprint.storage.sync -and $Blueprint.storage.sync.directories) {
+        $SyncDirsObj = $Blueprint.storage.sync.directories
+        $SyncDirProps = if ($SyncDirsObj -is [System.Collections.IDictionary]) { $SyncDirsObj.Keys } else { $SyncDirsObj.PSObject.Properties.Name }
+        foreach ($SProp in $SyncDirProps) {
+            $SDir = if ($SyncDirsObj -is [System.Collections.IDictionary]) { $SyncDirsObj[$SProp] } else { $SyncDirsObj.$SProp }
+            if ($SDir.local_path) {
+                & $AddReferencedDrive $SDir.local_path
+                $ResolvedSPath = Resolve-VariableString -InputString $SDir.local_path -VariableMap $VarMap
+                $SyncRootPaths.Add($ResolvedSPath.TrimEnd('\'))
+            }
+        }
+    }
+
+    if ($Blueprint.dev_repos -and $Blueprint.dev_repos.root) {
+        & $AddReferencedDrive $Blueprint.dev_repos.root
+    }
+
+    if ($Blueprint.applications) {
+        foreach ($Prop in @($Blueprint.applications.PSObject.Properties)) {
+            $AppCfg = $Prop.Value
+            if ($AppCfg.install -and $AppCfg.install.target_directory) {
+                & $AddReferencedDrive $AppCfg.install.target_directory
+            }
+            if ($AppCfg.directories) {
+                foreach ($DProp in @($AppCfg.directories.PSObject.Properties)) {
+                    $DCfg = $DProp.Value
+                    if ($DCfg.target) { & $AddReferencedDrive $DCfg.target }
+                    if ($DCfg.link) { & $AddReferencedDrive $DCfg.link }
+                }
+            }
+        }
+    }
+
+    if ($Blueprint.custom -and $Blueprint.custom -is [System.Collections.IEnumerable]) {
+        foreach ($CustApp in $Blueprint.custom) {
+            if ($CustApp.directories) {
+                foreach ($CDir in $CustApp.directories) {
+                    if ($CDir.target) { & $AddReferencedDrive $CDir.target }
+                    if ($CDir.link) { & $AddReferencedDrive $CDir.link }
+                }
+            }
+        }
+    }
+
+    $AuditDisks = if ($AuditReference -and $AuditReference.storage_topology -and $AuditReference.storage_topology.disks) {
+        @($AuditReference.storage_topology.disks)
+    } else { @() }
+
+    $PreservedDiskSpecs = [System.Collections.Generic.List[PSCustomObject]]::new()
+    if ($Blueprint.disks -and $Blueprint.disks.preserved_disks) {
+        foreach ($PDisk in $Blueprint.disks.preserved_disks) {
+            $PSerial = if ($PDisk.serial_number) { $PDisk.serial_number.Trim() } else { "" }
+            $PDiskId = $PDisk.disk_id
+            $PMount = if ($PDisk.expected_mount) { ([System.IO.Path]::GetPathRoot($PDisk.expected_mount)).TrimEnd('\') } else { $null }
+            $PLetter = if ($PMount) { $PMount.TrimEnd(':').ToUpperInvariant() } else { $null }
+
+            # Enrich from audit-reference.json if available
+            $AuditDiskMatch = $null
+            if ($PSerial -and $AuditDisks.Count -gt 0) {
+                $AuditDiskMatch = $AuditDisks | Where-Object { $_.serial_number -and $_.serial_number.Trim() -ieq $PSerial } | Select-Object -First 1
+            }
+            if (-not $AuditDiskMatch -and $null -ne $PDiskId -and $AuditDisks.Count -gt 0) {
+                $AuditDiskMatch = $AuditDisks | Where-Object { $_.disk_number -eq $PDiskId } | Select-Object -First 1
+            }
+
+            $AuditPartMatch = $null
+            if ($AuditDiskMatch -and $AuditDiskMatch.partitions) {
+                if ($PMount) {
+                    $AuditPartMatch = $AuditDiskMatch.partitions | Where-Object { $_.mount_point -ieq $PMount } | Select-Object -First 1
+                }
+                if (-not $AuditPartMatch) {
+                    $AuditPartMatch = $AuditDiskMatch.partitions | Where-Object { $_.mount_point } | Select-Object -First 1
+                }
+            }
+
+            $ResolvedBusType = if ($PDisk.bus_type) { $PDisk.bus_type } elseif ($AuditDiskMatch -and $AuditDiskMatch.bus_type) { $AuditDiskMatch.bus_type } else { $null }
+            $ResolvedPartNum = if ($null -ne $PDisk.partition_number) { [int]$PDisk.partition_number } elseif ($AuditPartMatch -and $null -ne $AuditPartMatch.partition_number) { [int]$AuditPartMatch.partition_number } else { $null }
+            $ResolvedPartGuid = if ($PDisk.partition_guid) { $PDisk.partition_guid } elseif ($AuditPartMatch -and $AuditPartMatch.partition_guid) { $AuditPartMatch.partition_guid } else { $null }
+            $ResolvedLabel = if ($PDisk.label) { $PDisk.label } elseif ($AuditPartMatch -and $AuditPartMatch.label) { $AuditPartMatch.label } elseif ($AuditDiskMatch) { $AuditDiskMatch.friendly_name } else { "" }
+
+            $IsDiskRequired = if ($null -ne $PDisk.required) {
+                [bool]$PDisk.required
+            } else {
+                [bool]($PLetter -and $ReferencedLetterSet.Contains($PLetter))
+            }
+
+            $PreservedDiskSpecs.Add([PSCustomObject]@{
+                DiskId          = $PDiskId
+                SerialNumber    = $PSerial
+                BusType         = $ResolvedBusType
+                PartitionNumber = $ResolvedPartNum
+                PartitionGuid   = $ResolvedPartGuid
+                ExpectedMount   = $PMount
+                DriveVariable   = $PDisk.drive_variable
+                Label           = $ResolvedLabel
+                Required        = $IsDiskRequired
+            })
+        }
+    }
+
+    $DiskConfigObj = [PSCustomObject]@{
+        TargetOsDisk = [PSCustomObject]@{
+            DiskId        = if ($Blueprint.disks.target_os_disk) { $Blueprint.disks.target_os_disk.disk_id } else { 0 }
+            SerialNumber  = if ($Blueprint.disks.target_os_disk) { $Blueprint.disks.target_os_disk.serial_number } else { "" }
+            BusType       = if ($Blueprint.disks.target_os_disk) { $Blueprint.disks.target_os_disk.bus_type } else { "NVMe" }
+            ExpectedMount = "C:"
+        }
+        PreservedDisks          = $PreservedDiskSpecs.ToArray()
+        StreamMountPoint        = $StreamMountPoint
+        ReferencedLetters       = @($ReferencedLetterSet | Sort-Object)
+        UnconfiguredDrivePolicy = "clear_internal_reassign_removable"
+    }
+    $DiskConfigPath = Join-Path $PayloadDir "disk-config.json"
+    $DiskConfigObj | ConvertTo-Json -Depth 6 | Set-Content -Path $DiskConfigPath -Encoding UTF8
+
+    # =========================================================================
+    # 3. Extract BitLocker Recovery Keys (bitlocker-keys.json)
     # =========================================================================
     $BitLockerEntries = [System.Collections.Generic.List[PSCustomObject]]::new()
     if ($AuditReference -and $AuditReference.bitlocker_recovery_keys) {
         $BKeys = $AuditReference.bitlocker_recovery_keys
-        $KeyProps = if ($BKeys -is [System.Collections.IDictionary]) { $BKeys.Keys } else { $BKeys.PSObject.Properties.Name }
-        foreach ($Prop in $KeyProps) {
-            $VolObj = if ($BKeys -is [System.Collections.IDictionary]) { $BKeys[$Prop] } else { $BKeys.$Prop }
-            $Mount = if ($VolObj.MountPoint) { $VolObj.MountPoint } else { $Prop }
+        $KeyItems = if ($BKeys -is [System.Collections.IEnumerable] -and -not ($BKeys -is [System.Collections.IDictionary]) -and -not ($BKeys -is [string])) {
+            @($BKeys)
+        } elseif ($BKeys -is [System.Collections.IDictionary]) {
+            @($BKeys.Keys | ForEach-Object {
+                $V = $BKeys[$_]
+                if (-not $V.MountPoint -and -not $V.mount_point) { Add-Member -InputObject $V -MemberType NoteProperty -Name "MountPoint" -Value $_ -Force }
+                $V
+            })
+        } else {
+            @($BKeys.PSObject.Properties | ForEach-Object {
+                $V = $_.Value
+                if (-not $V.MountPoint -and -not $V.mount_point) { Add-Member -InputObject $V -MemberType NoteProperty -Name "MountPoint" -Value $_.Name -Force }
+                $V
+            })
+        }
+
+        foreach ($VolObj in $KeyItems) {
+            $Mount = if ($VolObj.MountPoint) { $VolObj.MountPoint } elseif ($VolObj.mount_point) { $VolObj.mount_point } else { $null }
+            $RecPass = if ($VolObj.RecoveryPassword) { $VolObj.RecoveryPassword } else { $VolObj.recovery_password }
+            $RecKeyId = if ($VolObj.RecoveryKeyId) { $VolObj.RecoveryKeyId } else { $VolObj.key_protector_id }
+            $VolType = if ($VolObj.VolumeType) { $VolObj.VolumeType } elseif ($VolObj.volume_type) { $VolObj.volume_type } else { "Data" }
+            $DiskSer = if ($VolObj.DiskSerialNumber) { $VolObj.DiskSerialNumber } elseif ($VolObj.disk_serial_number) { $VolObj.disk_serial_number } else { $null }
+            $PartNum = if ($null -ne $VolObj.PartitionNumber) { $VolObj.PartitionNumber } else { $VolObj.partition_number }
+            $PartGuid = if ($VolObj.PartitionGuid) { $VolObj.PartitionGuid } else { $VolObj.partition_guid }
+
             # Skip C: drive since C: is wiped and reinstalled with fresh encryption post-install
             if ($Mount -and $Mount -notlike "C*") {
+                $CleanMount = ([System.IO.Path]::GetPathRoot($Mount)).TrimEnd('\')
+                if (-not $CleanMount) { $CleanMount = $Mount.TrimEnd('\') }
+
+                # Match against PreservedDiskSpecs to bind hardware identity
+                $MatchedSpec = $null
+                if ($DiskSer) {
+                    $MatchedSpec = $PreservedDiskSpecs | Where-Object { $_.SerialNumber -ieq $DiskSer } | Select-Object -First 1
+                }
+                if (-not $MatchedSpec -and $CleanMount) {
+                    $MatchedSpec = $PreservedDiskSpecs | Where-Object { $_.ExpectedMount -ieq $CleanMount } | Select-Object -First 1
+                }
+                if ($MatchedSpec) {
+                    if (-not $DiskSer) { $DiskSer = $MatchedSpec.SerialNumber }
+                    if ($null -eq $PartNum) { $PartNum = $MatchedSpec.PartitionNumber }
+                    if (-not $PartGuid) { $PartGuid = $MatchedSpec.PartitionGuid }
+                    if ($MatchedSpec.ExpectedMount) { $CleanMount = $MatchedSpec.ExpectedMount }
+                }
+
                 $BitLockerEntries.Add([PSCustomObject]@{
-                    MountPoint       = $Mount
-                    VolumeType       = if ($VolObj.VolumeType) { $VolObj.VolumeType } else { "Data" }
-                    RecoveryPassword = $VolObj.RecoveryPassword
-                    RecoveryKeyId    = $VolObj.RecoveryKeyId
+                    MountPoint       = $CleanMount
+                    DiskSerialNumber = $DiskSer
+                    PartitionNumber  = $PartNum
+                    PartitionGuid    = $PartGuid
+                    VolumeType       = $VolType
+                    RecoveryPassword = $RecPass
+                    RecoveryKeyId    = $RecKeyId
                 })
             }
         }
     }
     $BitLockerPath = Join-Path $PayloadDir "bitlocker-keys.json"
-    $BitLockerJson = if ($BitLockerEntries.Count -eq 0) { "[]" } else { $BitLockerEntries | ConvertTo-Json -Depth 4 }
+    $BitLockerJson = if ($BitLockerEntries.Count -eq 0) { "[]" } else { ConvertTo-Json -InputObject @($BitLockerEntries.ToArray()) -Depth 4 }
     $BitLockerJson | Set-Content -Path $BitLockerPath -Encoding UTF8
 
     # =========================================================================
-    # 3. Generate Pre-Computed Junctions Manifest (junctions-manifest.json)
+    # 4. Generate Pre-Computed Junctions Manifest (junctions-manifest.json)
     # =========================================================================
     $JunctionsList = [System.Collections.Generic.List[PSCustomObject]]::new()
     $Catalog = Get-ReglazeCatalog -RepoRoot $RepoRoot
+
+    $TestIsCloudOrPhase5Target = {
+        param([string]$RawTarget, [string]$ResolvedTarget, $CatApp)
+        if ($RawTarget -like "*%STREAM%*" -or $RawTarget -like "*%SYNC_*") { return $true }
+        if ($StreamMountPoint -and $ResolvedTarget.StartsWith($StreamMountPoint, [System.StringComparison]::OrdinalIgnoreCase)) { return $true }
+        foreach ($SPath in $SyncRootPaths) {
+            if ($ResolvedTarget.StartsWith($SPath, [System.StringComparison]::OrdinalIgnoreCase)) { return $true }
+        }
+        if ($CatApp -and $CatApp.install -and $CatApp.install.method -in @("steam", "manual")) { return $true }
+        return $false
+    }
 
     if ($Blueprint.applications) {
         $AppProps = @($Blueprint.applications.PSObject.Properties)
@@ -159,24 +366,24 @@ function Build-ReglazePayload {
                         $ResolvedLink = Resolve-VariableString -InputString $ConfiguredLink -VariableMap $VarMap
                         $ResolvedTarget = Resolve-VariableString -InputString $ConfiguredTarget -VariableMap $VarMap
 
-                        # Determine scope: machine vs user
-                        $Scope = "user"
-                        if ($ResolvedLink -like "C:\ProgramData*" -or $ResolvedLink -like "C:\Program Files*") {
-                            $Scope = "machine"
-                        }
+                        $RequiresElevation = [bool]($ResolvedLink -like "C:\ProgramData*" -or $ResolvedLink -like "C:\Program Files*")
+                        $DependsOnPhase5 = & $TestIsCloudOrPhase5Target $ConfiguredTarget $ResolvedTarget $CatalogApp
 
+                        # Defer cloud-backed (%STREAM%, %SYNC_*%) and Steam/Manual app junctions to Phase 5 (hydrate.ps1)
+                        $Scope = if ($RequiresElevation -and -not $DependsOnPhase5) { "machine" } else { "user" }
                         $StorageType = if ($Dir.recommended_storage) { $Dir.recommended_storage } else { "streaming" }
 
                         $JunctionsList.Add([PSCustomObject]@{
-                            AppId            = $AppId
-                            DirectoryId      = $Dir.id
-                            Description      = $Dir.description
-                            Link             = $ResolvedLink
-                            Target           = $ResolvedTarget
-                            Scope            = $Scope
-                            StorageType      = $StorageType
-                            SafeForStream    = [bool]$Dir.safe_for_stream
-                            CollisionAction  = "backup"
+                            AppId             = $AppId
+                            DirectoryId       = $Dir.id
+                            Description       = $Dir.description
+                            Link              = $ResolvedLink
+                            Target            = $ResolvedTarget
+                            Scope             = $Scope
+                            RequiresElevation = $RequiresElevation
+                            StorageType       = $StorageType
+                            SafeForStream     = [bool]$Dir.safe_for_stream
+                            CollisionAction   = "backup"
                         })
                     }
                 }
@@ -192,19 +399,22 @@ function Build-ReglazePayload {
                     if ($CustDir.link -and $CustDir.target) {
                         $ResolvedLink = Resolve-VariableString -InputString $CustDir.link -VariableMap $VarMap
                         $ResolvedTarget = Resolve-VariableString -InputString $CustDir.target -VariableMap $VarMap
-                        $Scope = if ($ResolvedLink -like "C:\ProgramData*" -or $ResolvedLink -like "C:\Program Files*") { "machine" } else { "user" }
+                        $RequiresElevation = [bool]($ResolvedLink -like "C:\ProgramData*" -or $ResolvedLink -like "C:\Program Files*")
+                        $DependsOnPhase5 = & $TestIsCloudOrPhase5Target $CustDir.target $ResolvedTarget $null
+                        $Scope = if ($RequiresElevation -and -not $DependsOnPhase5) { "machine" } else { "user" }
                         $StorageType = if ($CustDir.storage_type) { $CustDir.storage_type } else { "streaming" }
 
                         $JunctionsList.Add([PSCustomObject]@{
-                            AppId            = "custom"
-                            DirectoryId      = if ($CustDir.name) { ($CustDir.name -replace '[^a-zA-Z0-9_]', '_').ToLower() } else { "custom_dir" }
-                            Description      = if ($CustDir.name) { $CustDir.name } else { "Custom Directory Junction" }
-                            Link             = $ResolvedLink
-                            Target           = $ResolvedTarget
-                            Scope            = $Scope
-                            StorageType      = $StorageType
-                            SafeForStream    = $true
-                            CollisionAction  = "backup"
+                            AppId             = "custom"
+                            DirectoryId       = if ($CustDir.name) { ($CustDir.name -replace '[^a-zA-Z0-9_]', '_').ToLower() } else { "custom_dir" }
+                            Description       = if ($CustDir.name) { $CustDir.name } else { "Custom Directory Junction" }
+                            Link              = $ResolvedLink
+                            Target            = $ResolvedTarget
+                            Scope             = $Scope
+                            RequiresElevation = $RequiresElevation
+                            StorageType       = $StorageType
+                            SafeForStream     = $true
+                            CollisionAction   = "backup"
                         })
                     }
                 }
@@ -213,14 +423,177 @@ function Build-ReglazePayload {
     }
 
     $JunctionsPath = Join-Path $PayloadDir "junctions-manifest.json"
-    $JunctionsJson = if ($JunctionsList.Count -eq 0) { "[]" } else { $JunctionsList | ConvertTo-Json -Depth 4 }
+    $JunctionsJson = if ($JunctionsList.Count -eq 0) { "[]" } else { ConvertTo-Json -InputObject @($JunctionsList.ToArray()) -Depth 4 }
     $JunctionsJson | Set-Content -Path $JunctionsPath -Encoding UTF8
 
     # =========================================================================
-    # 4. Generate Machine Bootstrap Runner (bootstrap.ps1)
+    # 5. Generate Google Drive Setup & Sync Migration Payload (google-drive-setup.json)
+    # =========================================================================
+    $ProfileName = if ($Blueprint.profile) {
+        [string]$Blueprint.profile
+    } elseif ($AuditReference -and $AuditReference.audit_metadata -and $AuditReference.audit_metadata.profile) {
+        [string]$AuditReference.audit_metadata.profile
+    } else {
+        "workstation"
+    }
+
+    $TargetComputerName = if ($Blueprint.system -and $Blueprint.system.computer_name) { [string]$Blueprint.system.computer_name } else { "WORKSTATION" }
+    $PrimaryUserEmail = if ($Blueprint.system -and $Blueprint.system.users -and $Blueprint.system.users.primary_user -and $Blueprint.system.users.primary_user.email) {
+        [string]$Blueprint.system.users.primary_user.email
+    } elseif ($AuditReference -and $AuditReference.user_identity -and $AuditReference.user_identity.email) {
+        [string]$AuditReference.user_identity.email
+    } else {
+        "user@example.com"
+    }
+
+    # Resolve SourceComputerName from: (1) storage.sync.source_computer, (2) profile-computers.json, (3) audit-reference.json, (4) system.computer_name
+    $SourceComputerName = $null
+    if ($Blueprint.storage -and $Blueprint.storage.sync -and $Blueprint.storage.sync.source_computer) {
+        $SourceComputerName = [string]$Blueprint.storage.sync.source_computer
+    }
+    if (-not $SourceComputerName -and $BlueprintFile) {
+        $BpDir = Split-Path -Parent $BlueprintFile
+        $ProfRegPath = Join-Path $BpDir "profile-computers.json"
+        if (Test-Path $ProfRegPath) {
+            try {
+                $ProfReg = Get-Content -Raw -Path $ProfRegPath | ConvertFrom-Json
+                if ($ProfReg.profiles -and $ProfReg.profiles.$ProfileName) {
+                    $PEntry = $ProfReg.profiles.$ProfileName
+                    if ($PEntry.latest_computer_name) {
+                        $SourceComputerName = [string]$PEntry.latest_computer_name
+                    }
+                }
+            } catch {}
+        }
+    }
+    if (-not $SourceComputerName -and $AuditReference) {
+        if ($AuditReference.profile_association -and $AuditReference.profile_association.latest_computer_name) {
+            $SourceComputerName = [string]$AuditReference.profile_association.latest_computer_name
+        } elseif ($AuditReference.audit_metadata -and $AuditReference.audit_metadata.host_name) {
+            $SourceComputerName = [string]$AuditReference.audit_metadata.host_name
+        }
+    }
+    if (-not $SourceComputerName) {
+        $SourceComputerName = $TargetComputerName
+    }
+
+    $MigrationMode = if ($Blueprint.storage -and $Blueprint.storage.sync -and $Blueprint.storage.sync.migration_mode) {
+        [string]$Blueprint.storage.sync.migration_mode
+    } else {
+        "copy"
+    }
+
+    $StreamSentinel = if ($VarMap.ContainsKey("STREAM")) { $VarMap["STREAM"] } else { "$StreamMountPoint\My Drive" }
+
+    $SyncDirPayloads = [System.Collections.Generic.List[PSCustomObject]]::new()
+    if ($Blueprint.storage -and $Blueprint.storage.sync -and $Blueprint.storage.sync.directories) {
+        $SyncDirsObj = $Blueprint.storage.sync.directories
+        $SyncDirProps = if ($SyncDirsObj -is [System.Collections.IDictionary]) { $SyncDirsObj.Keys } else { $SyncDirsObj.PSObject.Properties.Name }
+        foreach ($SProp in $SyncDirProps) {
+            $SDir = if ($SyncDirsObj -is [System.Collections.IDictionary]) { $SyncDirsObj[$SProp] } else { $SyncDirsObj.$SProp }
+            $ResolvedLocal = Resolve-VariableString -InputString $SDir.local_path -VariableMap $VarMap
+            $ResolvedVerify = if ($SDir.verify_folder) { Resolve-VariableString -InputString $SDir.verify_folder -VariableMap $VarMap } else { $ResolvedLocal }
+            $CloudFolder = if ($SDir.cloud_folder) { [string]$SDir.cloud_folder } else { Split-Path -Leaf $ResolvedLocal }
+
+            $CloudDocId = $null
+            if ($AuditReference -and $AuditReference.storage_providers -and $AuditReference.storage_providers.sync_directories) {
+                $AuditSyncMatch = $AuditReference.storage_providers.sync_directories | Where-Object { $_.id -eq $SProp -or $_.cloud_folder -eq $CloudFolder } | Select-Object -First 1
+                if ($AuditSyncMatch -and $AuditSyncMatch.cloud_doc_id) {
+                    $CloudDocId = [string]$AuditSyncMatch.cloud_doc_id
+                }
+            }
+
+            $SyncDirPayloads.Add([PSCustomObject]@{
+                Id                       = $SProp
+                LocalPath                = $ResolvedLocal
+                CloudFolder              = $CloudFolder
+                VerifyFolder             = $ResolvedVerify
+                SyncVariable             = $SDir.sync_variable
+                CloudDocId               = $CloudDocId
+                SourceComputerStreamPath = "$StreamMountPoint\Other computers\$SourceComputerName\$CloudFolder"
+            })
+        }
+    }
+
+    $SyncSummaryStr = if ($SyncDirPayloads.Count -gt 0) {
+        ($SyncDirPayloads | ForEach-Object { "$($_.CloudFolder) ($($_.LocalPath))" }) -join ", "
+    } else {
+        "None configured"
+    }
+
+    $SyncBulletsLines = @()
+    if ($SyncDirPayloads.Count -gt 0) {
+        foreach ($SD in $SyncDirPayloads) {
+            $SyncBulletsLines += "- **$($SD.CloudFolder)** (`$($SD.Id)`):"
+            $SyncBulletsLines += "  - Local Path: ``$($SD.LocalPath)``"
+            $SyncBulletsLines += "  - Previous Computer Container Path: ``$($SD.SourceComputerStreamPath)``"
+        }
+    } else {
+        $SyncBulletsLines += "- *(No Folders from this computer configured)*"
+    }
+    $SyncBulletsStr = $SyncBulletsLines -join "`n"
+
+    $TemplateTokens = @{
+        "{{PRIMARY_EMAIL}}"        = $PrimaryUserEmail
+        "{{STREAM_MOUNT}}"         = $StreamMountPoint
+        "{{STREAM_VERIFY_FOLDER}}" = $StreamSentinel
+        "{{SYNC_DIRS_SUMMARY}}"    = $SyncSummaryStr
+        "{{SYNC_DIRS_BULLETS}}"    = $SyncBulletsStr
+        "{{MIGRATION_MODE}}"       = $MigrationMode
+        "{{SOURCE_COMPUTER_NAME}}" = $SourceComputerName
+        "{{PROFILE_NAME}}"         = $ProfileName
+    }
+
+    $ApplyTemplateTokens = {
+        param([string]$Text)
+        if ([string]::IsNullOrEmpty($Text)) { return $Text }
+        $Out = $Text
+        foreach ($Key in $TemplateTokens.Keys) {
+            $Out = $Out.Replace($Key, [string]$TemplateTokens[$Key])
+        }
+        return $Out
+    }
+
+    # Render google_drive catalog entry instructions & guide.md
+    $RenderedInstructions = @()
+    $GDriveApp = $Catalog | Where-Object { $_.app_id -eq "google_drive" } | Select-Object -First 1
+    if ($GDriveApp -and $GDriveApp.install -and $GDriveApp.install.instructions) {
+        foreach ($InstLine in $GDriveApp.install.instructions) {
+            $RenderedInstructions += (& $ApplyTemplateTokens $InstLine)
+        }
+        $GDriveApp.install.instructions = $RenderedInstructions
+    }
+
+    $GDriveGuideTemplatePath = Join-Path $RepoRoot "data\applications\google_drive\guide.md"
+    $RenderedGuideContent = ""
+    if (Test-Path $GDriveGuideTemplatePath) {
+        $RawGuide = Get-Content -Raw -Path $GDriveGuideTemplatePath
+        $RenderedGuideContent = & $ApplyTemplateTokens $RawGuide
+        $GoogleDriveGuidePath = Join-Path $PayloadDir "google-drive-guide.md"
+        $RenderedGuideContent | Set-Content -Path $GoogleDriveGuidePath -Encoding UTF8
+    }
+
+    $GoogleDriveSetupObj = [PSCustomObject]@{
+        Profile              = $ProfileName
+        TargetComputerName   = $TargetComputerName
+        SourceComputerName   = $SourceComputerName
+        PrimaryUserEmail     = $PrimaryUserEmail
+        StreamMountPoint     = $StreamMountPoint
+        StreamVerifyFolder   = $StreamSentinel
+        MigrationMode        = $MigrationMode
+        SyncDirectories      = $SyncDirPayloads.ToArray()
+        RenderedInstructions = $RenderedInstructions
+        GuideFile            = "google-drive-guide.md"
+    }
+    $GoogleDriveSetupPath = Join-Path $PayloadDir "google-drive-setup.json"
+    $GoogleDriveSetupObj | ConvertTo-Json -Depth 6 | Set-Content -Path $GoogleDriveSetupPath -Encoding UTF8
+
+    # =========================================================================
+    # 6. Generate Machine Bootstrap Runner (bootstrap.ps1)
     # =========================================================================
     $UpdatesDrivers = if ($Blueprint.system.updates -and $null -ne $Blueprint.system.updates.drivers) { [bool]$Blueprint.system.updates.drivers } else { $true }
     $UpdatesWindows = if ($Blueprint.system.updates -and $null -ne $Blueprint.system.updates.windows_updates) { [bool]$Blueprint.system.updates.windows_updates } else { $true }
+    $LocalAdminUser = if ($Blueprint.system.users.local_admin.username) { $Blueprint.system.users.local_admin.username } else { "LocalAdmin" }
 
     $BootstrapScript = @"
 <#
@@ -228,10 +601,12 @@ function Build-ReglazePayload {
     Reglaze Phase 4 Machine Bootstrap Runner.
 .DESCRIPTION
     Executes automatically under LocalAdmin account upon initial post-install boot.
-    Configures BitLocker, executes automated WHQL driver updates, applies general
-    Windows updates, executes WinGet DSC application provisioning, stages WSL2,
-    creates machine-scope directory junctions, destroys auto-logon credentials,
-    and stages user hydration in RunOnce.
+    Reconciles preserved disk drive letters, unlocks connected BitLocker volumes,
+    executes automated WHQL driver updates, checks for disconnected required drives
+    (offering a safe power-down & reconnect checkpoint with LocalAdmin AutoLogon + RunOnce),
+    applies general Windows updates, configures Google Drive streaming mount policy,
+    executes WinGet DSC application provisioning, stages WSL2, creates machine-scope
+    directory junctions, destroys auto-logon credentials, and stages user hydration.
 #>
 [CmdletBinding()]
 param()
@@ -242,47 +617,121 @@ Write-Host "               REGLAZE PHASE 4: MACHINE BOOTSTRAP RUNNER            
 Write-Host "================================================================================" -ForegroundColor Cyan
 
 `$PayloadDir = Split-Path -Parent `$MyInvocation.MyCommand.Path
-
-# 1. Unlock & Re-arm Preserved BitLocker Volumes
+`$StateFile = "C:\Reglaze\bootstrap-state.json"
+`$DiskConfigFile = Join-Path `$PayloadDir "disk-config.json"
 `$BitLockerKeyFile = Join-Path `$PayloadDir "bitlocker-keys.json"
-if (Test-Path `$BitLockerKeyFile) {
-    Write-Host "[1/8] Unlocking and re-arming preserved BitLocker volumes..." -ForegroundColor Yellow
-    `$BitLockerPayload = Get-Content -Raw `$BitLockerKeyFile | ConvertFrom-Json
-    foreach (`$Vol in `$BitLockerPayload) {
-        if (`$Vol.MountPoint -and `$Vol.RecoveryPassword) {
-            try {
-                Write-Host " - Unlocking `$(`$Vol.MountPoint)..."
-                Unlock-BitLocker -MountPoint `$Vol.MountPoint -RecoveryPassword `$Vol.RecoveryPassword -ErrorAction Stop
-                Enable-BitLockerAutoUnlock -MountPoint `$Vol.MountPoint -ErrorAction SilentlyContinue
-                Write-Host "   Successfully unlocked and enabled auto-unlock for `$(`$Vol.MountPoint)." -ForegroundColor Green
-            } catch {
-                Write-Warning "   Failed to auto-unlock `$(`$Vol.MountPoint): `$(`$_.Exception.Message)"
-            }
+`$DriveLetterScript = Join-Path `$PayloadDir "Set-ReglazeDriveLetters.ps1"
+`$BitLockerScript = Join-Path `$PayloadDir "Unlock-BitLockerVolumes.ps1"
+
+if (Test-Path `$DriveLetterScript) { . `$DriveLetterScript }
+if (Test-Path `$BitLockerScript) { . `$BitLockerScript }
+
+`$BootstrapState = [PSCustomObject]@{
+    CompletedSteps = @()
+    StartedAt      = (Get-Date).ToString("o")
+}
+if (Test-Path `$StateFile) {
+    try {
+        `$BootstrapState = Get-Content -Raw `$StateFile | ConvertFrom-Json
+        if (-not `$BootstrapState.CompletedSteps) { `$BootstrapState.CompletedSteps = @() }
+        Write-Host "Resumed Phase 4 bootstrap state. Completed steps: `$(`$BootstrapState.CompletedSteps -join ', ')" -ForegroundColor DarkCyan
+    } catch {}
+}
+
+function Save-BootstrapStep ([string]`$StepName) {
+    if (`$BootstrapState.CompletedSteps -notcontains `$StepName) {
+        `$BootstrapState.CompletedSteps += `$StepName
+    }
+    `$StateDir = Split-Path -Parent `$StateFile
+    if (-not (Test-Path `$StateDir)) { New-Item -ItemType Directory -Path `$StateDir -Force | Out-Null }
+    `$BootstrapState | ConvertTo-Json -Depth 4 | Set-Content -Path `$StateFile -Encoding UTF8
+}
+
+# 1. Pass 1 Drive Letter Reconciliation & Connected BitLocker Unlock
+Write-Host "[1/9] Reconciling drive letters (Pass 1) and unlocking connected BitLocker volumes..." -ForegroundColor Yellow
+`$Pass1Disks = `$null
+if (Get-Command Invoke-DriveLetterReconciliation -ErrorAction SilentlyContinue) {
+    `$Pass1Disks = Invoke-DriveLetterReconciliation -DiskConfigPath `$DiskConfigFile -Simulation:`$false -Live:`$true
+}
+if ((Test-Path `$BitLockerKeyFile) -and (Get-Command Unlock-PreservedBitLockerVolumes -ErrorAction SilentlyContinue)) {
+    `$ConnectedSerials = if (`$Pass1Disks -and `$Pass1Disks.ConnectedPreservedDisks) {
+        @(`$Pass1Disks.ConnectedPreservedDisks | ForEach-Object { `$_.SerialNumber })
+    } else { `$null }
+    Unlock-PreservedBitLockerVolumes -KeyFilePath `$BitLockerKeyFile -ConnectedSerialNumbers `$ConnectedSerials -Simulation:`$false -Live:`$true | Out-Null
+}
+Save-BootstrapStep "pass1_disks_and_bitlocker"
+
+# 2. Automated WHQL Driver Updates (Chipset, Storage Controllers, Audio, Network, GPU)
+if (`$BootstrapState.CompletedSteps -notcontains "whql_drivers") {
+    if ($($UpdatesDrivers.ToString().ToLower())) {
+        Write-Host "[2/9] Running automated WHQL driver servicing pass..." -ForegroundColor Yellow
+        try {
+            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+            Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force -Scope CurrentUser -ErrorAction SilentlyContinue | Out-Null
+            Set-PSRepository -Name 'PSGallery' -InstallationPolicy Trusted -ErrorAction SilentlyContinue
+            Install-Module -Name PSWindowsUpdate -Force -Scope CurrentUser -ErrorAction Stop
+            Write-Host " - Scanning and installing WHQL device drivers..."
+            Get-WindowsUpdate -Category "Drivers" -Install -AcceptAll -IgnoreReboot -ErrorAction SilentlyContinue
+            Write-Host "   WHQL driver pass completed." -ForegroundColor Green
+        } catch {
+            Write-Warning "   Driver update pass encountered an issue: `$(`$_.Exception.Message). Continuing installation."
+        }
+    } else {
+        Write-Host "[2/9] Automated driver servicing pass skipped by configuration." -ForegroundColor DarkGray
+    }
+    Save-BootstrapStep "whql_drivers"
+}
+
+# 2b. Pass 2 Drive Letter Reconciliation & Missing Required Disk Reconnection Check
+Write-Host "[2b/9] Verifying required preserved disks and reconciling drive letters (Pass 2)..." -ForegroundColor Yellow
+if (Get-Command Invoke-DriveLetterReconciliation -ErrorAction SilentlyContinue) {
+    `$Pass2Disks = Invoke-DriveLetterReconciliation -DiskConfigPath `$DiskConfigFile -Simulation:`$false -Live:`$true
+    while (`$Pass2Disks.RequiresReconnectShutdown) {
+        Write-Host ""
+        Write-Host "================================================================================" -ForegroundColor Yellow
+        Write-Host "  ACTION REQUIRED: PRESERVED DRIVE(S) DISCONNECTED" -ForegroundColor Yellow
+        Write-Host "================================================================================" -ForegroundColor Yellow
+        Write-Host "The following preserved disk(s) are required by your configuration:" -ForegroundColor White
+        foreach (`$Missing in `$Pass2Disks.MissingRequiredDisks) {
+            Write-Host "  - Expected Mount: `$(`$Missing.ExpectedMount) | Label: `$(`$Missing.Label) | Serial: `$(`$Missing.SerialNumber)" -ForegroundColor Cyan
+        }
+        Write-Host ""
+        Write-Host "Options:"
+        Write-Host "  [P] Power down (shut down) now so you can safely reconnect SATA/NVMe drives (Recommended)"
+        Write-Host "      (Reglaze will automatically log back in and resume Phase 4 when powered on)"
+        Write-Host "  [R] Re-scan storage bus now (if you just connected an external/hot-plug drive)"
+        Write-Host "  [C] Continue without missing drives (not recommended)"
+        `$Choice = Read-Host "Select an option [P/R/C] (default: P)"
+        if ([string]::IsNullOrWhiteSpace(`$Choice) -or `$Choice -match '^[Pp]') {
+            `$BootstrapCmd = "powershell.exe -ExecutionPolicy Bypass -File C:\Reglaze\payload\bootstrap.ps1"
+            Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce" -Name "ReglazeBootstrapResume" -Value `$BootstrapCmd -ErrorAction SilentlyContinue
+            `$WinlogonPath = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon"
+            Set-ItemProperty -Path `$WinlogonPath -Name "AutoAdminLogon" -Value "1" -ErrorAction SilentlyContinue
+            Set-ItemProperty -Path `$WinlogonPath -Name "DefaultUserName" -Value "$LocalAdminUser" -ErrorAction SilentlyContinue
+            Remove-ItemProperty -Path `$WinlogonPath -Name "AutoLogonCount" -ErrorAction SilentlyContinue
+            Save-BootstrapStep "awaiting_drive_reconnect"
+            Write-Host "Shutting down workstation for drive reconnection..." -ForegroundColor Yellow
+            Start-Sleep -Seconds 3
+            Stop-Computer -Force
+            exit 0
+        } elseif (`$Choice -match '^[Rr]') {
+            Update-HostStorageCache -ErrorAction SilentlyContinue
+            `$Pass2Disks = Invoke-DriveLetterReconciliation -DiskConfigPath `$DiskConfigFile -Simulation:`$false -Live:`$true
+        } else {
+            Write-Warning "Proceeding without missing required disks by user override."
+            break
         }
     }
-}
 
-# 2. Automated WHQL Driver Updates (Chipset, Audio, Network, GPU)
-if ($($UpdatesDrivers.ToString().ToLower())) {
-    Write-Host "[2/8] Running automated WHQL driver servicing pass..." -ForegroundColor Yellow
-    try {
-        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-        Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force -Scope CurrentUser -ErrorAction SilentlyContinue | Out-Null
-        Set-PSRepository -Name 'PSGallery' -InstallationPolicy Trusted -ErrorAction SilentlyContinue
-        Install-Module -Name PSWindowsUpdate -Force -Scope CurrentUser -ErrorAction Stop
-        Write-Host " - Scanning and installing WHQL device drivers..."
-        Get-WindowsUpdate -Category "Drivers" -Install -AcceptAll -IgnoreReboot -ErrorAction SilentlyContinue
-        Write-Host "   WHQL driver pass completed." -ForegroundColor Green
-    } catch {
-        Write-Warning "   Driver update pass encountered an issue: `$(`$_.Exception.Message). Continuing installation."
+    if ((Test-Path `$BitLockerKeyFile) -and (Get-Command Unlock-PreservedBitLockerVolumes -ErrorAction SilentlyContinue)) {
+        Unlock-PreservedBitLockerVolumes -KeyFilePath `$BitLockerKeyFile -Simulation:`$false -Live:`$true | Out-Null
     }
-} else {
-    Write-Host "[2/8] Automated driver servicing pass skipped by configuration." -ForegroundColor DarkGray
 }
+Save-BootstrapStep "pass2_disks_verified"
 
 # 3. General Windows Quality and Security Updates
 if ($($UpdatesWindows.ToString().ToLower())) {
-    Write-Host "[3/8] Running general Windows update pass..." -ForegroundColor Yellow
+    Write-Host "[3/9] Running general Windows update pass..." -ForegroundColor Yellow
     try {
         Write-Host " - Installing quality & security patches..."
         Get-WindowsUpdate -NotCategory "Drivers" -Install -AcceptAll -IgnoreReboot -ErrorAction SilentlyContinue
@@ -291,11 +740,22 @@ if ($($UpdatesWindows.ToString().ToLower())) {
         Write-Warning "   Windows update pass encountered an issue: `$(`$_.Exception.Message). Continuing installation."
     }
 } else {
-    Write-Host "[3/8] General Windows updates skipped by configuration." -ForegroundColor DarkGray
+    Write-Host "[3/9] General Windows updates skipped by configuration." -ForegroundColor DarkGray
 }
 
-# 4. Execute WinGet DSC Configuration (Machine Scope Application Deployment)
-Write-Host "[4/8] Executing WinGet DSC application provisioning..." -ForegroundColor Yellow
+# 4. Pre-configure Google Drive DefaultMountPoint Policy & Execute WinGet DSC
+Write-Host "[4/9] Configuring Google Drive streaming mount policy ($StreamMountPoint) & running WinGet DSC..." -ForegroundColor Yellow
+try {
+    `$DriveFsPolicyPath = "HKLM:\SOFTWARE\Policies\Google\DriveFS"
+    if (-not (Test-Path `$DriveFsPolicyPath)) {
+        New-Item -Path `$DriveFsPolicyPath -Force | Out-Null
+    }
+    Set-ItemProperty -Path `$DriveFsPolicyPath -Name "DefaultMountPoint" -Value "$StreamDriveLetter" -Type String -Force
+    Write-Host " - Configured DriveFS DefaultMountPoint policy to '${StreamDriveLetter}:'" -ForegroundColor Green
+} catch {
+    Write-Warning "   Could not set DriveFS DefaultMountPoint policy: `$(`$_.Exception.Message)"
+}
+
 `$DscManifest = Join-Path `$PayloadDir "configuration.dsc.yaml"
 if (Test-Path `$DscManifest) {
     Write-Host " - Running: winget configure --file `"`$DscManifest`" --accept-configuration-agreements --disable-interactivity"
@@ -306,7 +766,7 @@ if (Test-Path `$DscManifest) {
 }
 
 # 5. Stage WSL2 Base Kernel and Ubuntu Distro
-Write-Host "[5/8] Staging WSL2 subsystem and Ubuntu distribution..." -ForegroundColor Yellow
+Write-Host "[5/9] Staging WSL2 subsystem and Ubuntu distribution..." -ForegroundColor Yellow
 try {
     & wsl.exe --install -d Ubuntu --no-launch
     Write-Host "   WSL2 staged successfully." -ForegroundColor Green
@@ -314,8 +774,8 @@ try {
     Write-Warning "   WSL2 staging returned: `$(`$_.Exception.Message)"
 }
 
-# 6. Create Machine-Level Junctions
-Write-Host "[6/8] Creating machine-level directory junctions..." -ForegroundColor Yellow
+# 6. Create Machine-Level Junctions (Local/Preserved Disk Targets Only)
+Write-Host "[6/9] Creating machine-level directory junctions..." -ForegroundColor Yellow
 `$JunctionsManifest = Join-Path `$PayloadDir "junctions-manifest.json"
 if (Test-Path `$JunctionsManifest) {
     `$Junctions = Get-Content -Raw `$JunctionsManifest | ConvertFrom-Json
@@ -351,17 +811,14 @@ Write-Host "[7/9] Applying Windows system preferences & options..." -ForegroundC
 if (Test-Path `$WinSettingsFile) {
     try {
         `$WinCfg = Get-Content -Raw `$WinSettingsFile | ConvertFrom-Json
-        # Explorer
         `$ExpScript = Join-Path `$WinScriptsDir "explorer-folder-options.ps1"
         if (Test-Path `$ExpScript) {
             & `$ExpScript -ShowHiddenFiles:([bool]`$WinCfg.explorer.show_hidden_files) -ShowFileExtensions:([bool]`$WinCfg.explorer.show_file_extensions) -LaunchTo `$WinCfg.explorer.launch_to
         }
-        # Taskbar
         `$TbScript = Join-Path `$WinScriptsDir "taskbar-system-tray.ps1"
         if (Test-Path `$TbScript) {
             & `$TbScript -TaskbarAlignment `$WinCfg.taskbar.alignment -SearchMode `$WinCfg.taskbar.search_mode -HideWidgets:(-not [bool]`$WinCfg.taskbar.widgets_visible) -HideChat:(-not [bool]`$WinCfg.taskbar.chat_visible)
         }
-        # Power
         `$PwrScript = Join-Path `$WinScriptsDir "performance-power.ps1"
         if (Test-Path `$PwrScript) {
             `$Plan = (`$WinCfg.power.active_scheme_name -replace '\s+', '')
@@ -377,6 +834,7 @@ if (Test-Path `$WinSettingsFile) {
 Write-Host "[8/9] Destroying temporary LocalAdmin AutoLogon credentials..." -ForegroundColor Yellow
 Remove-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" -Name "DefaultPassword" -ErrorAction SilentlyContinue
 Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" -Name "AutoAdminLogon" -Value "0" -ErrorAction SilentlyContinue
+Remove-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce" -Name "ReglazeBootstrapResume" -ErrorAction SilentlyContinue
 Write-Host "   AutoLogon deactivated." -ForegroundColor Green
 
 # 9. Schedule Phase 5 Hydration on User Logon & Stage Desktop Shortcut
@@ -384,7 +842,6 @@ Write-Host "[9/9] Scheduling Phase 5 User Hydration..." -ForegroundColor Yellow
 `$HydrateCmd = "powershell.exe -ExecutionPolicy Bypass -File C:\Reglaze\payload\hydrate.ps1"
 Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce" -Name "ReglazeHydrate" -Value `$HydrateCmd -ErrorAction SilentlyContinue
 
-# Create shortcut on Public Desktop for easy manual launch/resumption
 try {
     `$WshShell = New-Object -ComObject WScript.Shell
     `$ShortcutPath = "C:\Users\Public\Desktop\Reglaze Hydration.lnk"
@@ -399,6 +856,7 @@ try {
     Write-Warning "   Could not create public desktop shortcut: `$(`$_.Exception.Message)"
 }
 
+Save-BootstrapStep "completed"
 Write-Host ""
 Write-Host "================================================================================" -ForegroundColor Green
 Write-Host "   PHASE 4 MACHINE BOOTSTRAP COMPLETE! REBOOTING INTO USER SESSION...           " -ForegroundColor Green
@@ -411,7 +869,7 @@ Restart-Computer -Force
     $BootstrapScript | Set-Content -Path $BootstrapPath -Encoding UTF8
 
     # =========================================================================
-    # 5. Generate User Hydration Runner (hydrate.ps1) with State Checkpoints
+    # 7. Generate User Hydration Runner (hydrate.ps1) with State Checkpoints
     # =========================================================================
     $StreamSentinel = if ($VarMap.ContainsKey("STREAM")) { $VarMap["STREAM"] } else { "E:\My Drive" }
     $DataDrive = if ($VarMap.ContainsKey("DATA_DRIVE")) { $VarMap["DATA_DRIVE"] } else { "D:" }
@@ -422,9 +880,10 @@ Restart-Computer -Force
     Reglaze Phase 5 User Hydration & Interactive Wizard.
 .DESCRIPTION
     Runs in the primary user session. Manages state persistence via C:\Reglaze\hydrate-state.json
-    so users can safely exit and resume at any point. Walks through Microsoft Account sign-in,
-    cloud virtual mount verification, Steam library auto-discovery, manual app installations,
-    user-scope directory junctions, WSL2 user hydration, and dev repositories.
+    so users can safely exit and resume at any point. Verifies preserved drive mounts, walks through
+    Microsoft Account sign-in, Google Drive virtual mount & Computer sync folder setup/migration,
+    Steam library auto-discovery, manual app installations, user-scope directory junctions,
+    WSL2 user hydration, and dev repositories.
 #>
 [CmdletBinding()]
 param(
@@ -464,6 +923,17 @@ function Save-HydrateState {
     Write-Host "[Checkpoint: Saved step '`$StepName']" -ForegroundColor DarkGray
 }
 
+# --- STEP 0: Verify Preserved Disk Mounts ---
+`$DiskConfigFile = Join-Path `$PayloadDir "disk-config.json"
+if (Test-Path `$DiskConfigFile) {
+    `$DiskCfg = Get-Content -Raw `$DiskConfigFile | ConvertFrom-Json
+    foreach (`$PD in `$DiskCfg.PreservedDisks) {
+        if (`$PD.Required -and `$PD.ExpectedMount -and -not (Test-Path "`$(`$PD.ExpectedMount)\")) {
+            Write-Warning "Required preserved disk '`$(`$PD.Label)' (`$(`$PD.ExpectedMount)) is not currently mounted!"
+        }
+    }
+}
+
 # --- STEP 1: Microsoft Account Connection ---
 if (`$State.CompletedSteps -notcontains "microsoft_account") {
     Write-Host ""
@@ -483,16 +953,33 @@ if (`$State.CompletedSteps -notcontains "microsoft_account") {
     Write-Host "[✓] Step 1: Microsoft Account (Already completed)" -ForegroundColor DarkGray
 }
 
-# --- STEP 2: Cloud Virtual Mount Verification (Google Drive) ---
+# --- STEP 2: Cloud Virtual Mount & Synced Folders Setup (Google Drive) ---
 if (`$State.CompletedSteps -notcontains "cloud_mount") {
     Write-Host ""
     Write-Host "--------------------------------------------------------------------------------" -ForegroundColor Yellow
-    Write-Host "  STEP 2: Sign in to Cloud Storage (Google Drive for Desktop)" -ForegroundColor Yellow
+    Write-Host "  STEP 2: Google Drive Streaming Mount & Synced Folder Migration" -ForegroundColor Yellow
     Write-Host "--------------------------------------------------------------------------------" -ForegroundColor Yellow
     `$SentinelPath = "$StreamSentinel"
-    Write-Host "Directory junctions require your cloud storage virtual stream to be mounted at:"
-    Write-Host "  `$SentinelPath" -ForegroundColor Cyan
-    Write-Host ""
+    `$GDriveSetupFile = Join-Path `$PayloadDir "google-drive-setup.json"
+    `$GDriveSetup = if (Test-Path `$GDriveSetupFile) { Get-Content -Raw `$GDriveSetupFile | ConvertFrom-Json } else { `$null }
+
+    if (`$GDriveSetup) {
+        # Pre-create local synced directories on physical disks
+        foreach (`$SDir in `$GDriveSetup.SyncDirectories) {
+            if (`$SDir.LocalPath -and -not (Test-Path `$SDir.LocalPath)) {
+                New-Item -ItemType Directory -Path `$SDir.LocalPath -Force | Out-Null
+            }
+        }
+        Write-Host "Google Drive Setup Instructions (Profile: `$(`$GDriveSetup.Profile)):" -ForegroundColor Cyan
+        foreach (`$InstLine in `$GDriveSetup.RenderedInstructions) {
+            Write-Host "  • `$InstLine"
+        }
+        Write-Host ""
+    } else {
+        Write-Host "Directory junctions require your cloud storage virtual stream to be mounted at:"
+        Write-Host "  `$SentinelPath" -ForegroundColor Cyan
+        Write-Host ""
+    }
 
     # Launch Google Drive client if not running
     if (-not (Get-Process "GoogleDriveFS" -ErrorAction SilentlyContinue)) {
@@ -504,9 +991,7 @@ if (`$State.CompletedSteps -notcontains "cloud_mount") {
         }
     }
 
-    Write-Host "Please sign in to Google Drive for Desktop in the browser/client."
     Write-Host "Waiting for sentinel directory: `$SentinelPath..." -ForegroundColor Yellow
-    
     `$WaitCount = 0
     while (-not (Test-Path `$SentinelPath)) {
         Start-Sleep -Seconds 3
@@ -523,9 +1008,37 @@ if (`$State.CompletedSteps -notcontains "cloud_mount") {
     if (Test-Path `$SentinelPath) {
         Write-Host "[SUCCESS] Cloud streaming mount verified at `$SentinelPath!" -ForegroundColor Green
     }
+
+    # Migrate (copy/move) files from previous computer's synced folders if configured
+    if (`$GDriveSetup -and `$GDriveSetup.SyncDirectories -and `$GDriveSetup.SyncDirectories.Count -gt 0 -and `$GDriveSetup.MigrationMode -ne "skip") {
+        Write-Host ""
+        Write-Host "Checking previous computer ('`$(`$GDriveSetup.SourceComputerName)') synced folders for migration (`$(`$GDriveSetup.MigrationMode))..." -ForegroundColor Cyan
+        Read-Host "Ensure you have added your synced folder(s) under Google Drive Preferences -> 'Folders from your computer', then press [Enter] to migrate files..."
+        foreach (`$SDir in `$GDriveSetup.SyncDirectories) {
+            `$SrcStreamPath = `$SDir.SourceComputerStreamPath
+            `$DstLocalPath = `$SDir.LocalPath
+            if (`$SrcStreamPath -and (Test-Path `$SrcStreamPath)) {
+                Write-Host " - Migrating (`$(`$GDriveSetup.MigrationMode)) '`$(`$SDir.CloudFolder)' from `$SrcStreamPath -> `$DstLocalPath..." -ForegroundColor Yellow
+                if (-not (Test-Path `$DstLocalPath)) {
+                    New-Item -ItemType Directory -Path `$DstLocalPath -Force | Out-Null
+                }
+                if (`$GDriveSetup.MigrationMode -eq "move") {
+                    Get-ChildItem -LiteralPath `$SrcStreamPath -Force | ForEach-Object {
+                        Move-Item -LiteralPath `$_.FullName -Destination `$DstLocalPath -Force -ErrorAction Continue
+                    }
+                } else {
+                    Copy-Item -Path (Join-Path `$SrcStreamPath "*") -Destination `$DstLocalPath -Recurse -Force -ErrorAction Continue
+                }
+                Write-Host "   Completed migration for '`$(`$SDir.CloudFolder)'." -ForegroundColor Green
+            } else {
+                Write-Host " - Previous computer folder not found at '`$SrcStreamPath' (skipping automatic copy for '`$(`$SDir.CloudFolder)')." -ForegroundColor DarkGray
+            }
+        }
+    }
+
     Save-HydrateState "cloud_mount"
 } else {
-    Write-Host "[✓] Step 2: Cloud Storage Mount (Already completed)" -ForegroundColor DarkGray
+    Write-Host "[✓] Step 2: Cloud Storage Mount & Sync Migration (Already completed)" -ForegroundColor DarkGray
 }
 
 # --- STEP 3: Game Managers & Multi-Library Discovery / Fresh Installs ---
@@ -822,16 +1335,18 @@ echo "=== WSL2 Provisioning Completed Successfully ==="
     $Catalog | ConvertTo-Json -Depth 6 | Set-Content -Path $CatalogJsonPath -Encoding UTF8
 
     return [PSCustomObject]@{
-        PayloadDir          = $PayloadDir
-        DscPath             = $DscPath
-        BitLockerPath       = $BitLockerPath
-        JunctionsPath       = $JunctionsPath
-        BootstrapPath       = $BootstrapPath
-        HydratePath         = $HydratePath
-        WslScriptPath       = $WslPath
-        CatalogPath         = $CatalogJsonPath
-        WindowsSettingsPath = $WinSettingsPath
-        JunctionCount       = $JunctionsList.Count
-        BitLockerKeyCount   = $BitLockerEntries.Count
+        PayloadDir           = $PayloadDir
+        DscPath              = $DscPath
+        DiskConfigPath       = $DiskConfigPath
+        GoogleDriveSetupPath = $GoogleDriveSetupPath
+        BitLockerPath        = $BitLockerPath
+        JunctionsPath        = $JunctionsPath
+        BootstrapPath        = $BootstrapPath
+        HydratePath          = $HydratePath
+        WslScriptPath        = $WslPath
+        CatalogPath          = $CatalogJsonPath
+        WindowsSettingsPath  = $WinSettingsPath
+        JunctionCount        = $JunctionsList.Count
+        BitLockerKeyCount    = $BitLockerEntries.Count
     }
 }

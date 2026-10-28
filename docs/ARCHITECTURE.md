@@ -300,8 +300,9 @@ The pre-flight audit executes `data/windows/audit-windows-settings.ps1` to captu
 - **Power & Performance**: Active power scheme GUID and display/sleep timeouts (`powercfg`).
 
 #### Pre-Flight Output Artifacts
-1. `audit-reference.json`: The machine hardware, cryptographic profile, installed WinGet packages, non-WinGet ARP software, and detected Windows settings.
-2. `reglaze.yaml`: Pre-populated skeleton blueprint reflecting detected packages, junction mappings, and storage options.
+1. `audit-reference.json`: The machine hardware, cryptographic profile, installed WinGet packages, non-WinGet ARP software, `profile_association`, and detected Windows settings.
+2. `profile-computers.json`: Persistent computer-to-profile registry mapping each `profile` to its historical `computer_name` containers and synced folders (`Computers/<ComputerName>/<Folder>`).
+3. `reglaze.yaml`: Pre-populated skeleton blueprint reflecting detected packages, junction mappings, `profile`, hardware-identified `preserved_disks`, and `storage.sync` (`source_computer`, `migration_mode`). When running `reglaze audit` without an existing `reglaze.yaml` in the output directory, `-Profile <name>` is required.
 
 ---
 
@@ -450,46 +451,61 @@ $DiskNumber = $TargetDisk.DeviceId
 
 ### Phase 4: Post-Install Machine Orchestration (`bootstrap.ps1` under LocalAdmin)
 
-Upon initial boot, Windows automatically logs into `LocalAdmin`. `bootstrap.ps1` executes non-interactively in strict sequence:
+Upon initial boot, Windows automatically logs into `LocalAdmin`. `bootstrap.ps1` executes non-interactively in strict sequence, with durable checkpoint support if preserved drives were physically disconnected during Phase 3:
 
 ```powershell
-# 1. Unlock & Re-arm Preserved BitLocker Volumes
-$BitLockerPayload = Get-Content "C:\Reglaze\payload\bitlocker-keys.json" | ConvertFrom-Json
-foreach ($Vol in $BitLockerPayload) {
-    if ($Vol.MountPoint -ne "C:") {
-        Unlock-BitLocker -MountPoint $Vol.MountPoint -RecoveryPassword $Vol.RecoveryPassword
-        Enable-BitLockerAutoUnlock -MountPoint $Vol.MountPoint
-    }
-}
+# 1. Pass 1 Drive Letter Reconciliation (3-phase atomic swap)
+#    - Clears drive letters from unconfigured fixed drives and preserved_disks without expected_mount
+#    - Moves removable/USB media out of reserved drive letters (C:, preserved_disks, streaming mount_point)
+#    - Assigns expected_mount letters to connected preserved_disks via SerialNumber + PartitionNumber/PartitionGuid
+$ReconcilePass1 = Invoke-DriveLetterReconciliation -DiskConfigPath "C:\Reglaze\payload\disk-config.json" -Live
 
 # 2. Automated WHQL Driver Servicing (Chipset, Audio, Network, Storage)
-# Executes prior to application installation so all hardware is natively operational
+#    Executes prior to missing-disk check so all storage controllers are initialized
 if ($Blueprint.system.updates.drivers -ne $false) {
     Install-PackageProvider -Name NuGet -Force -Scope CurrentUser
     Install-Module -Name PSWindowsUpdate -Force -Scope CurrentUser
     Get-WindowsUpdate -Category "Drivers" -Install -AcceptAll -IgnoreReboot -ErrorAction SilentlyContinue
 }
 
-# 3. General Windows Quality & Security Update Pass
-# Pulls latest cumulative updates and security patches before software packages are staged
+# 3. Missing Required Preserved Disk Reconnect Checkpoint
+#    If any preserved disk with RequiredByConfig = true is physically disconnected:
+#    - Preserves LocalAdmin AutoLogon (AutoLogonCount = 1)
+#    - Registers HKLM RunOnce -> bootstrap.ps1 (resuming via bootstrap-state.json)
+#    - Shuts down the workstation (Stop-Computer -Force) so the operator can reconnect drives
+if ($ReconcilePass1.MissingRequiredDisks.Count -gt 0) {
+    Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce" -Name "ReglazeBootstrapResume" -Value "powershell.exe -ExecutionPolicy Bypass -File C:\Reglaze\payload\bootstrap.ps1"
+    Stop-Computer -Force
+}
+
+# 4. Pass 2 Drive Letter Reconciliation & BitLocker Unlock
+#    Unlocks connected preserved volumes by hardware identity (DiskSerialNumber + PartitionGuid)
+#    and re-arms TPM auto-unlock (Enable-BitLockerAutoUnlock) after expected_mount letters are settled
+$ReconcilePass2 = Invoke-DriveLetterReconciliation -DiskConfigPath "C:\Reglaze\payload\disk-config.json" -Live
+Unlock-PreservedBitLockerVolumes -PayloadPath "C:\Reglaze\payload\bitlocker-keys.json" -ConnectedSerialNumbers $ReconcilePass2.ConnectedSerialNumbers -Live
+
+# 5. General Windows Quality & Security Update Pass
 if ($Blueprint.system.updates.windows_updates -ne $false) {
     Get-WindowsUpdate -NotCategory "Drivers" -Install -AcceptAll -IgnoreReboot -ErrorAction SilentlyContinue
 }
 
-# 4. Execute WinGet DSC Configuration (Machine Scope Application Deployment)
+# 6. Configure Google Drive Streaming Mount Policy & Execute WinGet DSC
+#    Pre-configures HKLM:\SOFTWARE\Policies\Google\DriveFS\DefaultMountPoint (e.g., "E")
+New-Item -Path "HKLM:\SOFTWARE\Policies\Google\DriveFS" -Force | Out-Null
+Set-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Google\DriveFS" -Name "DefaultMountPoint" -Value "E" -Type String
 winget configure --file "C:\Reglaze\payload\configuration.dsc.yaml" --accept-configuration-agreements --disable-interactivity
 
-# 5. Stage WSL2 Base Kernel and Linux Distribution
+# 7. Stage WSL2 Base Kernel and Linux Distribution
 wsl --install -d Ubuntu --no-launch
 
-# 6. Create Machine-Level Junctions (Program Files, Common Assets)
-# Executes any system-level junctions declared in junctions-manifest.json
+# 8. Create Machine-Level Local Preserved Junctions (Program Files, Common Assets)
+#    Cloud (%STREAM%), sync (%SYNC_*%), and Steam junctions are deferred to Phase 5
 
-# 7. Destroy AutoLogon Credentials
+# 9. Destroy AutoLogon Credentials
 Remove-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" -Name "DefaultPassword" -ErrorAction SilentlyContinue
 Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" -Name "AutoAdminLogon" -Value "0"
 
-# 8. Schedule Phase 5 Hydration on User Logon & Restart
+# 10. Schedule Phase 5 Hydration on User Logon & Restart
 Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce" -Name "ReglazeHydrate" -Value "powershell.exe -ExecutionPolicy Bypass -File C:\Reglaze\payload\hydrate.ps1"
 Restart-Computer -Force
 ```
@@ -674,7 +690,7 @@ reglaze/
 
 | CLI Command | Phase | Description |
 | :--- | :--- | :--- |
-| `reglaze audit` | Phase 0 | Performs pre-flight discovery of the current machine, producing `audit-reference.json` and a baseline `reglaze.yaml`. |
+| `reglaze audit [-Profile <name>]` | Phase 0 | Performs pre-flight discovery of the current machine, producing `audit-reference.json`, `profile-computers.json`, and a baseline `reglaze.yaml`. `-Profile` is required if no existing `reglaze.yaml` is found in the target directory. |
 | `reglaze validate [-Config <path>]` | Phase 1 | Validates a blueprint against `data/applications.json`, checking syntax, mandatory mappings, and safety constraints. |
 | `reglaze compile [-Config <path>] [-Output <path>]` | Phase 2 | Compiles declarative blueprint into installation media artifacts (`autounattend.xml`, DSC, scripts). |
 | `reglaze build-media -DriveLetter <char>` | Phase 2 | Formats target USB drive and writes full installation media bundle with bootable WinPE image. |

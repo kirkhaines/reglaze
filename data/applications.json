@@ -11,7 +11,9 @@
                         "default_target_directory":  null,
                         "guide_file":  null,
                         "post_install_script":  null,
-                        "instructions":  []
+                        "instructions":  [
+
+                                         ]
                     },
         "directories":  [
                             {
@@ -48,7 +50,9 @@
                         "default_target_directory":  null,
                         "guide_file":  null,
                         "post_install_script":  null,
-                        "instructions":  []
+                        "instructions":  [
+
+                                         ]
                     },
         "directories":  [
                             {
@@ -75,7 +79,9 @@
                         "default_target_directory":  null,
                         "guide_file":  null,
                         "post_install_script":  null,
-                        "instructions":  []
+                        "instructions":  [
+
+                                         ]
                     },
         "directories":  [
                             {
@@ -153,7 +159,9 @@
                         "default_target_directory":  null,
                         "guide_file":  null,
                         "post_install_script":  null,
-                        "instructions":  []
+                        "instructions":  [
+
+                                         ]
                     },
         "directories":  [
                             {
@@ -190,7 +198,9 @@
                         "default_target_directory":  null,
                         "guide_file":  null,
                         "post_install_script":  null,
-                        "instructions":  []
+                        "instructions":  [
+
+                                         ]
                     },
         "directories":  [
                             {
@@ -217,7 +227,9 @@
                         "default_target_directory":  null,
                         "guide_file":  null,
                         "post_install_script":  null,
-                        "instructions":  []
+                        "instructions":  [
+
+                                         ]
                     },
         "directories":  [
                             {
@@ -244,7 +256,9 @@
                         "default_target_directory":  null,
                         "guide_file":  null,
                         "post_install_script":  null,
-                        "instructions":  []
+                        "instructions":  [
+
+                                         ]
                     },
         "directories":  [
                             {
@@ -271,7 +285,9 @@
                         "default_target_directory":  null,
                         "guide_file":  null,
                         "post_install_script":  null,
-                        "instructions":  []
+                        "instructions":  [
+
+                                         ]
                     },
         "directories":  [
                             {
@@ -298,7 +314,9 @@
                         "default_target_directory":  null,
                         "guide_file":  null,
                         "post_install_script":  null,
-                        "instructions":  []
+                        "instructions":  [
+
+                                         ]
                     },
         "directories":  [
                             {
@@ -325,7 +343,9 @@
                         "default_target_directory":  null,
                         "guide_file":  null,
                         "post_install_script":  null,
-                        "instructions":  []
+                        "instructions":  [
+
+                                         ]
                     },
         "directories":  [
                             {
@@ -352,7 +372,9 @@
                         "default_target_directory":  null,
                         "guide_file":  null,
                         "post_install_script":  null,
-                        "instructions":  []
+                        "instructions":  [
+
+                                         ]
                     },
         "directories":  [
                             {
@@ -379,7 +401,9 @@
                         "default_target_directory":  null,
                         "guide_file":  null,
                         "post_install_script":  null,
-                        "instructions":  []
+                        "instructions":  [
+
+                                         ]
                     },
         "directories":  [
                             {
@@ -392,6 +416,29 @@
                                 "recommended_storage":  "streaming",
                                 "notes":  "User-level Docker config and CLI contexts; safe for cloud streaming or local dotfiles management."
                             }
+                        ]
+    },
+    {
+        "app_id":  "google_drive",
+        "name":  "Google Drive for Desktop",
+        "website":  "https://www.google.com/drive/download/",
+        "install":  {
+                        "method":  "winget",
+                        "winget_id":  "Google.GoogleDrive",
+                        "steam_id":  null,
+                        "download_url":  "https://www.google.com/drive/download/",
+                        "default_target_directory":  null,
+                        "guide_file":  "guide.md",
+                        "post_install_script":  null,
+                        "instructions":  [
+                                             "Sign in to Google Drive for Desktop in your browser using your Google Account ({{PRIMARY_EMAIL}}).",
+                                             "Confirm that the Google Drive streaming virtual drive is mounted at {{STREAM_MOUNT}} ({{STREAM_VERIFY_FOLDER}}).",
+                                             "Open Google Drive Preferences -\u003e \u0027Folders from your computer\u0027 -\u003e click \u0027Add folder\u0027, select \u0027Sync with Google Drive\u0027, and add each local sync directory: {{SYNC_DIRS_SUMMARY}}.",
+                                             "In Google Drive under Computers (or via \u0027{{STREAM_MOUNT}}\\Other computers\\{{SOURCE_COMPUTER_NAME}}\u0027), {{MIGRATION_MODE}} the contents of each synced folder from the previous computer \u0027{{SOURCE_COMPUTER_NAME}}\u0027 (profile \u0027{{PROFILE_NAME}}\u0027) into the newly created computer\u0027s folders and wait for initial sync to finish."
+                                         ]
+                    },
+        "directories":  [
+
                         ]
     }
 ]

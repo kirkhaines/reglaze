@@ -25,6 +25,9 @@ param (
     [Alias("o")]
     [string]$OutputDir = $null,
 
+    [Alias("p")]
+    [string]$Profile = $null,
+
     [Parameter(Mandatory=$false)]
     [string]$UsbDrive = $null,
 
@@ -53,7 +56,7 @@ switch ($Command) {
     "audit" {
         $ResolvedOut = if ($OutputDir) { $OutputDir } elseif ($Target) { $Target } else { $null }
         $AuditScript = Join-Path $RepoRoot "src\audit\Invoke-Audit.ps1"
-        & $AuditScript -OutputDir $ResolvedOut -Force:$Force -SkipElevation:$SkipElevation -Elevate:$Elevate
+        & $AuditScript -OutputDir $ResolvedOut -Profile $Profile -Force:$Force -SkipElevation:$SkipElevation -Elevate:$Elevate
     }
 
     "validate" {
@@ -237,9 +240,10 @@ switch ($Command) {
         Write-Host "  ENVIRONMENT VARIABLES:" -ForegroundColor Yellow
         Write-Host "    `$env:REGLAZE_DIR      Target directory for live reglaze.yaml and audit-reference.json"
         Write-Host "    `$env:REGLAZE_CONFIG   Explicit override path for reglaze.yaml"
+        Write-Host "    `$env:REGLAZE_PROFILE  Default profile name for 'reglaze audit' when not specified via -Profile"
         Write-Host ""
         Write-Host "  EXAMPLES:" -ForegroundColor Yellow
-        Write-Host "    pwsh ./bin/reglaze.ps1 audit -OutputDir `"C:\reglaze-config`""
+        Write-Host "    pwsh ./bin/reglaze.ps1 audit -Profile `"workstation`" -OutputDir `"C:\reglaze-config`""
         Write-Host "    pwsh ./bin/reglaze.ps1 validate -Config `"C:\reglaze-config\reglaze.yaml`""
         Write-Host "    pwsh ./bin/reglaze.ps1 test"
         Write-Host ""

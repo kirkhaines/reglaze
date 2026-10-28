@@ -7,11 +7,16 @@
                     "method":  "winget",
                     "winget_id":  "Google.GoogleDrive",
                     "steam_id":  null,
-                    "download_url":  null,
+                    "download_url":  "https://www.google.com/drive/download/",
                     "default_target_directory":  null,
-                    "guide_file":  null,
+                    "guide_file":  "guide.md",
                     "post_install_script":  null,
-                    "instructions":  []
+                    "instructions":  [
+                                         "Sign in to Google Drive for Desktop in your browser using your Google Account ({{PRIMARY_EMAIL}}).",
+                                         "Confirm that the Google Drive streaming virtual drive is mounted at {{STREAM_MOUNT}} ({{STREAM_VERIFY_FOLDER}}).",
+                                         "Open Google Drive Preferences -> 'Folders from your computer' -> click 'Add folder', select 'Sync with Google Drive', and add each local sync directory: {{SYNC_DIRS_SUMMARY}}.",
+                                         "In Google Drive under Computers (or via '{{STREAM_MOUNT}}\\Other computers\\{{SOURCE_COMPUTER_NAME}}'), {{MIGRATION_MODE}} the contents of each synced folder from the previous computer '{{SOURCE_COMPUTER_NAME}}' (profile '{{PROFILE_NAME}}') into the newly created computer's folders and wait for initial sync to finish."
+                                     ]
                 },
     "directories":  [
 

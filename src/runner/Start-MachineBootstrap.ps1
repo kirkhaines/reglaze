@@ -24,6 +24,11 @@ param(
 
     [string]$ConfigFile = $null,
 
+    [Parameter(Mandatory=$false)]
+    [array]$MockSystemDisks = $null,
+
+    [switch]$HaltOnMissingDisks = $false,
+
     # Fail-safe defaults: Always simulated and never reboots unless explicitly flagged -Live
     [switch]$Simulation = $true,
     [switch]$Live = $false,
@@ -44,6 +49,7 @@ $LinkingRoot = Join-Path $RepoRoot "src\linking"
 
 . (Join-Path $CommonRoot "Logging.ps1")
 . (Join-Path $CommonRoot "ConfigResolver.ps1")
+. (Join-Path $LinkingRoot "Set-ReglazeDriveLetters.ps1")
 . (Join-Path $LinkingRoot "New-DirectoryJunction.ps1")
 . (Join-Path $LinkingRoot "Unlock-BitLockerVolumes.ps1")
 . (Join-Path $RunnerRoot "Apply-WindowsSettings.ps1")
@@ -80,17 +86,27 @@ if (-not $ResolvedPayload -or -not (Test-Path -LiteralPath $ResolvedPayload)) {
 }
 
 # =============================================================================
-# Step 1: Unlock & Re-arm Preserved BitLocker Secondary Storage
+# Step 1: Pass 1 Drive Letter Reconciliation & Connected BitLocker Unlock
 # =============================================================================
-Write-ReglazeStep "Step 1/9: Unlocking & Re-arming Preserved BitLocker Volumes..."
+Write-ReglazeStep "Step 1/9: Reconciling Drive Letters (Pass 1) & Unlocking Preserved BitLocker Volumes..."
+$DiskConfigFile = if ($ResolvedPayload) { Join-Path $ResolvedPayload "disk-config.json" } else { $null }
+$Pass1DiskResult = $null
+if ($DiskConfigFile -and (Test-Path -LiteralPath $DiskConfigFile)) {
+    $Pass1DiskResult = Invoke-DriveLetterReconciliation -DiskConfigPath $DiskConfigFile -MockSystemDisks $MockSystemDisks -Simulation:$IsSimulated -Live:(-not $IsSimulated)
+    Write-ReglazeInfo "Drive letter reconciliation Pass 1 status: $($Pass1DiskResult.Status) ($($Pass1DiskResult.Changes.Count) change(s))."
+}
+
 $BitLockerKeyFile = if ($ResolvedPayload) { Join-Path $ResolvedPayload "bitlocker-keys.json" } else { $null }
 
 if ($BitLockerKeyFile -and (Test-Path -LiteralPath $BitLockerKeyFile)) {
-    $UnlockResults = Unlock-PreservedBitLockerVolumes -KeyFilePath $BitLockerKeyFile -Simulation:$IsSimulated -Live:(-not $IsSimulated)
+    $ConnectedSerials = if ($Pass1DiskResult -and $null -ne $MockSystemDisks) {
+        @($Pass1DiskResult.ConnectedPreservedDisks | ForEach-Object { $_.SerialNumber })
+    } else { $null }
+    $UnlockResults = Unlock-PreservedBitLockerVolumes -KeyFilePath $BitLockerKeyFile -ConnectedSerialNumbers $ConnectedSerials -Simulation:$IsSimulated -Live:(-not $IsSimulated)
     foreach ($Res in $UnlockResults) {
         if ($Res.Status -eq "Success" -or $Res.Status -eq "Simulated") {
             Write-ReglazeSuccess "Volume $($Res.MountPoint): $($Res.Message)"
-        } elseif ($Res.Status -eq "Skipped") {
+        } elseif ($Res.Status -eq "Skipped" -or $Res.Status -eq "DeferredDisconnected") {
             Write-ReglazeInfo "Volume $($Res.MountPoint): $($Res.Message)"
         } else {
             Write-ReglazeWarning "Volume $($Res.MountPoint): $($Res.Message)"
@@ -145,6 +161,41 @@ if (-not $SkipUpdates -and -not $IsSimulated) {
 }
 
 # =============================================================================
+# Step 2b: Pass 2 Drive Letter Reconciliation & Missing Disk Reconnect Check
+# =============================================================================
+if ($DiskConfigFile -and (Test-Path -LiteralPath $DiskConfigFile)) {
+    $Pass2DiskResult = Invoke-DriveLetterReconciliation -DiskConfigPath $DiskConfigFile -MockSystemDisks $MockSystemDisks -Simulation:$IsSimulated -Live:(-not $IsSimulated)
+    if ($Pass2DiskResult.RequiresReconnectShutdown) {
+        Write-ReglazeWarning "Missing $($Pass2DiskResult.MissingRequiredDisks.Count) required preserved disk(s) after WHQL driver pass:"
+        foreach ($Missing in $Pass2DiskResult.MissingRequiredDisks) {
+            Write-ReglazeWarning " - Expected Mount: $($Missing.ExpectedMount), Label: $($Missing.Label), Serial: $($Missing.SerialNumber)"
+        }
+        if ($IsSimulated) {
+            Write-ReglazeInfo "[SIMULATION] Would re-arm LocalAdmin AutoLogon + HKLM RunOnce and shut down (Stop-Computer) for drive reconnection."
+            if ($HaltOnMissingDisks) {
+                return [PSCustomObject]@{
+                    Status               = "AwaitingDriveReconnectShutdown"
+                    MissingRequiredDisks = $Pass2DiskResult.MissingRequiredDisks
+                    Simulated            = $true
+                }
+            }
+        } elseif ($CanReboot) {
+            $BootstrapCmd = "powershell.exe -ExecutionPolicy Bypass -File C:\Reglaze\payload\bootstrap.ps1"
+            Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce" -Name "ReglazeBootstrapResume" -Value $BootstrapCmd -ErrorAction SilentlyContinue
+            $WinlogonKey = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon"
+            Set-ItemProperty -Path $WinlogonKey -Name "AutoAdminLogon" -Value "1" -ErrorAction SilentlyContinue
+            Remove-ItemProperty -Path $WinlogonKey -Name "AutoLogonCount" -ErrorAction SilentlyContinue
+            Write-ReglazeInfo "Shutting down workstation in 5 seconds so required preserved disks can be reconnected..."
+            Start-Sleep -Seconds 5
+            Stop-Computer -Force
+            return
+        }
+    } else {
+        Write-ReglazeSuccess "All required preserved disks verified present."
+    }
+}
+
+# =============================================================================
 # Step 3: Windows Quality & Security Cumulative Updates
 # =============================================================================
 Write-ReglazeStep "Step 3/9: Installing Windows Security & Cumulative Quality Patches..."
@@ -174,6 +225,24 @@ if (-not $SkipUpdates -and -not $IsSimulated) {
 # [HITL-AVOID]: Running full DSC manifest without testing individual resource module configurations first
 # =============================================================================
 Write-ReglazeStep "Step 4/9: Executing WinGet DSC Machine Application Provisioning..."
+$GDriveSetupFile = if ($ResolvedPayload) { Join-Path $ResolvedPayload "google-drive-setup.json" } else { $null }
+if ($GDriveSetupFile -and (Test-Path -LiteralPath $GDriveSetupFile)) {
+    try {
+        $GDriveSetupCfg = Get-Content -Raw -LiteralPath $GDriveSetupFile | ConvertFrom-Json
+        $MountLetter = if ($GDriveSetupCfg.StreamMountPoint) { $GDriveSetupCfg.StreamMountPoint.TrimEnd(':').ToUpperInvariant() } else { "E" }
+        if (-not $IsSimulated) {
+            $DriveFsPolicyPath = "HKLM:\SOFTWARE\Policies\Google\DriveFS"
+            if (-not (Test-Path $DriveFsPolicyPath)) { New-Item -Path $DriveFsPolicyPath -Force | Out-Null }
+            Set-ItemProperty -Path $DriveFsPolicyPath -Name "DefaultMountPoint" -Value $MountLetter -Type String -Force
+            Write-ReglazeSuccess "Configured Google Drive DefaultMountPoint policy to '${MountLetter}:'."
+        } else {
+            Write-ReglazeInfo "[SIMULATION] Would set HKLM:\SOFTWARE\Policies\Google\DriveFS DefaultMountPoint = '$MountLetter'."
+        }
+    } catch {
+        Write-ReglazeWarning "Could not apply Google Drive DefaultMountPoint policy: $($_.Exception.Message)"
+    }
+}
+
 $DscManifest = if ($ResolvedPayload) { Join-Path $ResolvedPayload "configuration.dsc.yaml" } else { $null }
 
 if ($DscManifest -and (Test-Path -LiteralPath $DscManifest)) {

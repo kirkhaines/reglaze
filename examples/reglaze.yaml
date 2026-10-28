@@ -49,10 +49,15 @@ windows_settings:
 disks:
   target_os_disk:
     disk_id: 0 # Matches Disk 0 from audit-reference.json
+    serial_number: "NVME-OS-0001"
+    bus_type: "NVMe"
     wipe_and_partition: true
     drive_variable: "OS_DRIVE" # Exposes %OS_DRIVE% (e.g. C:)
   preserved_disks:
     - disk_id: 1
+      serial_number: "NVME-DATA-0002"
+      bus_type: "NVMe"
+      partition_number: 1
       label: "Bulk-Data"
       expected_mount: "D:"
       drive_variable: "DATA_DRIVE" # Exposes %DATA_DRIVE% (e.g. D:)
@@ -66,6 +71,8 @@ storage:
     stream_variable: "STREAM"     # Exposes %STREAM% -> G:\My Drive
   sync:
     provider: "google-drive-sync"
+    source_computer: "WORKSTATION-01"
+    migration_mode: "copy" # "copy" (default), "move", or "skip"
     directories:
       # Multiple synced folders can be defined; accessible via %SYNC_<ID>%
       catalogs:

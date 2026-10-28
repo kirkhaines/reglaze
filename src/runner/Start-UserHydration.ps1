@@ -97,6 +97,7 @@ if (-not $StateFile) {
 $HydrateState = [PSCustomObject]@{
     msa_connected              = $false
     cloud_mount_verified       = $false
+    cloud_sync_migrated        = $false
     steam_library_connected    = $false
     manual_apps_installed      = @()
     user_junctions_established = $false
@@ -191,19 +192,43 @@ if (-not $HydrateState.msa_connected) {
 # =============================================================================
 
 # =============================================================================
-# Step 2: Cloud Virtual Mount Verification (Google Drive for Desktop)
+# Step 2: Cloud Virtual Mount Verification & Synced Folder Migration (Google Drive)
 # =============================================================================
-Write-ReglazeStep "Step 2/8: Verifying Cloud Streaming Mount (Sentinel Folder)..."
+Write-ReglazeStep "Step 2/8: Verifying Cloud Streaming Mount & Synced Folder Migration..."
+$GDriveSetupFile = if ($ResolvedPayload) { Join-Path $ResolvedPayload "google-drive-setup.json" } else { $null }
+$GDriveSetup = $null
+if ($GDriveSetupFile -and (Test-Path -LiteralPath $GDriveSetupFile)) {
+    try {
+        $GDriveSetup = Get-Content -Raw -LiteralPath $GDriveSetupFile -Encoding UTF8 | ConvertFrom-Json
+    } catch {}
+}
+
 $SentinelPath = "G:\My Drive"
-if ($Blueprint -and $Blueprint.storage -and $Blueprint.storage.streaming -and $Blueprint.storage.streaming.verify_folder) {
+if ($GDriveSetup -and $GDriveSetup.StreamVerifyFolder) {
+    $SentinelPath = $GDriveSetup.StreamVerifyFolder
+} elseif ($Blueprint -and $Blueprint.storage -and $Blueprint.storage.streaming -and $Blueprint.storage.streaming.verify_folder) {
     $SentinelPath = $Blueprint.storage.streaming.verify_folder
 }
 
 if (-not $HydrateState.cloud_mount_verified) {
+    if ($GDriveSetup -and $GDriveSetup.RenderedInstructions) {
+        Write-ReglazeInfo "Google Drive Setup & Sync Migration Instructions (Profile: $($GDriveSetup.Profile)):"
+        foreach ($InstLine in $GDriveSetup.RenderedInstructions) {
+            Write-Host "  • $InstLine" -ForegroundColor Cyan
+        }
+    }
+
     if (-not $IsSimulated) {
+        if ($GDriveSetup -and $GDriveSetup.SyncDirectories) {
+            foreach ($SDir in $GDriveSetup.SyncDirectories) {
+                if ($SDir.LocalPath -and -not (Test-Path -LiteralPath $SDir.LocalPath)) {
+                    New-Item -ItemType Directory -Path $SDir.LocalPath -Force | Out-Null
+                }
+            }
+        }
+
         Write-ReglazeInfo "Checking for cloud streaming mount sentinel at: $SentinelPath"
         if (-not (Test-Path -LiteralPath $SentinelPath)) {
-            # Try to launch Google Drive if not running
             if (-not (Get-Process "GoogleDriveFS" -ErrorAction SilentlyContinue)) {
                 $GDFLaunch = "C:\Program Files\Google\Drive File Stream\launch.bat"
                 if (Test-Path -LiteralPath $GDFLaunch) {
@@ -235,9 +260,36 @@ if (-not $HydrateState.cloud_mount_verified) {
         } else {
             Write-ReglazeWarning "Proceeding without verified cloud mount ($SentinelPath). Streamed junctions may be dangling."
         }
+
+        if ($GDriveSetup -and $GDriveSetup.SyncDirectories -and $GDriveSetup.SyncDirectories.Count -gt 0 -and $GDriveSetup.MigrationMode -ne "skip") {
+            foreach ($SDir in $GDriveSetup.SyncDirectories) {
+                $SrcPath = $SDir.SourceComputerStreamPath
+                $DstPath = $SDir.LocalPath
+                if ($SrcPath -and (Test-Path -LiteralPath $SrcPath)) {
+                    Write-ReglazeInfo "Migrating ($($GDriveSetup.MigrationMode)) synced folder '$($SDir.CloudFolder)' from '$SrcPath' -> '$DstPath'..."
+                    if ($GDriveSetup.MigrationMode -eq "move") {
+                        Get-ChildItem -LiteralPath $SrcPath -Force | ForEach-Object {
+                            Move-Item -LiteralPath $_.FullName -Destination $DstPath -Force -ErrorAction Continue
+                        }
+                    } else {
+                        Copy-Item -Path (Join-Path $SrcPath "*") -Destination $DstPath -Recurse -Force -ErrorAction Continue
+                    }
+                    Write-ReglazeSuccess "Migrated synced folder '$($SDir.CloudFolder)'."
+                } else {
+                    Write-ReglazeInfo "Previous computer sync container not found at '$SrcPath' (skipping automatic migration for '$($SDir.CloudFolder)')."
+                }
+            }
+            $HydrateState.cloud_sync_migrated = $true
+        }
     } else {
         Write-ReglazeInfo "Simulated cloud streaming mount verification ($SentinelPath)."
+        if ($GDriveSetup -and $GDriveSetup.SyncDirectories) {
+            foreach ($SDir in $GDriveSetup.SyncDirectories) {
+                Write-ReglazeInfo "[SIMULATION] Would pre-create sync folder '$($SDir.LocalPath)' and $($GDriveSetup.MigrationMode) from '$($SDir.SourceComputerStreamPath)'."
+            }
+        }
         $HydrateState.cloud_mount_verified = $true
+        $HydrateState.cloud_sync_migrated = $true
     }
     Save-HydrationCheckpoint "cloud_mount_verified"
 } else {
