@@ -24,6 +24,7 @@ $RepoRoot = $Script:RepoRoot
 . (Join-Path $RepoRoot "src\audit\Audit-Junctions.ps1")
 . (Join-Path $RepoRoot "src\audit\Audit-StorageProviders.ps1")
 . (Join-Path $RepoRoot "src\audit\Audit-Wsl.ps1")
+. (Join-Path $RepoRoot "src\audit\Audit-Network.ps1")
 
 Write-ReglazeBanner "REGLAZE MILESTONE 1 VERIFICATION SUITE"
 
@@ -142,10 +143,41 @@ Assert-Test "Get-JunctionsAudit executes without error" {
 
 # Test 8: WSL Audit Module
 Write-ReglazeStep "Testing WSL Distribution & Package Discovery..."
-Assert-Test "Get-WslAudit detects WSL state and package inventory" {
+Assert-Test "Get-WslAudit detects WSL state and package inventory without null bytes" {
     $Wsl = Get-WslAudit
     Write-ReglazeInfo "WSL Enabled: $($Wsl.enabled), Default Distro: $($Wsl.default_distro), Packages: $($Wsl.detected_packages -join ', ')"
-    return ($Wsl -ne $null -and $Wsl.detected_packages.Count -gt 0)
+    $HasNullBytes = ($Wsl.detected_packages | Where-Object { $_ -match "`0" }).Count -gt 0
+    return ($Wsl -ne $null -and (-not $HasNullBytes))
+}
+
+Assert-Test "Get-WslAudit returns enabled=false immediately when Lxss registry has no distros (no wsl.exe hang)" {
+    $Sw = [System.Diagnostics.Stopwatch]::StartNew()
+    $WslNoDistro = Get-WslAudit -LxssRegistryPath "HKCU:\Software\Microsoft\Windows\CurrentVersion\Lxss_ReglazeNonExistentTest"
+    $Sw.Stop()
+    return ($WslNoDistro.enabled -eq $false -and $WslNoDistro.distros.Count -eq 0 -and $WslNoDistro.detected_packages.Count -eq 0 -and $Sw.ElapsedMilliseconds -lt 1000)
+}
+
+Assert-Test "Resolve-ConflictFreeStreamingMountLetter prefers G: when free and picks first available letter when G: is taken" {
+    $WhenGFree = Resolve-ConflictFreeStreamingMountLetter -OccupiedLetters @("C:", "D:", "F:") -PreferredLetter "G:"
+    $WhenGTaken = Resolve-ConflictFreeStreamingMountLetter -OccupiedLetters @("C:", "D:", "G:") -PreferredLetter "G:"
+    $WhenDETaken = Resolve-ConflictFreeStreamingMountLetter -OccupiedLetters @("C:", "D:", "E:", "G:") -PreferredLetter "G:"
+    return ($WhenGFree -eq "G:" -and $WhenGTaken -eq "E:" -and $WhenDETaken -eq "F:")
+}
+
+Assert-Test "Test-IsIgnoredApplication filters Windows inbox MSIX, OS components, VC++ redistributables, NVIDIA drivers, and Steamworks redistributables" {
+    $IgnoreMsix = Test-IsIgnoredApplication -WingetId "MSIX\Microsoft.WindowsCalculator_11.2607.0.0_x64__8wekyb3d8bbwe" -Name "Windows Calculator"
+    $IgnoreAppInstaller = Test-IsIgnoredApplication -WingetId "Microsoft.AppInstaller" -Name "App Installer"
+    $IgnoreVcRedist = Test-IsIgnoredApplication -Name "Microsoft Visual C++ 2013 Redistributable (x64) - 12.0.30501"
+    $IgnoreNvidiaDriver = Test-IsIgnoredApplication -Name "NVIDIA Graphics Driver 616.92"
+    $IgnoreSteamworks = Test-IsIgnoredApplication -Name "Steamworks Common Redistributables" -SteamId 228980
+    $KeepRealApp = -not (Test-IsIgnoredApplication -WingetId "ObsProject.OBSStudio" -Name "OBS Studio")
+    $UserExplicitIgnore = Test-IsIgnoredApplication -Name "OEM Bloatware" -MatchedApp ([PSCustomObject]@{ app_id = "oem_bloat"; ignore = $true })
+    return ($IgnoreMsix -and $IgnoreAppInstaller -and $IgnoreVcRedist -and $IgnoreNvidiaDriver -and $IgnoreSteamworks -and $KeepRealApp -and $UserExplicitIgnore)
+}
+
+Assert-Test "Get-NetworkAudit discovers network adapters, sharing mode, and custom firewall rules" {
+    $Net = Get-NetworkAudit
+    return ($null -ne $Net -and $null -ne $Net.adapters -and $null -ne $Net.firewall_rules -and $Net.network_category -in @("Private", "Public", "DomainAuthenticated"))
 }
 
 # Test 8: End-to-End Invoke-Audit Execution
@@ -189,16 +221,20 @@ Assert-Test "Invoke-Audit.ps1 emits audit-reference.json, profile-computers.json
 
     # Validate scaffolded reglaze.yaml content
     $YamlContent = Get-Content -Raw $Blueprint
+    $HasNoNullBytes = ($YamlContent -notmatch "`0")
     $HasOsDisk = ($YamlContent -match "target_os_disk:")
     $HasUsers = ($YamlContent -match "local_admin:")
     $HasSourceComp = ($YamlContent -match 'source_computer:')
+    $HasExpandedWinSettings = ($YamlContent -match "theme:" -and $YamlContent -match "audio_and_devices:" -and $YamlContent -match "quick_access_pins:")
+    $HasNetworkSection = ($YamlContent -match '(?m)^network:' -and $YamlContent -match "sharing_wizard_enabled:")
+    $HasShellFoldersSection = ($YamlContent -match "user_shell_folders:")
     # Ensure at most one DATA_DRIVE is assigned in preserved_disks
     $DataDriveMatches = [regex]::Matches($YamlContent, 'drive_variable:\s*"DATA_DRIVE"')
     $SingleDataDrive = ($DataDriveMatches.Count -le 1)
 
     $HasGenDate = ($YamlContent -match 'generation_date:\s*"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}"')
 
-    return ($HasMetadata -and $HasProfileAssoc -and $HasDisks -and $HasLicensing -and $HasOsDisk -and $HasUsers -and $HasSourceComp -and $SingleDataDrive -and $HasGenDate)
+    return ($HasNoNullBytes -and $HasMetadata -and $HasProfileAssoc -and $HasDisks -and $HasLicensing -and $HasOsDisk -and $HasUsers -and $HasSourceComp -and $HasExpandedWinSettings -and $HasNetworkSection -and $HasShellFoldersSection -and $SingleDataDrive -and $HasGenDate)
 }
 
 Assert-Test "Invoke-Audit.ps1 inherits profile from existing reglaze.yaml and archives with second-level precision generation_date" {
@@ -227,7 +263,7 @@ Assert-Test "Invoke-Audit.ps1 inherits profile from existing reglaze.yaml and ar
     return ($ArchiveExists -and $FreshBlueprintExists -and $ArchivePreserved -and $FreshHasDate -and $InheritedProfile)
 }
 
-Assert-Test "Invoke-Audit.ps1 populates unrecognized apps into applications.custom and promotes them when user applications.json is added" {
+Assert-Test "Invoke-Audit.ps1 populates unrecognized apps into applications.custom and promotes them (with path_entries) when user applications.json is added" {
     $AuditScript = Join-Path $RepoRoot "src\audit\Invoke-Audit.ps1"
     $AuditJson = Join-Path $TestOutputDir "audit-reference.json"
     $Blueprint = Join-Path $TestOutputDir "reglaze.yaml"
@@ -239,20 +275,20 @@ Assert-Test "Invoke-Audit.ps1 populates unrecognized apps into applications.cust
     if ($YamlBefore -notmatch '(?m)^\s*custom:') { return $false }
 
     # Find an unmatched non-winget or winget app from audit-reference.json (or synthesize a user catalog entry matching a detected ARP app)
-    $UnmatchedArp = @($AuditData.applications.detected_non_winget_applications | Where-Object { -not $_.matched_app_id }) | Select-Object -First 1
+    $UnmatchedArp = @($AuditData.detected_non_winget_applications | Where-Object { -not $_.matched_app_id }) | Select-Object -First 1
     if ($UnmatchedArp) {
         $TargetDispName = $UnmatchedArp.display_name
         # Verify it was placed in custom: before user applications.json existed
         $EscapedCheck = [regex]::Escape(($TargetDispName -replace '\\', '\\' -replace '"', '\"'))
         if ($YamlBefore -notmatch $EscapedCheck) { return $false }
 
-        # Create user applications.json in $TestOutputDir defining this app
+        # Create user applications.json in $TestOutputDir defining this app with path_entries
         $UserAppsJson = @(
             [PSCustomObject]@{
-                app_id      = "user_custom_promoted_app"
-                name        = $TargetDispName
-                website     = "https://example.com"
-                install     = [PSCustomObject]@{
+                app_id       = "user_custom_promoted_app"
+                name         = $TargetDispName
+                website      = "https://example.com"
+                install      = [PSCustomObject]@{
                     method                   = "manual"
                     winget_id                = $null
                     steam_id                 = $null
@@ -262,7 +298,8 @@ Assert-Test "Invoke-Audit.ps1 populates unrecognized apps into applications.cust
                     post_install_script      = $null
                     instructions             = @("Install PromotedApp to target directory.")
                 }
-                directories = @(
+                path_entries = @("%PROGRAMFILES%\PromotedApp\bin")
+                directories  = @(
                     [PSCustomObject]@{
                         id                  = "user_config"
                         description         = "Promoted app configuration"
@@ -279,23 +316,24 @@ Assert-Test "Invoke-Audit.ps1 populates unrecognized apps into applications.cust
         $UserAppsPath = Join-Path $TestOutputDir "applications.json"
         $UserAppsJson | ConvertTo-Json -Depth 6 | Set-Content -Path $UserAppsPath -Encoding UTF8
 
-        # Re-run audit and verify user_custom_promoted_app is now in main applications: list with user_config directory, and no longer in custom:
+        # Re-run audit and verify user_custom_promoted_app is now in main applications: list with user_config directory and path_entries
         & $AuditScript -OutputDir $TestOutputDir -SkipElevation
         $YamlAfter = Get-Content -Raw $Blueprint
-        $PromotedToMain = ($YamlAfter -match '(?m)^\s{2}user_custom_promoted_app:' -and $YamlAfter -match '%STREAM%\\\\Backups\\\\user_custom_promoted_app\\\\user_config')
+        $PromotedToMain = ($YamlAfter -match '(?m)^\s{2}user_custom_promoted_app:' -and $YamlAfter -match 'path_entries:')
         return $PromotedToMain
     } else {
         # Fallback if test host had 0 unmatched ARP apps: test Get-ReglazeCatalog user merge directly
         $UserAppsPath = Join-Path $TestOutputDir "applications.json"
         @(
             [PSCustomObject]@{
-                app_id      = "user_custom_promoted_app"
-                name        = "Synthetic User App"
-                directories = @()
+                app_id       = "user_custom_promoted_app"
+                name         = "Synthetic User App"
+                path_entries = @("%PROGRAMFILES%\Synthetic\bin")
+                directories  = @()
             }
         ) | ConvertTo-Json -Depth 5 | Set-Content -Path $UserAppsPath -Encoding UTF8
         $Lookup = Get-ReglazeApplicationById -AppId "user_custom_promoted_app" -RepoRoot $RepoRoot -UserConfigDir $TestOutputDir
-        return ($null -ne $Lookup -and $Lookup._CatalogSource -eq "user")
+        return ($null -ne $Lookup -and $Lookup._CatalogSource -eq "user" -and $Lookup.path_entries.Count -eq 1)
     }
 }
 

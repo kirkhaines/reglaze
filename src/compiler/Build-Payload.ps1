@@ -69,14 +69,29 @@ function Build-ReglazePayload {
         Copy-Item -Path (Join-Path $WindowsDataDir "*") -Destination $PayloadWindowsDir -Force
     }
 
-    # Extract & compile Windows settings configuration
+    $VarMap = Get-BlueprintVariables -Blueprint $Blueprint
+    $PrimaryUser = if ($Blueprint.system.users.primary_user.username) { $Blueprint.system.users.primary_user.username } else { "User" }
+
+    # Add standard user environment variables to resolution map for pre-computing paths
+    $VarMap["USERPROFILE"] = "C:\Users\$PrimaryUser"
+    $VarMap["USER_DIR"] = "C:\Users\$PrimaryUser"
+    $VarMap["APPDATA"] = "C:\Users\$PrimaryUser\AppData\Roaming"
+    $VarMap["LOCALAPPDATA"] = "C:\Users\$PrimaryUser\AppData\Local"
+    $VarMap["PROGRAMFILES"] = "C:\Program Files"
+    $VarMap["PROGRAMFILES(X86)"] = "C:\Program Files (x86)"
+    $VarMap["PROGRAMDATA"] = "C:\ProgramData"
+
+    $UserConfigDir = if ($BlueprintFile) { Split-Path -Parent $BlueprintFile } else { $null }
+    $FullCatalog = Get-ReglazeCatalog -RepoRoot $RepoRoot -UserConfigDir $UserConfigDir
+
+    # Extract & compile Windows settings, Network, Shell Folders, Steam Libraries, and App PATH entries
     $WinSettings = $null
     if ($Blueprint.windows_settings) {
-        $WinSettings = $Blueprint.windows_settings
+        $WinSettings = $Blueprint.windows_settings | ConvertTo-Json -Depth 8 | ConvertFrom-Json
     } elseif ($Blueprint.system -and $Blueprint.system.windows_settings) {
-        $WinSettings = $Blueprint.system.windows_settings
+        $WinSettings = $Blueprint.system.windows_settings | ConvertTo-Json -Depth 8 | ConvertFrom-Json
     } elseif ($AuditReference -and $AuditReference.detected_windows_settings) {
-        $WinSettings = $AuditReference.detected_windows_settings
+        $WinSettings = $AuditReference.detected_windows_settings | ConvertTo-Json -Depth 8 | ConvertFrom-Json
     } else {
         $WinSettings = [PSCustomObject]@{
             explorer = [PSCustomObject]@{
@@ -93,27 +108,112 @@ function Build-ReglazePayload {
             power = [PSCustomObject]@{
                 active_scheme_name = "High Performance"
                 ac_sleep_minutes   = 0
+                ac_display_minutes = 30
             }
         }
     }
+
+    # Resolve path variables inside Windows settings lists
+    if ($WinSettings.explorer -and $WinSettings.explorer.quick_access_pins) {
+        $WinSettings.explorer.quick_access_pins = @(
+            $WinSettings.explorer.quick_access_pins | ForEach-Object { Resolve-VariableString -InputString ([string]$_) -VariableMap $VarMap }
+        )
+    }
+    if ($WinSettings.taskbar -and $WinSettings.taskbar.pinned_apps) {
+        $WinSettings.taskbar.pinned_apps = @(
+            $WinSettings.taskbar.pinned_apps | ForEach-Object { Resolve-VariableString -InputString ([string]$_) -VariableMap $VarMap }
+        )
+    }
+    if ($WinSettings.start_menu -and $WinSettings.start_menu.pinned_apps) {
+        $WinSettings.start_menu.pinned_apps = @(
+            $WinSettings.start_menu.pinned_apps | ForEach-Object { Resolve-VariableString -InputString ([string]$_) -VariableMap $VarMap }
+        )
+    }
+    if ($WinSettings.theme -and $WinSettings.theme.wallpaper_path) {
+        $WinSettings.theme.wallpaper_path = Resolve-VariableString -InputString ([string]$WinSettings.theme.wallpaper_path) -VariableMap $VarMap
+    }
+
+    # Attach resolved user_shell_folders
+    if ($Blueprint.storage -and $Blueprint.storage.user_shell_folders) {
+        $ResolvedUsf = [ordered]@{}
+        $UsfObj = $Blueprint.storage.user_shell_folders
+        $UsfProps = if ($UsfObj -is [System.Collections.IDictionary]) { $UsfObj.Keys } else { $UsfObj.PSObject.Properties.Name }
+        foreach ($UKey in $UsfProps) {
+            $UVal = if ($UsfObj -is [System.Collections.IDictionary]) { $UsfObj[$UKey] } else { $UsfObj.$UKey }
+            if (-not [string]::IsNullOrWhiteSpace([string]$UVal)) {
+                $ResolvedUsf[$UKey] = Resolve-VariableString -InputString ([string]$UVal) -VariableMap $VarMap
+            }
+        }
+        Add-Member -InputObject $WinSettings -MemberType NoteProperty -Name "user_shell_folders" -Value ([PSCustomObject]$ResolvedUsf) -Force
+    }
+
+    # Attach resolved preserved Steam library folders
+    if ($Blueprint.storage -and $Blueprint.storage.steam_libraries) {
+        $ResolvedSteamLibs = @(
+            $Blueprint.storage.steam_libraries | ForEach-Object { Resolve-VariableString -InputString ([string]$_) -VariableMap $VarMap }
+        )
+        Add-Member -InputObject $WinSettings -MemberType NoteProperty -Name "steam_libraries" -Value $ResolvedSteamLibs -Force
+    }
+
+    # Attach network & firewall configuration with resolved program paths
+    if ($Blueprint.network) {
+        $NetCopy = $Blueprint.network | ConvertTo-Json -Depth 8 | ConvertFrom-Json
+        if ($NetCopy.firewall_rules) {
+            foreach ($Fw in $NetCopy.firewall_rules) {
+                if ($Fw.program -and $Fw.program -ne "Any") {
+                    $Fw.program = Resolve-VariableString -InputString ([string]$Fw.program) -VariableMap $VarMap
+                }
+            }
+        }
+        Add-Member -InputObject $WinSettings -MemberType NoteProperty -Name "network" -Value $NetCopy -Force
+    }
+
+    # Collect per-application path_entries from catalog and blueprint
+    $CollectedPathEntries = [System.Collections.Generic.List[string]]::new()
+    if ($Blueprint.applications) {
+        foreach ($Prop in @($Blueprint.applications.PSObject.Properties)) {
+            if ($Prop.Name -eq "custom") { continue }
+            $AppId = $Prop.Name
+            $AppCfg = $Prop.Value
+            $CatApp = $FullCatalog | Where-Object { $_.app_id -ieq $AppId } | Select-Object -First 1
+            $RawPaths = @()
+            if ($AppCfg -and $AppCfg.PSObject.Properties["path_entries"] -and $AppCfg.path_entries) {
+                $RawPaths += @($AppCfg.path_entries)
+            } elseif ($CatApp -and $CatApp.PSObject.Properties["path_entries"] -and $CatApp.path_entries) {
+                $RawPaths += @($CatApp.path_entries)
+            }
+            foreach ($PItem in $RawPaths) {
+                if (-not [string]::IsNullOrWhiteSpace([string]$PItem)) {
+                    $ResolvedP = Resolve-VariableString -InputString ([string]$PItem) -VariableMap $VarMap
+                    if (-not $CollectedPathEntries.Contains($ResolvedP)) {
+                        $CollectedPathEntries.Add($ResolvedP)
+                    }
+                }
+            }
+        }
+        if ($Blueprint.applications.custom -and ($Blueprint.applications.custom -is [System.Collections.IEnumerable]) -and -not ($Blueprint.applications.custom -is [string])) {
+            foreach ($CApp in $Blueprint.applications.custom) {
+                if ($CApp.PSObject.Properties["path_entries"] -and $CApp.path_entries) {
+                    foreach ($PItem in $CApp.path_entries) {
+                        if (-not [string]::IsNullOrWhiteSpace([string]$PItem)) {
+                            $ResolvedP = Resolve-VariableString -InputString ([string]$PItem) -VariableMap $VarMap
+                            if (-not $CollectedPathEntries.Contains($ResolvedP)) {
+                                $CollectedPathEntries.Add($ResolvedP)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Add-Member -InputObject $WinSettings -MemberType NoteProperty -Name "app_path_entries" -Value $CollectedPathEntries.ToArray() -Force
+
     $WinSettingsPath = Join-Path $PayloadDir "windows-settings.json"
-    $WinSettings | ConvertTo-Json -Depth 4 | Set-Content -Path $WinSettingsPath -Encoding UTF8
-
-    $VarMap = Get-BlueprintVariables -Blueprint $Blueprint
-    $PrimaryUser = if ($Blueprint.system.users.primary_user.username) { $Blueprint.system.users.primary_user.username } else { "User" }
-
-    # Add standard user environment variables to resolution map for pre-computing paths
-    $VarMap["USERPROFILE"] = "C:\Users\$PrimaryUser"
-    $VarMap["APPDATA"] = "C:\Users\$PrimaryUser\AppData\Roaming"
-    $VarMap["LOCALAPPDATA"] = "C:\Users\$PrimaryUser\AppData\Local"
-    $VarMap["PROGRAMFILES"] = "C:\Program Files"
-    $VarMap["PROGRAMFILES(X86)"] = "C:\Program Files (x86)"
-    $VarMap["PROGRAMDATA"] = "C:\ProgramData"
+    $WinSettings | ConvertTo-Json -Depth 8 | Set-Content -Path $WinSettingsPath -Encoding UTF8
 
     # =========================================================================
     # 1. Generate WinGet DSC Manifest (configuration.dsc.yaml)
     # =========================================================================
-    $UserConfigDir = if ($BlueprintFile) { Split-Path -Parent $BlueprintFile } else { $null }
     $DscPath = Join-Path $PayloadDir "configuration.dsc.yaml"
     Build-WinGetDSCManifest -Blueprint $Blueprint -RepoRoot $RepoRoot -UserConfigDir $UserConfigDir -OutputPath $DscPath | Out-Null
 
@@ -810,8 +910,8 @@ if (Test-Path `$JunctionsManifest) {
     }
 }
 
-# 7. Apply Windows Explorer, Taskbar & Power Preferences
-Write-Host "[7/9] Applying Windows system preferences & options..." -ForegroundColor Yellow
+# 7. Apply Windows Explorer, Taskbar, Theme, Input, Audio/Display, Network & Power Preferences
+Write-Host "[7/9] Applying Windows system preferences, input, audio & network options..." -ForegroundColor Yellow
 `$WinSettingsFile = Join-Path `$PayloadDir "windows-settings.json"
 `$WinScriptsDir = Join-Path `$PayloadDir "windows"
 if (Test-Path `$WinSettingsFile) {
@@ -819,16 +919,33 @@ if (Test-Path `$WinSettingsFile) {
         `$WinCfg = Get-Content -Raw `$WinSettingsFile | ConvertFrom-Json
         `$ExpScript = Join-Path `$WinScriptsDir "explorer-folder-options.ps1"
         if (Test-Path `$ExpScript) {
-            & `$ExpScript -ShowHiddenFiles:([bool]`$WinCfg.explorer.show_hidden_files) -ShowFileExtensions:([bool]`$WinCfg.explorer.show_file_extensions) -LaunchTo `$WinCfg.explorer.launch_to
+            & `$ExpScript -ShowHiddenFiles:([bool]`$WinCfg.explorer.show_hidden_files) -ShowFileExtensions:([bool]`$WinCfg.explorer.show_file_extensions) -LaunchTo `$WinCfg.explorer.launch_to -HideRecentFromQuickAccess:([bool]`$WinCfg.explorer.hide_recent_in_quick_access) -ClassicContextMenu:([bool]`$WinCfg.explorer.classic_context_menu) -UserShellFolders `$WinCfg.user_shell_folders
         }
         `$TbScript = Join-Path `$WinScriptsDir "taskbar-system-tray.ps1"
         if (Test-Path `$TbScript) {
-            & `$TbScript -TaskbarAlignment `$WinCfg.taskbar.alignment -SearchMode `$WinCfg.taskbar.search_mode -HideWidgets:(-not [bool]`$WinCfg.taskbar.widgets_visible) -HideChat:(-not [bool]`$WinCfg.taskbar.chat_visible)
+            & `$TbScript -TaskbarAlignment `$WinCfg.taskbar.alignment -SearchMode `$WinCfg.taskbar.search_mode -HideWidgets:(-not [bool]`$WinCfg.taskbar.widgets_visible) -HideChat:(-not [bool]`$WinCfg.taskbar.chat_visible) -ShowSecondsInClock:([bool]`$WinCfg.taskbar.show_seconds_in_clock) -EndTaskEnabled:([bool]`$WinCfg.taskbar.end_task_enabled) -PromotedTrayIcons @(`$WinCfg.taskbar.promoted_tray_icons)
         }
         `$PwrScript = Join-Path `$WinScriptsDir "performance-power.ps1"
         if (Test-Path `$PwrScript) {
             `$Plan = (`$WinCfg.power.active_scheme_name -replace '\s+', '')
-            & `$PwrScript -PowerPlan `$Plan -AcSleepTimeoutMinutes ([int]`$WinCfg.power.ac_sleep_minutes)
+            `$AcDisp = if (`$null -ne `$WinCfg.power.ac_display_minutes) { [int]`$WinCfg.power.ac_display_minutes } else { 30 }
+            & `$PwrScript -PowerPlan `$Plan -AcSleepTimeoutMinutes ([int]`$WinCfg.power.ac_sleep_minutes) -AcDisplayTimeoutMinutes `$AcDisp
+        }
+        `$ThemeScript = Join-Path `$WinScriptsDir "theme-personalization.ps1"
+        if ((Test-Path `$ThemeScript) -and `$WinCfg.theme) {
+            & `$ThemeScript -AppsMode `$WinCfg.theme.apps_mode -SystemMode `$WinCfg.theme.system_mode -Transparency:([bool]`$WinCfg.theme.transparency) -AccentColor `$WinCfg.theme.accent_color -AccentOnTaskbar:([bool]`$WinCfg.theme.accent_on_taskbar) -AccentOnTitlebars:([bool]`$WinCfg.theme.accent_on_titlebars) -WallpaperPath `$WinCfg.theme.wallpaper_path -WallpaperStyle ([int]`$WinCfg.theme.wallpaper_style)
+        }
+        `$InputScript = Join-Path `$WinScriptsDir "input-mouse-keyboard.ps1"
+        if ((Test-Path `$InputScript) -and `$WinCfg.input) {
+            & `$InputScript -MouseSpeed ([int]`$WinCfg.input.mouse.speed) -EnhancePointerPrecision:([bool]`$WinCfg.input.mouse.enhance_pointer_precision) -SwapMouseButtons:([bool]`$WinCfg.input.mouse.swap_buttons) -WheelScrollLines ([int]`$WinCfg.input.mouse.wheel_scroll_lines) -KeyboardRepeatDelay ([int]`$WinCfg.input.keyboard.repeat_delay) -KeyboardRepeatSpeed ([int]`$WinCfg.input.keyboard.repeat_speed) -NumLockOnStartup:([bool]`$WinCfg.input.keyboard.numlock_on_startup) -InputLanguages @(`$WinCfg.input.keyboard.input_languages)
+        }
+        `$AudioScript = Join-Path `$WinScriptsDir "audio-display.ps1"
+        if (Test-Path `$AudioScript) {
+            & `$AudioScript -DefaultSpeakers `$WinCfg.audio_and_devices.default_speakers -DefaultMicrophone `$WinCfg.audio_and_devices.default_microphone -DefaultCamera `$WinCfg.audio_and_devices.default_camera -DisabledCameras @(`$WinCfg.audio_and_devices.disabled_cameras) -MasterVolumePercent ([int]`$WinCfg.audio_and_devices.master_volume_percent) -MasterMuted:([bool]`$WinCfg.audio_and_devices.master_muted) -GameModeEnabled:([bool]`$WinCfg.display.game_mode_enabled) -HardwareGpuScheduling:([bool]`$WinCfg.display.hardware_gpu_scheduling)
+        }
+        `$NetScript = Join-Path `$WinScriptsDir "network-firewall.ps1"
+        if ((Test-Path `$NetScript) -and `$WinCfg.network) {
+            & `$NetScript -SharingWizardEnabled:([bool]`$WinCfg.network.sharing_wizard_enabled) -NetworkCategory `$WinCfg.network.network_category -NetworkDiscoveryEnabled:([bool]`$WinCfg.network.network_discovery_enabled) -FileAndPrinterSharingEnabled:([bool]`$WinCfg.network.file_and_printer_sharing_enabled) -PasswordProtectedSharing:([bool]`$WinCfg.network.password_protected_sharing) -Adapters @(`$WinCfg.network.adapters) -HostsEntries @(`$WinCfg.network.hosts_entries) -FirewallRules @(`$WinCfg.network.firewall_rules)
         }
         Write-Host "   Windows preferences applied successfully." -ForegroundColor Green
     } catch {
@@ -1203,6 +1320,24 @@ if (`$State.CompletedSteps -notcontains "user_junctions") {
         }
         Write-Host "[SUCCESS] All user directory junctions created successfully!" -ForegroundColor Green
     }
+
+    # Apply declarative Quick Access, Taskbar & Start Menu Pins, user PATH additions, and preserved Steam libraries
+    `$WinSettingsFile = Join-Path `$PayloadDir "windows-settings.json"
+    `$ShellPinsScript = Join-Path (Join-Path `$PayloadDir "windows") "shell-pins.ps1"
+    if ((Test-Path `$WinSettingsFile) -and (Test-Path `$ShellPinsScript)) {
+        try {
+            `$WinCfg = Get-Content -Raw `$WinSettingsFile | ConvertFrom-Json
+            & `$ShellPinsScript `
+                -QuickAccessPins @(`$WinCfg.explorer.quick_access_pins) `
+                -TaskbarPinnedApps @(`$WinCfg.taskbar.pinned_apps) `
+                -StartMenuPinnedApps @(`$WinCfg.start_menu.pinned_apps) `
+                -AppPathEntries @(`$WinCfg.app_path_entries) `
+                -SteamLibraries @(`$WinCfg.steam_libraries)
+        } catch {
+            Write-Warning "Could not apply declarative shell pins: `$(`$_.Exception.Message)"
+        }
+    }
+
     Save-HydrateState "user_junctions"
 } else {
     Write-Host "[✓] Step 5: User Junctions (Already completed)" -ForegroundColor DarkGray

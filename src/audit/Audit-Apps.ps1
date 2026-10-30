@@ -3,13 +3,52 @@
     Comprehensive application discovery module for Reglaze.
 .DESCRIPTION
     Discovers installed software via both WinGet and the Windows Add/Remove Programs (ARP)
-    registry hives (64-bit, 32-bit WoW64, and per-user HKCU). De-duplicates entries and
-    correlates findings against the Reglaze application catalog.
+    registry hives (64-bit, 32-bit WoW64, and per-user HKCU). De-duplicates entries,
+    filters out Windows inbox MSIX packages, OS runtimes, drivers, and redistributables,
+    and correlates findings against the Reglaze application catalog.
 #>
 
 
 . (Join-Path (Join-Path $PSScriptRoot "..") "common\Catalog.ps1")
 . (Join-Path (Join-Path $PSScriptRoot "..") "common\GameLibraries.ps1")
+
+function Test-IsIgnoredApplication {
+    [CmdletBinding()]
+    param(
+        [string]$WingetId = $null,
+        [string]$Name = $null,
+        [Nullable[int]]$SteamId = $null,
+        [PSCustomObject]$MatchedApp = $null
+    )
+
+    if ($MatchedApp) {
+        if ($MatchedApp.PSObject.Properties["ignore"] -and [bool]$MatchedApp.ignore) {
+            return $true
+        }
+        return $false
+    }
+
+    if ($null -ne $SteamId -and $SteamId -eq 228980) {
+        return $true
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($WingetId)) {
+        $IsSystemNoise = ($WingetId -match "^MSIX\\") -or
+                         ($WingetId -match "^(Microsoft\.VCRedist|Microsoft\.VCLibs|Microsoft\.UI\.Xaml|Microsoft\.WindowsAppRuntime|Microsoft\.DotNet\.|Microsoft\.CLRTypesSQLServer|Microsoft\.WindowsSDK\.|Microsoft\.AppInstaller$|Microsoft\.Edge$|Microsoft\.OneDrive$|Microsoft\.365Copilot$|Microsoft\.WidgetsPlatformRuntime|Microsoft\.WSL$|Nvidia\.PhysX$|Python\.Launcher$)")
+        if ($IsSystemNoise) {
+            return $true
+        }
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($Name)) {
+        $IsArpOrSteamNoise = ($Name -match "^(Adobe Genuine Service|Microsoft Windows Application Compatibility Fix Database|vs_CoreEditorFonts|Windows SDK AddOn|Windows Software Development Kit|Microsoft Visual C\+\+ .*Redistributable|Microsoft System CLR Types for SQL Server|Microsoft \.NET (Runtime|Host|SDK|Targeting Pack|AppHost|Standard)|Microsoft (Edge|OneDrive|Update Health Tools)|NVIDIA (Graphics Driver|PhysX|USBC Driver|HD Audio Driver|FrameView SDK|Vulkan|Nsight)|Steamworks Common Redistributables|Proton |Steam Linux Runtime|.*HD Audio Driver.*|.*USB Audio Drivers.*|.*FrameView SDK.*)")
+        if ($IsArpOrSteamNoise) {
+            return $true
+        }
+    }
+
+    return $false
+}
 
 function Get-InstalledApplicationsAudit {
     [CmdletBinding()]
@@ -86,11 +125,8 @@ function Get-InstalledApplicationsAudit {
                                     } | Sort-Object { if ($_.name) { $_.name.Length } else { $_.app_id.Length } } -Descending | Select-Object -First 1
                                 }
 
-                                # Check if package is internal OS runtime/codec noise
-                                $IsSystemNoise = ($Id -match "^(Microsoft\.VCRedist|Microsoft\.VCLibs|Microsoft\.UI\.Xaml|Microsoft\.WindowsAppRuntime|Microsoft\.DotNet\.Native|Microsoft\.CLRTypesSQLServer)") -or
-                                                 ($Id -match "^MSIX\\Microsoft\.(AV1VideoExtension|AVCEncoderVideoExtension|HEIFImageExtension|HEVCVideoExtension|MPEG2VideoExtension|VP9VideoExtensions|WebMediaExtensions|WebpImageExtension|RawImageExtension|Services\.Store\.Engagement|NET\.Native\.Framework|WinAppRuntime|Winget\.Source|SecHealthUI|StartExperiencesApp|StorePurchaseApp|ApplicationCompatibilityEnhancements)")
-
-                                if ($IsSystemNoise -and -not $MatchedApp) {
+                                # Check if package is internal OS/MSIX/runtime/driver noise or explicitly ignored
+                                if (Test-IsIgnoredApplication -WingetId $Id -Name $Name -MatchedApp $MatchedApp) {
                                     continue
                                 }
 
@@ -117,24 +153,31 @@ function Get-InstalledApplicationsAudit {
     $GameLibraryEntries = [System.Collections.Generic.List[PSCustomObject]]::new()
     foreach ($Lib in $SteamLibs) {
         $LibGames = @($SteamGames | Where-Object { $_.LibraryPath -eq $Lib })
+        $FilteredGames = [System.Collections.Generic.List[PSCustomObject]]::new()
+        foreach ($GItem in $LibGames) {
+            $GameAppId = $GItem.SteamId
+            $GameTitle = $GItem.GameName
+            $CatalogMatch = $Catalog | Where-Object {
+                ($_.install -and $null -ne $_.install.steam_id -and [int]$_.install.steam_id -eq [int]$GameAppId) -or
+                ($GameTitle -and $_.name -and $_.name -ieq $GameTitle) -or
+                ($GameTitle -and $_.app_id -and $_.app_id -ieq $GameTitle)
+            } | Select-Object -First 1
+
+            if (Test-IsIgnoredApplication -Name $GameTitle -SteamId $GameAppId -MatchedApp $CatalogMatch) {
+                continue
+            }
+
+            $FilteredGames.Add([PSCustomObject]@{
+                steam_id       = $GameAppId
+                name           = $GameTitle
+                matched_app_id = if ($CatalogMatch) { $CatalogMatch.app_id } else { $null }
+            })
+        }
         $GameLibraryEntries.Add([PSCustomObject]@{
             manager     = "steam"
             path        = $Lib
-            game_count  = $LibGames.Count
-            games       = @($LibGames | ForEach-Object {
-                $GameAppId = $_.SteamId
-                $GameTitle = $_.GameName
-                $CatalogMatch = $Catalog | Where-Object {
-                    ($_.install -and $null -ne $_.install.steam_id -and [int]$_.install.steam_id -eq [int]$GameAppId) -or
-                    ($GameTitle -and $_.name -and $_.name -ieq $GameTitle) -or
-                    ($GameTitle -and $_.app_id -and $_.app_id -ieq $GameTitle)
-                } | Select-Object -First 1
-                [PSCustomObject]@{
-                    steam_id       = $GameAppId
-                    name           = $GameTitle
-                    matched_app_id = if ($CatalogMatch) { $CatalogMatch.app_id } else { $null }
-                }
-            })
+            game_count  = $FilteredGames.Count
+            games       = $FilteredGames.ToArray()
         })
     }
 
@@ -199,9 +242,8 @@ function Get-InstalledApplicationsAudit {
                     } | Sort-Object { if ($_.name) { $_.name.Length } else { $_.app_id.Length } } -Descending | Select-Object -First 1
                 }
 
-                # Skip driver-only subcomponents and internal runtime noise unless explicitly cataloged
-                $IsArpNoise = ($DisplayName -match "^(Adobe Genuine Service|Microsoft Windows Application Compatibility Fix Database|vs_CoreEditorFonts|Windows SDK AddOn|.*HD Audio Driver.*|.*USB Audio Drivers.*|.*FrameView SDK.*)")
-                if ($IsArpNoise -and -not $MatchedApp) {
+                # Skip driver-only subcomponents, redistributables, and internal runtime noise unless explicitly cataloged
+                if (Test-IsIgnoredApplication -Name $DisplayName -SteamId $ArpSteamId -MatchedApp $MatchedApp) {
                     continue
                 }
 
@@ -227,4 +269,3 @@ function Get-InstalledApplicationsAudit {
         detected_game_libraries          = $GameLibraryEntries
     }
 }
-

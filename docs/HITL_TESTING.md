@@ -439,6 +439,7 @@
 | **HITL-M5-01** | USB Media Creation / Format-Volume & DISM Split-Image | `src/media/Build-Media.ps1` | `PENDING` | - | Formats target USB as FAT32, splits install.wim with DISM, injects autounattend.xml + payload |
 | **HITL-M5-02** | Hyper-V Automated VM Deployment | `tests/Test-Milestone5-VM.ps1` | `PENDING` | - | End-to-end OS install and bootstrap verification via PowerShell Direct |
 | **HITL-M5-03** | Preserved Disk Drive Letter Reconciliation | `src/linking/Set-ReglazeDriveLetters.ps1` | `VERIFIED` | 2026-10-28 | `Get-Disk` provides unique `SerialNumber` and `BusType` across NVMe, SATA, and USB SSDs; `Get-Partition` confirms `Guid` (GPT) and `PartitionNumber` (MBR/GPT) |
+| **HITL-M5-04** | Network Adapter State, Sharing Mode & Firewall Exceptions | `data/windows/network-firewall.ps1` | `VERIFIED` | 2026-10-30 | `Get-NetAdapter` provides unique `MacAddress` and `InterfaceDescription` (`Gigabit Network Connection`, `2.5GbE Network Controller`, `Bluetooth PAN`); `Get-NetConnectionProfile` reports `NetworkCategory`; `SharingWizardOn` is absent when at default (`true`), plus `Get-PnpDevice -Class Net` fallback added for Device-Manager-disabled NICs |
 
 ---
 
@@ -486,6 +487,33 @@
   Set-Partition -DiskNumber $d -PartitionNumber $p -NewDriveLetter $NewLetter
   ```
 - **Avoid Notes:** Do not rely solely on `Get-PhysicalDisk` for `SerialNumber` or `BusType` on USB-attached SSDs; do not require `PartitionGuid` to be non-null (MBR partitions have null `Guid`); never run `Remove-PartitionAccessPath` or `Set-Partition` against the host workstation OS.
+
+---
+
+### HITL-M5-04: Network Adapter State, Sharing Mode & Firewall Exceptions
+- **Target:** `Disable-NetAdapter`, `Set-NetConnectionProfile`, `New-NetFirewallRule`, `SharingWizardOn`
+- **File:** `data/windows/network-firewall.ps1`, `src/audit/Audit-Network.ps1`
+- **Description:** Audits physical/permanent network adapters (enabled vs disabled), File Explorer Simple vs Normal/Advanced sharing (`SharingWizardOn`), network profile category (`Private` vs `Public`), Network Discovery & File/Printer Sharing firewall groups, and custom firewall exceptions; applies them during Phase 4 bootstrap.
+- **Status:** `VERIFIED`
+- **Test Snippet (Safe / Read-Only):**
+  ```powershell
+  Get-NetAdapter | Select-Object Name, InterfaceDescription, MacAddress, Status, AdminStatus | Format-Table -AutoSize
+  Get-NetConnectionProfile | Select-Object Name, InterfaceAlias, NetworkCategory, IPv4Connectivity | Format-Table -AutoSize
+  Get-ItemProperty "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" -Name SharingWizardOn -ErrorAction SilentlyContinue | Select-Object SharingWizardOn
+  ```
+- **Last Input:** Read-only inspection of network adapters, connection profile, and `SharingWizardOn` on developer host (2026-10-30)
+- **Last Result:**
+  - `Get-NetAdapter`:
+    - `Ethernet 2` (`Gigabit Network Connection`, `00-11-22-33-44-55`, `Disconnected`, `AdminStatus = Up`)
+    - `Bluetooth Network Connection` (`Bluetooth Device (Personal Area Network)`, `00-11-22-33-44-66`, `Disconnected`, `AdminStatus = Up`)
+    - `Ethernet` (`2.5GbE Network Controller`, `00-11-22-33-44-77`, `Up`, `AdminStatus = Up`)
+  - `Get-NetConnectionProfile`: `Name = Network`, `InterfaceAlias = Ethernet`, `NetworkCategory = Public`, `IPv4Connectivity = Internet`
+  - `SharingWizardOn`: Registry value is absent in `HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced` when left at Windows default (`1` / enabled), and only written as `0` when unchecked in Folder Options.
+- **Verified Pattern:**
+  - Match adapters by `MacAddress` first, falling back to `InterfaceDescription`, and guard against disabling the sole active default-gateway (`0.0.0.0/0`) interface.
+  - Supplement `Get-NetAdapter` with `Get-PnpDevice -Class Net -PresentOnly` (`PCI\*` / `USB\*` where `Problem -eq 'CM_PROB_DISABLED'`) so network adapters disabled in Device Manager (which unload their NDIS miniport and disappear from `Get-NetAdapter`) are also captured and disabled on the target OS.
+- **Avoid Notes:** Never invoke `Disable-NetAdapter` or `New-NetFirewallRule` directly against the developer host OS outside a test VM.
+
 
 
 

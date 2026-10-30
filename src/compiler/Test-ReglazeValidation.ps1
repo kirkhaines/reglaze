@@ -335,6 +335,58 @@ function Test-ReglazeBlueprint {
         }
     }
 
+    # Validate relocated User Shell Folders (if present)
+    if ($Blueprint.storage -and $Blueprint.storage.user_shell_folders) {
+        $UsfObj = $Blueprint.storage.user_shell_folders
+        $UsfProps = if ($UsfObj -is [System.Collections.IDictionary]) { $UsfObj.Keys } else { $UsfObj.PSObject.Properties.Name }
+        foreach ($UKey in $UsfProps) {
+            $RawUsf = if ($UsfObj -is [System.Collections.IDictionary]) { [string]$UsfObj[$UKey] } else { [string]$UsfObj.$UKey }
+            if (-not [string]::IsNullOrWhiteSpace($RawUsf)) {
+                $ResolvedUsf = Resolve-VariableString -InputString $RawUsf -VariableMap $VarMap
+                $UsfUnresolved = Test-UnresolvedTokens -InputString $ResolvedUsf
+                if ($UsfUnresolved.Count -gt 0) {
+                    $Errors.Add("Unresolvable variable token(s) in storage.user_shell_folders.$UKey '$RawUsf': $($UsfUnresolved -join ', ')")
+                } else {
+                    $UsfDrive = ([System.IO.Path]::GetPathRoot($ResolvedUsf)).TrimEnd('\')
+                    if ($UsfDrive -and -not $AllowedTargetDrives.Contains($UsfDrive)) {
+                        $Errors.Add("storage.user_shell_folders.$UKey '$RawUsf' ('$ResolvedUsf') references undeclared drive '$UsfDrive'.")
+                    }
+                }
+            }
+        }
+    }
+
+    # Validate Windows Settings Wallpaper Path & Network Rules (if present)
+    if ($Blueprint.windows_settings -and $Blueprint.windows_settings.theme -and $Blueprint.windows_settings.theme.wallpaper_path) {
+        $RawWp = [string]$Blueprint.windows_settings.theme.wallpaper_path
+        if ($RawWp -and $RawWp -ne "null") {
+            $ResolvedWp = Resolve-VariableString -InputString $RawWp -VariableMap $VarMap
+            $WpUnresolved = Test-UnresolvedTokens -InputString $ResolvedWp
+            if ($WpUnresolved.Count -gt 0) {
+                $Errors.Add("Unresolvable variable token(s) in windows_settings.theme.wallpaper_path '$RawWp': $($WpUnresolved -join ', ')")
+            } elseif ($ResolvedWp -match '^[cC]:\\' -and $ResolvedWp -notmatch '(?i)^c:\\windows\\web\\') {
+                $Warnings.Add("windows_settings.theme.wallpaper_path ('$RawWp' -> '$ResolvedWp') resides on the disposable OS drive (C:). Consider moving custom wallpapers to %STREAM%, %SYNC_*%, or %DATA_DRIVE% so they survive re-imaging.")
+            }
+        }
+    }
+
+    if ($Blueprint.network) {
+        if ($Blueprint.network.network_category -and $Blueprint.network.network_category -notin @("Private", "Public", "DomainAuthenticated")) {
+            $Errors.Add("Invalid network.network_category '$($Blueprint.network.network_category)'. Must be 'Private', 'Public', or 'DomainAuthenticated'.")
+        }
+        if ($Blueprint.network.firewall_rules -and ($Blueprint.network.firewall_rules -is [System.Collections.IEnumerable]) -and -not ($Blueprint.network.firewall_rules -is [string])) {
+            foreach ($FwRule in $Blueprint.network.firewall_rules) {
+                if ($FwRule.program -and $FwRule.program -ne "Any") {
+                    $ResolvedProg = Resolve-VariableString -InputString ([string]$FwRule.program) -VariableMap $VarMap
+                    $ProgUnresolved = Test-UnresolvedTokens -InputString $ResolvedProg
+                    if ($ProgUnresolved.Count -gt 0) {
+                        $Errors.Add("Unresolvable variable token(s) in network.firewall_rules program '$($FwRule.program)': $($ProgUnresolved -join ', ')")
+                    }
+                }
+            }
+        }
+    }
+
     # 8. Directory Junction Integrity & Filesystem Rules Validation
     # Enforces Windows NTFS Reparse Point constraints, filesystem rules, target drive existence,
     # UNC rejection, circular loop prevention, and parent/child nesting prevention.

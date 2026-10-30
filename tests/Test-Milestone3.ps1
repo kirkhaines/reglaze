@@ -246,9 +246,11 @@ try {
     $SettingsSimResults = @(Invoke-WindowsSettingsApplication -RepoRoot $RepoRoot -Settings $CustomSettings -Simulation)
     $SettingsCount = $SettingsSimResults.Count
     $AllSimulated = @($SettingsSimResults | Where-Object { $_.Status -eq "Simulated" }).Count -eq $SettingsCount
+    $Phase4Results = @(Invoke-WindowsSettingsApplication -RepoRoot $RepoRoot -Settings $CustomSettings -Phase "Phase4" -Simulation)
+    $Phase5Results = @(Invoke-WindowsSettingsApplication -RepoRoot $RepoRoot -Settings $CustomSettings -Phase "Phase5" -Simulation)
 
-    Assert-Test "10. Windows Settings: executes modular Explorer, Taskbar, and Power settings with declared blueprint settings" `
-        ($SettingsCount -ge 3 -and $AllSimulated)
+    Assert-Test "10. Windows Settings: executes all 8 modular Windows, Input, Audio, Network & Shell Pin scripts in simulation (7 Phase4 + 1 Phase5)" `
+        ($SettingsCount -eq 8 -and $AllSimulated -and $Phase4Results.Count -eq 7 -and $Phase5Results.Count -eq 1)
 
     # =========================================================================
     # Test 11: AutoLogon Deactivation Logic Verification

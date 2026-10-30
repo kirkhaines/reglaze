@@ -2,9 +2,10 @@
 .SYNOPSIS
     Master pre-flight audit orchestrator for Reglaze.
 .DESCRIPTION
-    Runs non-destructive hardware, licensing, BitLocker, installed applications (WinGet + ARP),
-    Windows settings, and directory junction audits. Emits 'audit-reference.json' and scaffolds
-    a personalized 'reglaze.yaml' in the resolved output directory (or $env:REGLAZE_DIR).
+    Runs non-destructive hardware, licensing, BitLocker, installed applications (WinGet + ARP + Steam),
+    Windows desktop/shell/input/audio/display settings, networking/firewall configuration, and
+    directory junction audits. Emits 'audit-reference.json' and scaffolds a personalized
+    'reglaze.yaml' in the resolved output directory (or $env:REGLAZE_DIR).
 #>
 [CmdletBinding()]
 param(
@@ -32,6 +33,7 @@ if (-not (Test-Path (Join-Path $RepoRoot "data\applications"))) {
 . (Join-Path $RepoRoot "src\audit\Audit-Junctions.ps1")
 . (Join-Path $RepoRoot "src\audit\Audit-StorageProviders.ps1")
 . (Join-Path $RepoRoot "src\audit\Audit-Wsl.ps1")
+. (Join-Path $RepoRoot "src\audit\Audit-Network.ps1")
 
 Write-ReglazeBanner "PRE-FLIGHT SYSTEM AUDIT"
 
@@ -106,13 +108,16 @@ $JunctionsData = Get-JunctionsAudit -RepoRoot $RepoRoot -UserConfigDir $TargetDi
 Write-ReglazeSuccess "Detected $($JunctionsData.Count) directory junction(s)."
 
 # 7. Execute Windows Settings Discovery
-Write-ReglazeStep "Auditing Windows Preferences & Settings..."
+Write-ReglazeStep "Auditing Windows Preferences, Shell Pins, Theme, Input, Audio & Display Settings..."
 $WindowsSettings = $null
 $WinSettingsScript = Join-Path $RepoRoot "data\windows\audit-windows-settings.ps1"
 if (Test-Path $WinSettingsScript) {
     try {
         $WindowsSettings = & $WinSettingsScript
-        Write-ReglazeSuccess "Captured Explorer, Taskbar, and Power profile preferences."
+        Write-ReglazeSuccess "Captured Explorer, Taskbar, Theme, Clock, Input, Power, Audio/Camera, and Display preferences."
+        if ($WindowsSettings.system_ergonomics -and $WindowsSettings.system_ergonomics.ssh_keys_unmapped_warning) {
+            Write-ReglazeWarning "Detected '%USERPROFILE%\.ssh' on C: without a directory junction. Consider mapping or backing up your SSH keys before re-imaging!"
+        }
     } catch {
         Write-ReglazeWarning "Could not execute Windows settings audit: $($_.Exception.Message)"
     }
@@ -120,17 +125,28 @@ if (Test-Path $WinSettingsScript) {
 
 # 8. Execute Storage Providers & User Identity Discovery
 Write-ReglazeStep "Auditing Cloud Storage Providers & User Identity..."
-$StorageProvidersData = Get-StorageProvidersAudit
+$PhysicalDiskMountLetters = @(
+    $HardwareData.storage_topology.disks |
+        ForEach-Object { $_.partitions } |
+        Where-Object { $_ -and $_.mount_point } |
+        ForEach-Object { $_.mount_point }
+)
+$StorageProvidersData = Get-StorageProvidersAudit -AdditionalOccupiedLetters $PhysicalDiskMountLetters
 $UserIdentityData = Get-UserIdentityAudit
 Write-ReglazeSuccess "User Identity: $($UserIdentityData.email) ($($UserIdentityData.account_type))"
-Write-ReglazeSuccess "Cloud Streaming: $($StorageProvidersData.streaming.mount_point) ($($StorageProvidersData.streaming.cloud_provider)), Synced roots: $($StorageProvidersData.sync_directories.Count)."
+Write-ReglazeSuccess "Cloud Streaming: $($StorageProvidersData.streaming.mount_point) ($($StorageProvidersData.streaming.cloud_provider), detected=$($StorageProvidersData.streaming.detected)), Synced roots: $($StorageProvidersData.sync_directories.Count)."
 
-# 9. Execute WSL Environment Discovery
+# 9. Execute Network & Firewall Discovery
+Write-ReglazeStep "Auditing Network Adapters, Sharing Preferences & Custom Firewall Rules..."
+$NetworkData = Get-NetworkAudit
+Write-ReglazeSuccess "Discovered $($NetworkData.adapters.Count) network adapter(s) and $($NetworkData.firewall_rules.Count) custom firewall rule(s)."
+
+# 10. Execute WSL Environment Discovery
 Write-ReglazeStep "Auditing WSL Distributions & Packages..."
 $WslData = Get-WslAudit
 Write-ReglazeSuccess "WSL Enabled: $($WslData.enabled), Default Distro: $($WslData.default_distro), Packages: $($WslData.detected_packages.Count)."
 
-# 10. Assemble Profile-to-Computer Association and Emit audit-reference.json
+# 11. Assemble Profile-to-Computer Association and Emit audit-reference.json
 Write-ReglazeStep "Compiling Audit Reference Document & Profile Registry..."
 $ComputerName = $env:COMPUTERNAME
 $AuditTimestamp = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
@@ -222,6 +238,7 @@ $AuditReference = [PSCustomObject]@{
     user_identity                    = $UserIdentityData
     storage_providers                = $StorageProvidersData
     detected_wsl                     = $WslData
+    detected_network                 = $NetworkData
     bitlocker_recovery_keys          = $BitLockerData
     storage_topology                 = $HardwareData.storage_topology
     detected_junctions               = $JunctionsData
@@ -235,7 +252,7 @@ $AuditJsonPath = Join-Path $TargetDir "audit-reference.json"
 $AuditReference | ConvertTo-Json -Depth 6 | Set-Content -Path $AuditJsonPath -Encoding UTF8
 Write-ReglazeSuccess "Wrote audit profile: $AuditJsonPath"
 
-# 11. Archive Existing reglaze.yaml (if present) and Scaffold Fresh Blueprint
+# 12. Archive Existing reglaze.yaml (if present) and Scaffold Fresh Blueprint
 if (Test-Path $BlueprintPath) {
     $ExistingContent = if ($ExistingBlueprintContent) { $ExistingBlueprintContent } else { Get-Content -Raw -Path $BlueprintPath -ErrorAction SilentlyContinue }
     $GenDateStr = $null
@@ -246,7 +263,6 @@ if (Test-Path $BlueprintPath) {
             if ($RawVal -match '\d{1,2}:\d{2}' -or $ParsedDate.TimeOfDay.TotalSeconds -gt 0) {
                 $GenDateStr = $ParsedDate.ToString("yyyy-MM-ddTHH-mm-ss")
             } else {
-                # Legacy date without time: append file LastWriteTime to avoid collisions
                 $GenTime = (Get-Item $BlueprintPath).LastWriteTime.ToString("HH-mm-ss")
                 $GenDateStr = "$($ParsedDate.ToString('yyyy-MM-dd'))T$GenTime"
             }
@@ -287,192 +303,470 @@ if (-not $OsDisk -and $AllDisks.Count -gt 0) {
 
 $PreservedDisks = @($AllDisks | Where-Object { $_.disk_number -ne $OsDisk.disk_number })
 
+# Resolve conflict-free streaming drive letter against C: and all preserved disks
+$OccupiedDiskMounts = @("C:") + @(
+    $PreservedDisks |
+        ForEach-Object { $_.partitions } |
+        Where-Object { $_ -and $_.mount_point } |
+        ForEach-Object { $_.mount_point }
+)
+$PreferredStreamLetter = if ($StorageProvidersData.streaming.detected -and $StorageProvidersData.streaming.mount_point) {
+    $StorageProvidersData.streaming.mount_point
+} else {
+    "G:"
+}
+$StreamMount = Resolve-ConflictFreeStreamingMountLetter -OccupiedLetters $OccupiedDiskMounts -PreferredLetter $PreferredStreamLetter
+$StreamVerify = "$StreamMount\My Drive"
+$StreamVerifyYaml = $StreamVerify -replace '\\', '\\'
+
+$EscapeYamlStr = {
+    param([string]$Val)
+    if ([string]::IsNullOrEmpty($Val)) { return "" }
+    $Clean = ($Val -replace "`0", "")
+    return ($Clean -replace '\\', '\\' -replace '"', '\"')
+}
+
+$TokenizePath = {
+    param([string]$RawPath)
+    if ([string]::IsNullOrWhiteSpace($RawPath)) { return "" }
+    $P = $RawPath.Trim()
+    if ($env:USERPROFILE -and $P.StartsWith($env:USERPROFILE, [System.StringComparison]::OrdinalIgnoreCase)) {
+        $P = "%USER_DIR%" + $P.Substring($env:USERPROFILE.Length)
+    } elseif ($StreamMount -and $P.StartsWith("$StreamMount\", [System.StringComparison]::OrdinalIgnoreCase)) {
+        $P = "%STREAM%" + $P.Substring($StreamMount.Length)
+    } elseif ($P -match '^[dD]:\\') {
+        $P = "%DATA_DRIVE%" + $P.Substring(2)
+    } elseif ($P -match '^[cC]:\\') {
+        $P = "%OS_DRIVE%" + $P.Substring(2)
+    }
+    return (& $EscapeYamlStr $P)
+}
+
 # Build Scaffolded Blueprint Content
 $CurrentDateStr = (Get-Date).ToString("yyyy-MM-ddTHH:mm:ss")
-$YamlLines = @(
+$YamlLines = [System.Collections.Generic.List[string]]::new()
+@(
     'version: "1.0"',
     "profile: `"$ResolvedProfile`"",
     "generation_date: `"$CurrentDateStr`"",
     '',
     'system:',
-        "  computer_name: `"$ComputerName`"",
-        "  os_edition: `"$($LicensingData.os_edition)`"",
-        "  timezone: `"$([System.TimeZoneInfo]::Local.Id)`"",
-        '  licensing:',
-        "    channel: `"$($LicensingData.license_channel)`"",
-        '    backup_key_reference: "audit-reference.json"',
-        '  users:',
-        '    local_admin:',
-        '      username: "LocalAdmin"',
-        '      password_env: "LOCAL_ADMIN_PASSWORD"',
-        '      auto_logon: true',
-        '    primary_user:',
-        "      account_type: `"$($UserIdentityData.account_type)`"",
-        "      email: `"$($UserIdentityData.email)`"",
-        "      username: `"$($UserIdentityData.username)`"",
-        '      is_admin: false',
-        '      auto_logon: false',
-        '  features:',
-        '    developer_mode: true',
-        '    virtual_machine_platform: true',
-        '    subsystem_for_linux: true',
-        '  updates:',
-        '    drivers: true',
-        '    windows_updates: true',
-        '',
-        'windows_settings:',
-        '  explorer:',
-        "    show_hidden_files: $(if ($WindowsSettings.explorer.show_hidden_files) { 'true' } else { 'false' })",
-        "    show_file_extensions: $(if ($WindowsSettings.explorer.show_file_extensions) { 'true' } else { 'false' })",
-        "    launch_to: `"$($WindowsSettings.explorer.launch_to)`"",
-        '  taskbar:',
-        "    alignment: `"$($WindowsSettings.taskbar.alignment)`"",
-        "    search_mode: `"$($WindowsSettings.taskbar.search_mode)`"",
-        "    widgets_visible: $(if ($WindowsSettings.taskbar.widgets_visible) { 'true' } else { 'false' })",
-        "    chat_visible: $(if ($WindowsSettings.taskbar.chat_visible) { 'true' } else { 'false' })",
-        '  power:',
-        "    active_scheme_name: `"$($WindowsSettings.power.active_scheme_name)`"",
-        "    ac_sleep_minutes: $($WindowsSettings.power.ac_sleep_minutes)",
-        '',
-        'disks:',
-        '  target_os_disk:',
-        "    disk_id: $($OsDisk.disk_number)",
-        "    serial_number: `"$($OsDisk.serial_number)`"",
-        "    bus_type: `"$($OsDisk.bus_type)`"",
-        '    wipe_and_partition: true',
-        '    drive_variable: "OS_DRIVE"',
-        '  preserved_disks:'
-    )
+    "  computer_name: `"$ComputerName`"",
+    "  os_edition: `"$($LicensingData.os_edition)`"",
+    "  timezone: `"$([System.TimeZoneInfo]::Local.Id)`"",
+    '  licensing:',
+    "    channel: `"$($LicensingData.license_channel)`"",
+    '    backup_key_reference: "audit-reference.json"',
+    '  users:',
+    '    local_admin:',
+    '      username: "LocalAdmin"',
+    '      password_env: "LOCAL_ADMIN_PASSWORD"',
+    '      auto_logon: true',
+    '    primary_user:',
+    "      account_type: `"$($UserIdentityData.account_type)`"",
+    "      email: `"$($UserIdentityData.email)`"",
+    "      username: `"$($UserIdentityData.username)`"",
+    '      is_admin: false',
+    '      auto_logon: false',
+    '  features:',
+    '    developer_mode: true',
+    '    virtual_machine_platform: true',
+    '    subsystem_for_linux: true',
+    '  updates:',
+    '    drivers: true',
+    '    windows_updates: true',
+    '',
+    'windows_settings:',
+    '  explorer:',
+    "    show_hidden_files: $(if ($WindowsSettings.explorer.show_hidden_files) { 'true' } else { 'false' })",
+    "    show_file_extensions: $(if ($WindowsSettings.explorer.show_file_extensions) { 'true' } else { 'false' })",
+    "    launch_to: `"$($WindowsSettings.explorer.launch_to)`"",
+    "    hide_recent_in_quick_access: $(if ($WindowsSettings.explorer.hide_recent_in_quick_access) { 'true' } else { 'false' })",
+    "    classic_context_menu: $(if ($WindowsSettings.explorer.classic_context_menu) { 'true' } else { 'false' })"
+) | ForEach-Object { $YamlLines.Add($_) }
 
-    if ($PreservedDisks.Count -gt 0) {
-        $HasAssignedDataDrive = $false
-        foreach ($PDisk in $PreservedDisks) {
-            $FirstPart = $PDisk.partitions | Where-Object { $_.mount_point } | Select-Object -First 1
-            $Mount = if ($FirstPart) { $FirstPart.mount_point } else { $null }
-            $Label = if ($FirstPart -and $FirstPart.label) { $FirstPart.label } else { $PDisk.friendly_name }
+if ($WindowsSettings.explorer.quick_access_pins -and $WindowsSettings.explorer.quick_access_pins.Count -gt 0) {
+    $YamlLines.Add('    quick_access_pins:')
+    foreach ($QaPin in $WindowsSettings.explorer.quick_access_pins) {
+        $YamlLines.Add("      - `"$(& $TokenizePath $QaPin)`"")
+    }
+} else {
+    $YamlLines.Add('    quick_access_pins: []')
+}
 
-            $DriveVar = $null
-            if ($Mount -eq "D:" -and -not $HasAssignedDataDrive) {
-                $DriveVar = "DATA_DRIVE"
-                $HasAssignedDataDrive = $true
-            }
+@(
+    '  taskbar:',
+    "    alignment: `"$($WindowsSettings.taskbar.alignment)`"",
+    "    search_mode: `"$($WindowsSettings.taskbar.search_mode)`"",
+    "    widgets_visible: $(if ($WindowsSettings.taskbar.widgets_visible) { 'true' } else { 'false' })",
+    "    chat_visible: $(if ($WindowsSettings.taskbar.chat_visible) { 'true' } else { 'false' })",
+    "    show_seconds_in_clock: $(if ($WindowsSettings.taskbar.show_seconds_in_clock) { 'true' } else { 'false' })",
+    "    end_task_enabled: $(if ($WindowsSettings.taskbar.end_task_enabled) { 'true' } else { 'false' })"
+) | ForEach-Object { $YamlLines.Add($_) }
 
-            $YamlLines += "    - disk_id: $($PDisk.disk_number)"
-            $YamlLines += "      serial_number: `"$($PDisk.serial_number)`""
-            if ($PDisk.bus_type) {
-                $YamlLines += "      bus_type: `"$($PDisk.bus_type)`""
+if ($WindowsSettings.taskbar.pinned_apps -and $WindowsSettings.taskbar.pinned_apps.Count -gt 0) {
+    $YamlLines.Add('    pinned_apps:')
+    foreach ($TbPin in $WindowsSettings.taskbar.pinned_apps) {
+        $YamlLines.Add("      - `"$(& $TokenizePath $TbPin)`"")
+    }
+} else {
+    $YamlLines.Add('    pinned_apps: []')
+}
+
+if ($WindowsSettings.taskbar.promoted_tray_icons -and $WindowsSettings.taskbar.promoted_tray_icons.Count -gt 0) {
+    $YamlLines.Add('    promoted_tray_icons:')
+    foreach ($TrayIcon in $WindowsSettings.taskbar.promoted_tray_icons) {
+        $YamlLines.Add("      - `"$(& $EscapeYamlStr $TrayIcon)`"")
+    }
+} else {
+    $YamlLines.Add('    promoted_tray_icons: []')
+}
+
+$YamlLines.Add('  start_menu:')
+if ($WindowsSettings.start_menu -and $WindowsSettings.start_menu.pinned_apps -and $WindowsSettings.start_menu.pinned_apps.Count -gt 0) {
+    $YamlLines.Add('    pinned_apps:')
+    foreach ($SmPin in $WindowsSettings.start_menu.pinned_apps) {
+        $YamlLines.Add("      - `"$(& $TokenizePath $SmPin)`"")
+    }
+} else {
+    $YamlLines.Add('    pinned_apps: []')
+}
+
+$WallpaperTokenized = if ($WindowsSettings.theme -and $WindowsSettings.theme.wallpaper_path) {
+    "`"$(& $TokenizePath $WindowsSettings.theme.wallpaper_path)`""
+} else {
+    "null"
+}
+$AccentStr = if ($WindowsSettings.theme -and $WindowsSettings.theme.accent_color) {
+    "`"$($WindowsSettings.theme.accent_color)`""
+} else {
+    "null"
+}
+
+@(
+    '  theme:',
+    "    apps_mode: `"$(if ($WindowsSettings.theme) { $WindowsSettings.theme.apps_mode } else { 'Dark' })`"",
+    "    system_mode: `"$(if ($WindowsSettings.theme) { $WindowsSettings.theme.system_mode } else { 'Dark' })`"",
+    "    transparency: $(if ($WindowsSettings.theme -and $WindowsSettings.theme.transparency) { 'true' } else { 'false' })",
+    "    accent_color: $AccentStr",
+    "    accent_on_taskbar: $(if ($WindowsSettings.theme -and $WindowsSettings.theme.accent_on_taskbar) { 'true' } else { 'false' })",
+    "    accent_on_titlebars: $(if ($WindowsSettings.theme -and $WindowsSettings.theme.accent_on_titlebars) { 'true' } else { 'false' })",
+    "    wallpaper_path: $WallpaperTokenized",
+    "    wallpaper_style: $(if ($WindowsSettings.theme -and $null -ne $WindowsSettings.theme.wallpaper_style) { $WindowsSettings.theme.wallpaper_style } else { 10 })",
+    '  clock_and_region:',
+    "    short_time_format: `"$(if ($WindowsSettings.clock_and_region) { & $EscapeYamlStr $WindowsSettings.clock_and_region.short_time_format } else { 'h:mm tt' })`"",
+    "    long_time_format: `"$(if ($WindowsSettings.clock_and_region) { & $EscapeYamlStr $WindowsSettings.clock_and_region.long_time_format } else { 'h:mm:ss tt' })`"",
+    "    short_date_format: `"$(if ($WindowsSettings.clock_and_region) { & $EscapeYamlStr $WindowsSettings.clock_and_region.short_date_format } else { 'M/d/yyyy' })`"",
+    "    use_24_hour_clock: $(if ($WindowsSettings.clock_and_region -and $WindowsSettings.clock_and_region.use_24_hour_clock) { 'true' } else { 'false' })",
+    '  input:',
+    '    mouse:',
+    "      speed: $(if ($WindowsSettings.input -and $WindowsSettings.input.mouse) { $WindowsSettings.input.mouse.speed } else { 10 })",
+    "      enhance_pointer_precision: $(if ($WindowsSettings.input -and $WindowsSettings.input.mouse -and $WindowsSettings.input.mouse.enhance_pointer_precision) { 'true' } else { 'false' })",
+    "      swap_buttons: $(if ($WindowsSettings.input -and $WindowsSettings.input.mouse -and $WindowsSettings.input.mouse.swap_buttons) { 'true' } else { 'false' })",
+    "      wheel_scroll_lines: $(if ($WindowsSettings.input -and $WindowsSettings.input.mouse) { $WindowsSettings.input.mouse.wheel_scroll_lines } else { 3 })",
+    '    keyboard:',
+    "      repeat_delay: $(if ($WindowsSettings.input -and $WindowsSettings.input.keyboard) { $WindowsSettings.input.keyboard.repeat_delay } else { 1 })",
+    "      repeat_speed: $(if ($WindowsSettings.input -and $WindowsSettings.input.keyboard) { $WindowsSettings.input.keyboard.repeat_speed } else { 31 })",
+    "      numlock_on_startup: $(if ($WindowsSettings.input -and $WindowsSettings.input.keyboard -and $WindowsSettings.input.keyboard.numlock_on_startup) { 'true' } else { 'false' })"
+) | ForEach-Object { $YamlLines.Add($_) }
+
+$LangList = if ($WindowsSettings.input -and $WindowsSettings.input.keyboard -and $WindowsSettings.input.keyboard.input_languages) {
+    @($WindowsSettings.input.keyboard.input_languages)
+} else {
+    @("en-US")
+}
+$YamlLines.Add('      input_languages:')
+foreach ($Lang in $LangList) {
+    $YamlLines.Add("        - `"$(& $EscapeYamlStr $Lang)`"")
+}
+
+$SpkYaml = if ($WindowsSettings.audio_and_devices -and $WindowsSettings.audio_and_devices.default_speakers) {
+    "`"$(& $EscapeYamlStr $WindowsSettings.audio_and_devices.default_speakers)`""
+} else { "null" }
+$MicYaml = if ($WindowsSettings.audio_and_devices -and $WindowsSettings.audio_and_devices.default_microphone) {
+    "`"$(& $EscapeYamlStr $WindowsSettings.audio_and_devices.default_microphone)`""
+} else { "null" }
+$CamYaml = if ($WindowsSettings.audio_and_devices -and $WindowsSettings.audio_and_devices.default_camera) {
+    "`"$(& $EscapeYamlStr $WindowsSettings.audio_and_devices.default_camera)`""
+} else { "null" }
+
+@(
+    '  power:',
+    "    active_scheme_name: `"$($WindowsSettings.power.active_scheme_name)`"",
+    "    ac_sleep_minutes: $($WindowsSettings.power.ac_sleep_minutes)",
+    "    ac_display_minutes: $(if ($null -ne $WindowsSettings.power.ac_display_minutes) { $WindowsSettings.power.ac_display_minutes } else { 15 })",
+    '  audio_and_devices:',
+    "    default_speakers: $SpkYaml",
+    "    default_microphone: $MicYaml",
+    "    default_camera: $CamYaml",
+    "    master_volume_percent: $(if ($WindowsSettings.audio_and_devices) { $WindowsSettings.audio_and_devices.master_volume_percent } else { 50 })",
+    "    master_muted: $(if ($WindowsSettings.audio_and_devices -and $WindowsSettings.audio_and_devices.master_muted) { 'true' } else { 'false' })"
+) | ForEach-Object { $YamlLines.Add($_) }
+
+if ($WindowsSettings.audio_and_devices -and $WindowsSettings.audio_and_devices.disabled_cameras -and $WindowsSettings.audio_and_devices.disabled_cameras.Count -gt 0) {
+    $YamlLines.Add('    disabled_cameras:')
+    foreach ($DisCam in $WindowsSettings.audio_and_devices.disabled_cameras) {
+        $YamlLines.Add("      - `"$(& $EscapeYamlStr $DisCam)`"")
+    }
+} else {
+    $YamlLines.Add('    disabled_cameras: []')
+}
+
+@(
+    '  display:',
+    "    game_mode_enabled: $(if ($WindowsSettings.display -and $WindowsSettings.display.game_mode_enabled) { 'true' } else { 'false' })",
+    "    hardware_gpu_scheduling: $(if ($WindowsSettings.display -and $WindowsSettings.display.hardware_gpu_scheduling) { 'true' } else { 'false' })"
+) | ForEach-Object { $YamlLines.Add($_) }
+
+if ($WindowsSettings.display -and $WindowsSettings.display.monitors -and $WindowsSettings.display.monitors.Count -gt 0) {
+    $YamlLines.Add('    monitors:')
+    foreach ($Mon in $WindowsSettings.display.monitors) {
+        $YamlLines.Add("      - hardware_id: `"$(& $EscapeYamlStr $Mon.hardware_id)`"")
+        $YamlLines.Add("        device_name: `"$(& $EscapeYamlStr $Mon.device_name)`"")
+        $YamlLines.Add("        width: $($Mon.width)")
+        $YamlLines.Add("        height: $($Mon.height)")
+        $YamlLines.Add("        refresh_rate_hz: $($Mon.refresh_rate_hz)")
+        $YamlLines.Add("        position_x: $($Mon.position_x)")
+        $YamlLines.Add("        position_y: $($Mon.position_y)")
+        $YamlLines.Add("        is_primary: $(if ($Mon.is_primary) { 'true' } else { 'false' })")
+    }
+} else {
+    $YamlLines.Add('    monitors: []')
+}
+
+$DefBrowserStr = if ($WindowsSettings.system_ergonomics -and $WindowsSettings.system_ergonomics.default_browser_prog_id) {
+    "`"$(& $EscapeYamlStr $WindowsSettings.system_ergonomics.default_browser_prog_id)`""
+} else { "null" }
+
+@(
+    '  system_ergonomics:',
+    "    clipboard_history_enabled: $(if ($WindowsSettings.system_ergonomics -and $WindowsSettings.system_ergonomics.clipboard_history_enabled) { 'true' } else { 'false' })",
+    "    long_paths_enabled: $(if ($WindowsSettings.system_ergonomics -and $WindowsSettings.system_ergonomics.long_paths_enabled) { 'true' } else { 'false' })",
+    "    ssh_agent_startup: `"$(if ($WindowsSettings.system_ergonomics -and $WindowsSettings.system_ergonomics.ssh_agent_startup) { $WindowsSettings.system_ergonomics.ssh_agent_startup } else { 'Disabled' })`"",
+    "    default_browser_prog_id: $DefBrowserStr",
+    "    default_terminal: `"$(if ($WindowsSettings.system_ergonomics -and $WindowsSettings.system_ergonomics.default_terminal) { $WindowsSettings.system_ergonomics.default_terminal } else { 'Conhost' })`"",
+    '',
+    'network:',
+    "  sharing_wizard_enabled: $(if ($NetworkData.sharing_wizard_enabled) { 'true' } else { 'false' })",
+    "  network_category: `"$($NetworkData.network_category)`"",
+    "  network_discovery_enabled: $(if ($NetworkData.network_discovery_enabled) { 'true' } else { 'false' })",
+    "  file_and_printer_sharing_enabled: $(if ($NetworkData.file_and_printer_sharing_enabled) { 'true' } else { 'false' })",
+    "  password_protected_sharing: $(if ($NetworkData.password_protected_sharing) { 'true' } else { 'false' })"
+) | ForEach-Object { $YamlLines.Add($_) }
+
+if ($NetworkData.adapters -and $NetworkData.adapters.Count -gt 0) {
+    $YamlLines.Add('  adapters:')
+    foreach ($Nic in $NetworkData.adapters) {
+        $YamlLines.Add("    - name: `"$(& $EscapeYamlStr $Nic.name)`"")
+        $YamlLines.Add("      description: `"$(& $EscapeYamlStr $Nic.description)`"")
+        $YamlLines.Add("      mac_address: `"$(& $EscapeYamlStr $Nic.mac_address)`"")
+        $YamlLines.Add("      enabled: $(if ($Nic.enabled) { 'true' } else { 'false' })")
+        if ($Nic.dns_servers -and $Nic.dns_servers.Count -gt 0) {
+            $YamlLines.Add('      dns_servers:')
+            foreach ($Dns in $Nic.dns_servers) {
+                $YamlLines.Add("        - `"$(& $EscapeYamlStr $Dns)`"")
             }
-            if ($FirstPart -and $FirstPart.partition_number) {
-                $YamlLines += "      partition_number: $($FirstPart.partition_number)"
-            }
-            if ($FirstPart -and $FirstPart.partition_guid) {
-                $YamlLines += "      partition_guid: `"$($FirstPart.partition_guid)`""
-            }
-            if ($Mount) {
-                $YamlLines += "      expected_mount: `"$Mount`""
-            } else {
-                $YamlLines += "      expected_mount: null"
-            }
-            if ($DriveVar) {
-                $YamlLines += "      drive_variable: `"$DriveVar`""
-            }
-            $YamlLines += "      label: `"$Label`""
+        } else {
+            $YamlLines.Add('      dns_servers: []')
         }
-    } else {
-        $YamlLines += '    []'
     }
+} else {
+    $YamlLines.Add('  adapters: []')
+}
 
-    $StreamMount = if ($StorageProvidersData.streaming.detected) { $StorageProvidersData.streaming.mount_point } else { "G:" }
-    $StreamVerify = if ($StorageProvidersData.streaming.detected) { $StorageProvidersData.streaming.verify_folder } else { "G:\My Drive" }
-    $StreamVerifyYaml = $StreamVerify -replace '\\', '\\'
+if ($NetworkData.hosts_entries -and $NetworkData.hosts_entries.Count -gt 0) {
+    $YamlLines.Add('  hosts_entries:')
+    foreach ($HEntry in $NetworkData.hosts_entries) {
+        $YamlLines.Add("    - `"$(& $EscapeYamlStr $HEntry)`"")
+    }
+} else {
+    $YamlLines.Add('  hosts_entries: []')
+}
 
-    $YamlLines += @(
-        '',
-        'storage:',
-        '  streaming:',
-        "    cloud_provider: `"$($StorageProvidersData.streaming.cloud_provider)`"",
-        "    mount_point: `"$StreamMount`"",
-        "    verify_folder: `"$StreamVerifyYaml`"",
-        '    stream_variable: "STREAM"',
-        '  sync:',
-        '    provider: "google-drive-sync"',
-        "    source_computer: `"$ComputerName`"",
-        '    migration_mode: "copy"',
-        '    directories:'
-    )
+if ($NetworkData.firewall_rules -and $NetworkData.firewall_rules.Count -gt 0) {
+    $YamlLines.Add('  firewall_rules:')
+    foreach ($FwRule in $NetworkData.firewall_rules) {
+        $YamlLines.Add("    - display_name: `"$(& $EscapeYamlStr $FwRule.display_name)`"")
+        $YamlLines.Add("      direction: `"$($FwRule.direction)`"")
+        $YamlLines.Add("      action: `"$($FwRule.action)`"")
+        $YamlLines.Add("      protocol: `"$($FwRule.protocol)`"")
+        $YamlLines.Add("      local_port: `"$(& $EscapeYamlStr $FwRule.local_port)`"")
+        $YamlLines.Add("      remote_port: `"$(& $EscapeYamlStr $FwRule.remote_port)`"")
+        $YamlLines.Add("      program: `"$(if ($FwRule.program -and $FwRule.program -ne 'Any') { & $TokenizePath $FwRule.program } else { 'Any' })`"")
+        $YamlLines.Add("      profile: `"$($FwRule.profile)`"")
+        $YamlLines.Add("      enabled: $(if ($FwRule.enabled) { 'true' } else { 'false' })")
+    }
+} else {
+    $YamlLines.Add('  firewall_rules: []')
+}
 
-    if ($StorageProvidersData.sync_directories.Count -gt 0) {
-        foreach ($SyncDir in $StorageProvidersData.sync_directories) {
-            $LocalPathVar = $SyncDir.local_path
-            if ($LocalPathVar -like "D:\*") {
-                $LocalPathVar = "%DATA_DRIVE%" + $LocalPathVar.Substring(2)
-            } elseif ($LocalPathVar -like "C:\*") {
-                $LocalPathVar = "%OS_DRIVE%" + $LocalPathVar.Substring(2)
+@(
+    '',
+    'disks:',
+    '  target_os_disk:',
+    "    disk_id: $($OsDisk.disk_number)",
+    "    serial_number: `"$($OsDisk.serial_number)`"",
+    "    bus_type: `"$($OsDisk.bus_type)`"",
+    '    wipe_and_partition: true',
+    '    drive_variable: "OS_DRIVE"',
+    '  preserved_disks:'
+) | ForEach-Object { $YamlLines.Add($_) }
+
+if ($PreservedDisks.Count -gt 0) {
+    $HasAssignedDataDrive = $false
+    foreach ($PDisk in $PreservedDisks) {
+        $FirstPart = $PDisk.partitions | Where-Object { $_.mount_point } | Select-Object -First 1
+        $Mount = if ($FirstPart) { $FirstPart.mount_point } else { $null }
+        $Label = if ($FirstPart -and $FirstPart.label) { $FirstPart.label } else { $PDisk.friendly_name }
+
+        $DriveVar = $null
+        if ($Mount -eq "D:" -and -not $HasAssignedDataDrive) {
+            $DriveVar = "DATA_DRIVE"
+            $HasAssignedDataDrive = $true
+        }
+
+        $YamlLines.Add("    - disk_id: $($PDisk.disk_number)")
+        $YamlLines.Add("      serial_number: `"$($PDisk.serial_number)`"")
+        if ($PDisk.bus_type) {
+            $YamlLines.Add("      bus_type: `"$($PDisk.bus_type)`"")
+        }
+        if ($FirstPart -and $FirstPart.partition_number) {
+            $YamlLines.Add("      partition_number: $($FirstPart.partition_number)")
+        }
+        if ($FirstPart -and $FirstPart.partition_guid) {
+            $YamlLines.Add("      partition_guid: `"$($FirstPart.partition_guid)`"")
+        }
+        if ($Mount) {
+            $YamlLines.Add("      expected_mount: `"$Mount`"")
+        } else {
+            $YamlLines.Add("      expected_mount: null")
+        }
+        if ($DriveVar) {
+            $YamlLines.Add("      drive_variable: `"$DriveVar`"")
+        }
+        $YamlLines.Add("      label: `"$Label`"")
+    }
+} else {
+    $YamlLines.Add('    []')
+}
+
+@(
+    '',
+    'storage:',
+    '  streaming:',
+    "    cloud_provider: `"$($StorageProvidersData.streaming.cloud_provider)`"",
+    "    mount_point: `"$StreamMount`"",
+    "    verify_folder: `"$StreamVerifyYaml`"",
+    '    stream_variable: "STREAM"',
+    '  sync:',
+    '    provider: "google-drive-sync"',
+    "    source_computer: `"$ComputerName`"",
+    '    migration_mode: "copy"',
+    '    directories:'
+) | ForEach-Object { $YamlLines.Add($_) }
+
+if ($StorageProvidersData.sync_directories.Count -gt 0) {
+    foreach ($SyncDir in $StorageProvidersData.sync_directories) {
+        $LocalPathYaml = & $TokenizePath $SyncDir.local_path
+        $YamlLines.Add("      $($SyncDir.id):")
+        $YamlLines.Add("        local_path: `"$LocalPathYaml`"")
+        $YamlLines.Add("        cloud_folder: `"$($SyncDir.cloud_folder)`"")
+        $YamlLines.Add("        verify_folder: `"$LocalPathYaml`"")
+        $YamlLines.Add("        sync_variable: `"$($SyncDir.sync_variable)`"")
+    }
+} else {
+    @(
+        '      catalogs:',
+        '        local_path: "%OS_DRIVE%\\Sync\\Catalogs"',
+        '        cloud_folder: "Catalogs"',
+        '        verify_folder: "%OS_DRIVE%\\Sync\\Catalogs"',
+        '        sync_variable: "SYNC_CATALOGS"',
+        '      projects:',
+        '        local_path: "%DATA_DRIVE%\\Projects"',
+        '        cloud_folder: "Projects"',
+        '        sync_variable: "SYNC_PROJECTS"'
+    ) | ForEach-Object { $YamlLines.Add($_) }
+}
+
+# Emit relocated Known User Shell Folders (Desktop, Documents, Downloads, Pictures, Music, Videos)
+$YamlLines.Add('  user_shell_folders:')
+$ShellFolderProps = @("desktop", "documents", "downloads", "pictures", "music", "videos")
+$HasAnyShellFolder = $false
+if ($StorageProvidersData.user_shell_folders) {
+    foreach ($SfProp in $ShellFolderProps) {
+        $SfVal = $StorageProvidersData.user_shell_folders.$SfProp
+        if (-not [string]::IsNullOrWhiteSpace($SfVal)) {
+            $HasAnyShellFolder = $true
+            $YamlLines.Add("    ${SfProp}: `"$(& $TokenizePath $SfVal)`"")
+        }
+    }
+}
+if (-not $HasAnyShellFolder) {
+    $YamlLines.Add('    {}')
+}
+
+# Emit preserved Steam library folders
+$PreservedSteamLibs = @(
+    $AppsData.detected_game_libraries |
+        Where-Object { $_.manager -eq "steam" -and $_.path -and $_.path -notmatch '^[cC]:\\' } |
+        Select-Object -ExpandProperty path -Unique
+)
+if ($PreservedSteamLibs.Count -gt 0) {
+    $YamlLines.Add('  steam_libraries:')
+    foreach ($SLib in $PreservedSteamLibs) {
+        $YamlLines.Add("    - `"$(& $TokenizePath $SLib)`"")
+    }
+} else {
+    $YamlLines.Add('  steam_libraries: []')
+}
+
+@(
+    '  api_credentials:',
+    '    client_id_env: "GDRIVE_CLIENT_ID"',
+    '    client_secret_env: "GDRIVE_CLIENT_SECRET"',
+    '',
+    'variables:',
+    '  USER_DIR: "%OS_DRIVE%\\Users\\' + $UserIdentityData.username + '"',
+    '  GAMES_DIR: "%DATA_DRIVE%\\Games"',
+    '  STEAM_DIR: "%DATA_DRIVE%\\SteamLibrary"',
+    '',
+    'applications:'
+) | ForEach-Object { $YamlLines.Add($_) }
+
+# Correlate detected apps from catalog (built-in + user applications.json)
+$DiscoveredAppIds = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+foreach ($Pkg in $AppsData.installed_winget_packages) {
+    if ($Pkg.matched_app_id) { $DiscoveredAppIds.Add($Pkg.matched_app_id) | Out-Null }
+}
+foreach ($App in $AppsData.detected_non_winget_applications) {
+    if ($App.matched_app_id) { $DiscoveredAppIds.Add($App.matched_app_id) | Out-Null }
+}
+if ($AppsData.detected_game_libraries) {
+    foreach ($Lib in $AppsData.detected_game_libraries) {
+        if ($Lib.games) {
+            foreach ($Game in $Lib.games) {
+                if ($Game.matched_app_id) { $DiscoveredAppIds.Add($Game.matched_app_id) | Out-Null }
             }
-            $LocalPathYaml = $LocalPathVar -replace '\\', '\\'
-            $YamlLines += "      $($SyncDir.id):"
-            $YamlLines += "        local_path: `"$LocalPathYaml`""
-            $YamlLines += "        cloud_folder: `"$($SyncDir.cloud_folder)`""
-            $YamlLines += "        verify_folder: `"$LocalPathYaml`""
-            $YamlLines += "        sync_variable: `"$($SyncDir.sync_variable)`""
-        }
-    } else {
-        $YamlLines += @(
-            '      catalogs:',
-            '        local_path: "%OS_DRIVE%\\Sync\\Catalogs"',
-            '        cloud_folder: "Catalogs"',
-            '        verify_folder: "%OS_DRIVE%\\Sync\\Catalogs"',
-            '        sync_variable: "SYNC_CATALOGS"',
-            '      projects:',
-            '        local_path: "%DATA_DRIVE%\\Projects"',
-            '        cloud_folder: "Projects"',
-            '        sync_variable: "SYNC_PROJECTS"'
-        )
-    }
-
-    $YamlLines += @(
-        '  api_credentials:',
-        '    client_id_env: "GDRIVE_CLIENT_ID"',
-        '    client_secret_env: "GDRIVE_CLIENT_SECRET"',
-        '',
-        'variables:',
-        '  GAMES_DIR: "%DATA_DRIVE%\\Games"',
-        '  STEAM_DIR: "%DATA_DRIVE%\\SteamLibrary"',
-        '',
-        'applications:'
-    )
-
-    # Correlate detected apps from catalog (built-in + user applications.json)
-    $DiscoveredAppIds = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
-    foreach ($Pkg in $AppsData.installed_winget_packages) {
-        if ($Pkg.matched_app_id) { $DiscoveredAppIds.Add($Pkg.matched_app_id) | Out-Null }
-    }
-    foreach ($App in $AppsData.detected_non_winget_applications) {
-        if ($App.matched_app_id) { $DiscoveredAppIds.Add($App.matched_app_id) | Out-Null }
-    }
-    if ($AppsData.detected_game_libraries) {
-        foreach ($Lib in $AppsData.detected_game_libraries) {
-            if ($Lib.games) {
-                foreach ($Game in $Lib.games) {
-                    if ($Game.matched_app_id) { $DiscoveredAppIds.Add($Game.matched_app_id) | Out-Null }
-                }
-            }
         }
     }
-    if ($JunctionsData) {
-        foreach ($Junc in $JunctionsData) {
-            if ($Junc.matched_app_id) { $DiscoveredAppIds.Add($Junc.matched_app_id) | Out-Null }
-        }
+}
+if ($JunctionsData) {
+    foreach ($Junc in $JunctionsData) {
+        if ($Junc.matched_app_id) { $DiscoveredAppIds.Add($Junc.matched_app_id) | Out-Null }
     }
+}
 
-    $AvailableSyncVars = @($StorageProvidersData.sync_directories | Select-Object -ExpandProperty sync_variable)
+$AvailableSyncVars = @($StorageProvidersData.sync_directories | Select-Object -ExpandProperty sync_variable)
 
-    if ($DiscoveredAppIds.Count -gt 0) {
-        foreach ($AppId in ($DiscoveredAppIds | Sort-Object)) {
-            $CatalogApp = Get-ReglazeApplicationById -AppId $AppId -RepoRoot $RepoRoot -UserConfigDir $TargetDir
-            $YamlLines += "  ${AppId}:"
-            if ($CatalogApp.directories -and $CatalogApp.directories.Count -gt 0) {
-                $YamlLines += '    directories:'
+if ($DiscoveredAppIds.Count -gt 0) {
+    foreach ($AppId in ($DiscoveredAppIds | Sort-Object)) {
+        $CatalogApp = Get-ReglazeApplicationById -AppId $AppId -RepoRoot $RepoRoot -UserConfigDir $TargetDir
+        $YamlLines.Add("  ${AppId}:")
+        $HasDirs = ($CatalogApp.directories -and $CatalogApp.directories.Count -gt 0)
+        $HasPathEntries = ($CatalogApp.PSObject.Properties["path_entries"] -and $CatalogApp.path_entries -and $CatalogApp.path_entries.Count -gt 0)
+        if ($HasDirs -or $HasPathEntries) {
+            if ($HasDirs) {
+                $YamlLines.Add('    directories:')
                 foreach ($Dir in $CatalogApp.directories) {
                     $SuggestedTarget = if ($Dir.recommended_storage -eq "local_preserved") {
                         "%DATA_DRIVE%\\Backups\\$AppId\\$($Dir.id)"
@@ -487,140 +781,146 @@ $YamlLines = @(
                     } else {
                         "%DATA_DRIVE%\\Backups\\$AppId"
                     }
-                    $YamlLines += "      $($Dir.id):"
-                    $YamlLines += "        target: `"$SuggestedTarget`""
-                }
-            } else {
-                $YamlLines += '    {}'
-            }
-        }
-    } else {
-        $YamlLines += '  git: {}'
-        $YamlLines += '  vscode: {}'
-    }
-
-    # Populate unrecognized applications from WinGet, Steam, Registry (ARP), and Junctions into applications.custom
-    $EscapeYamlStr = {
-        param([string]$Val)
-        if ([string]::IsNullOrEmpty($Val)) { return "" }
-        return ($Val -replace '\\', '\\' -replace '"', '\"')
-    }
-
-    $CustomYamlLines = [System.Collections.Generic.List[string]]::new()
-    $SeenCustomKeys = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
-
-    # 1. Unmatched WinGet packages
-    foreach ($Pkg in @($AppsData.installed_winget_packages | Where-Object { -not $_.matched_app_id })) {
-        $PkgName = if ($Pkg.name) { $Pkg.name } else { $Pkg.id }
-        $DedupKey = "winget:$($Pkg.id)"
-        if (-not $SeenCustomKeys.Add($DedupKey)) { continue }
-        [void]$SeenCustomKeys.Add("name:$PkgName")
-
-        $EscName = & $EscapeYamlStr $PkgName
-        $EscId = & $EscapeYamlStr $Pkg.id
-        $CustomYamlLines.Add("    - name: `"$EscName`"")
-        $CustomYamlLines.Add("      install:")
-        $CustomYamlLines.Add("        method: `"winget`"")
-        $CustomYamlLines.Add("        winget_id: `"$EscId`"")
-        $CustomYamlLines.Add("      directories: []")
-    }
-
-    # 2. Unmatched Steam games (from Steam libraries and Steam ARP entries)
-    $UnmatchedSteamGames = [System.Collections.Generic.List[PSCustomObject]]::new()
-    if ($AppsData.detected_game_libraries) {
-        foreach ($Lib in $AppsData.detected_game_libraries) {
-            if ($Lib.games) {
-                foreach ($Game in $Lib.games) {
-                    if (-not $Game.matched_app_id -and $null -ne $Game.steam_id) {
-                        $UnmatchedSteamGames.Add([PSCustomObject]@{
-                            steam_id = [int]$Game.steam_id
-                            name     = if ($Game.name) { $Game.name } else { "Steam App $($Game.steam_id)" }
-                        })
-                    }
+                    $YamlLines.Add("      $($Dir.id):")
+                    $YamlLines.Add("        target: `"$SuggestedTarget`"")
                 }
             }
+            if ($HasPathEntries) {
+                $YamlLines.Add('    path_entries:')
+                foreach ($PEntry in $CatalogApp.path_entries) {
+                    $YamlLines.Add("      - `"$(& $EscapeYamlStr $PEntry)`"")
+                }
+            }
+        } else {
+            $YamlLines.Add('    {}')
         }
     }
-    foreach ($App in @($AppsData.detected_non_winget_applications | Where-Object { -not $_.matched_app_id -and $null -ne $_.steam_id })) {
-        $UnmatchedSteamGames.Add([PSCustomObject]@{
-            steam_id = [int]$App.steam_id
-            name     = $App.display_name
-        })
-    }
-    foreach ($SGame in $UnmatchedSteamGames) {
-        $DedupKey = "steam:$($SGame.steam_id)"
-        if (-not $SeenCustomKeys.Add($DedupKey)) { continue }
-        [void]$SeenCustomKeys.Add("name:$($SGame.name)")
+} else {
+    $YamlLines.Add('  git: {}')
+    $YamlLines.Add('  vscode: {}')
+}
 
-        $EscGameName = & $EscapeYamlStr $SGame.name
-        $CustomYamlLines.Add("    - name: `"$EscGameName`"")
-        $CustomYamlLines.Add("      install:")
-        $CustomYamlLines.Add("        method: `"steam`"")
-        $CustomYamlLines.Add("        steam_id: $($SGame.steam_id)")
-        $CustomYamlLines.Add("      directories: []")
-    }
+# Populate unrecognized applications from WinGet, Steam, Registry (ARP), and Junctions into applications.custom
+$CustomYamlLines = [System.Collections.Generic.List[string]]::new()
+$SeenCustomKeys = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
 
-    # 3. Unmatched non-WinGet Registry (ARP) applications
-    foreach ($App in @($AppsData.detected_non_winget_applications | Where-Object { -not $_.matched_app_id -and $null -eq $_.steam_id })) {
-        if (-not $App.display_name) { continue }
-        if (-not $SeenCustomKeys.Add("name:$($App.display_name)")) { continue }
+# 1. Unmatched WinGet packages
+foreach ($Pkg in @($AppsData.installed_winget_packages | Where-Object { -not $_.matched_app_id })) {
+    $PkgName = if ($Pkg.name) { $Pkg.name } else { $Pkg.id }
+    $DedupKey = "winget:$($Pkg.id)"
+    if (-not $SeenCustomKeys.Add($DedupKey)) { continue }
+    [void]$SeenCustomKeys.Add("name:$PkgName")
 
-        $EscDispName = & $EscapeYamlStr $App.display_name
-        $CustomYamlLines.Add("    - name: `"$EscDispName`"")
-        $CustomYamlLines.Add("      install:")
-        $CustomYamlLines.Add("        method: `"manual`"")
-        if (-not [string]::IsNullOrWhiteSpace($App.install_location)) {
-            $EscLoc = & $EscapeYamlStr $App.install_location
-            $CustomYamlLines.Add("        target_directory: `"$EscLoc`"")
+    $EscName = & $EscapeYamlStr $PkgName
+    $EscId = & $EscapeYamlStr $Pkg.id
+    $CustomYamlLines.Add("    - name: `"$EscName`"")
+    $CustomYamlLines.Add("      install:")
+    $CustomYamlLines.Add("        method: `"winget`"")
+    $CustomYamlLines.Add("        winget_id: `"$EscId`"")
+    $CustomYamlLines.Add("      directories: []")
+}
+
+# 2. Unmatched Steam games (from Steam libraries and Steam ARP entries)
+$UnmatchedSteamGames = [System.Collections.Generic.List[PSCustomObject]]::new()
+if ($AppsData.detected_game_libraries) {
+    foreach ($Lib in $AppsData.detected_game_libraries) {
+        if ($Lib.games) {
+            foreach ($Game in $Lib.games) {
+                if (-not $Game.matched_app_id -and $null -ne $Game.steam_id) {
+                    $UnmatchedSteamGames.Add([PSCustomObject]@{
+                        steam_id = [int]$Game.steam_id
+                        name     = if ($Game.name) { $Game.name } else { "Steam App $($Game.steam_id)" }
+                    })
+                }
+            }
         }
-        $CustomYamlLines.Add("      directories: []")
     }
+}
+foreach ($App in @($AppsData.detected_non_winget_applications | Where-Object { -not $_.matched_app_id -and $null -ne $_.steam_id })) {
+    $UnmatchedSteamGames.Add([PSCustomObject]@{
+        steam_id = [int]$App.steam_id
+        name     = $App.display_name
+    })
+}
+foreach ($SGame in $UnmatchedSteamGames) {
+    $DedupKey = "steam:$($SGame.steam_id)"
+    if (-not $SeenCustomKeys.Add($DedupKey)) { continue }
+    [void]$SeenCustomKeys.Add("name:$($SGame.name)")
 
-    # 4. Unmatched NTFS Directory Junctions
-    foreach ($Junc in @($JunctionsData | Where-Object { -not $_.matched_app_id })) {
-        if (-not $Junc.source_path -or -not $Junc.target_path) { continue }
-        $LeafName = Split-Path -Leaf $Junc.source_path
-        $EscLeaf = & $EscapeYamlStr $LeafName
-        $EscLink = & $EscapeYamlStr $Junc.source_path
-        $EscTarget = & $EscapeYamlStr $Junc.target_path
-        $CustomYamlLines.Add("    - name: `"Custom Junction ($EscLeaf)`"")
-        $CustomYamlLines.Add("      install: false")
-        $CustomYamlLines.Add("      directories:")
-        $CustomYamlLines.Add("        - name: `"$EscLeaf`"")
-        $CustomYamlLines.Add("          link: `"$EscLink`"")
-        $CustomYamlLines.Add("          target: `"$EscTarget`"")
+    $EscGameName = & $EscapeYamlStr $SGame.name
+    $CustomYamlLines.Add("    - name: `"$EscGameName`"")
+    $CustomYamlLines.Add("      install:")
+    $CustomYamlLines.Add("        method: `"steam`"")
+    $CustomYamlLines.Add("        steam_id: $($SGame.steam_id)")
+    $CustomYamlLines.Add("      directories: []")
+}
+
+# 3. Unmatched non-WinGet Registry (ARP) applications
+foreach ($App in @($AppsData.detected_non_winget_applications | Where-Object { -not $_.matched_app_id -and $null -eq $_.steam_id })) {
+    if (-not $App.display_name) { continue }
+    if (-not $SeenCustomKeys.Add("name:$($App.display_name)")) { continue }
+
+    $EscDispName = & $EscapeYamlStr $App.display_name
+    $CustomYamlLines.Add("    - name: `"$EscDispName`"")
+    $CustomYamlLines.Add("      install:")
+    $CustomYamlLines.Add("        method: `"manual`"")
+    if (-not [string]::IsNullOrWhiteSpace($App.install_location)) {
+        $EscLoc = & $EscapeYamlStr $App.install_location
+        $CustomYamlLines.Add("        target_directory: `"$EscLoc`"")
     }
+    $CustomYamlLines.Add("      directories: []")
+}
 
-    if ($CustomYamlLines.Count -gt 0) {
-        $YamlLines += '  custom:'
-        $YamlLines += $CustomYamlLines.ToArray()
-    } else {
-        $YamlLines += '  custom: []'
-    }
+# 4. Unmatched NTFS Directory Junctions
+foreach ($Junc in @($JunctionsData | Where-Object { -not $_.matched_app_id })) {
+    if (-not $Junc.source_path -or -not $Junc.target_path) { continue }
+    $LeafName = Split-Path -Leaf $Junc.source_path
+    $EscLeaf = & $EscapeYamlStr $LeafName
+    $EscLink = & $EscapeYamlStr $Junc.source_path
+    $EscTarget = & $EscapeYamlStr $Junc.target_path
+    $CustomYamlLines.Add("    - name: `"Custom Junction ($EscLeaf)`"")
+    $CustomYamlLines.Add("      install: false")
+    $CustomYamlLines.Add("      directories:")
+    $CustomYamlLines.Add("        - name: `"$EscLeaf`"")
+    $CustomYamlLines.Add("          link: `"$EscLink`"")
+    $CustomYamlLines.Add("          target: `"$EscTarget`"")
+}
 
-    $WslDistroName = if ($WslData.default_distro) { $WslData.default_distro } else { "Ubuntu" }
-    $WslUsername = if ($UserIdentityData.username) { $UserIdentityData.username.ToLower() } else { "user" }
-    $YamlLines += @(
-        '',
-        'wsl2:',
-        "  enabled: $($WslData.enabled.ToString().ToLower())",
-        "  distro: `"$WslDistroName`"",
-        "  default_user: `"$WslUsername`"",
-        '  packages:'
-    )
+if ($CustomYamlLines.Count -gt 0) {
+    $YamlLines.Add('  custom:')
+    foreach ($CLine in $CustomYamlLines) { $YamlLines.Add($CLine) }
+} else {
+    $YamlLines.Add('  custom: []')
+}
+
+$WslDistroName = if ($WslData.default_distro) { $WslData.default_distro } else { "Ubuntu" }
+$WslUsername = if ($UserIdentityData.username) { $UserIdentityData.username.ToLower() } else { "user" }
+$YamlLines.Add('')
+$YamlLines.Add('wsl2:')
+$YamlLines.Add("  enabled: $($WslData.enabled.ToString().ToLower())")
+$YamlLines.Add("  distro: `"$WslDistroName`"")
+$YamlLines.Add("  default_user: `"$WslUsername`"")
+if ($WslData.detected_packages -and $WslData.detected_packages.Count -gt 0) {
+    $YamlLines.Add('  packages:')
     foreach ($WslPkg in $WslData.detected_packages) {
-        $YamlLines += "    - `"$WslPkg`""
+        $CleanPkg = ($WslPkg -replace "`0", "").Trim()
+        if ($CleanPkg) {
+            $YamlLines.Add("    - `"$(& $EscapeYamlStr $CleanPkg)`"")
+        }
     }
+} else {
+    $YamlLines.Add('  packages: []')
+}
 
-    $YamlLines += @(
-        '',
-        'dev_repos:',
-        '  root: "%SYNC_PROJECTS%"',
-        '  remotes: []'
-    )
+@(
+    '',
+    'dev_repos:',
+    '  root: "%SYNC_PROJECTS%"',
+    '  remotes: []'
+) | ForEach-Object { $YamlLines.Add($_) }
 
-    $YamlLines | Set-Content -Path $BlueprintPath -Encoding UTF8
-    Write-ReglazeSuccess "Scaffolded starter blueprint: $BlueprintPath"
+[System.IO.File]::WriteAllLines($BlueprintPath, $YamlLines.ToArray(), (New-Object System.Text.UTF8Encoding($false)))
+Write-ReglazeSuccess "Scaffolded starter blueprint: $BlueprintPath"
 
 Write-Host ""
 Write-ReglazeSuccess "Pre-flight audit complete! You can now review and customize your blueprint."

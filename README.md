@@ -386,6 +386,9 @@ Please inspect the unrecognized applications listed under `applications.custom` 
        - `"local_preserved"` for large bulk data, media caches, or game assets that belong on `%DATA_DRIVE%`.
      - `"notes"`: Short rationale for the storage recommendation (especially file-locking or SQLite behavior).
    - If an application is a stateless CLI tool, runtime, or hardware driver utility that needs no directory junctions, include the application with `"directories": []` so `reglaze audit` recognizes it and moves it out of `applications.custom`.
+   - If an entry in `applications.custom` is an unwanted OEM utility, redistributable, or subcomponent that should be completely ignored by `reglaze`, you can include `"ignore": true` on its object.
+4. **Optional Per-Application User `PATH` Additions (`path_entries`):**
+   - Most installers register their own `PATH` entries automatically. However, if a manual or portable application requires a directory added to the user `PATH`, include `"path_entries": [ "%PROGRAMFILES%\\Vendor\\Tool\\bin" ]` on the application object.
 
 ### Example Schema Entry
 ```json
