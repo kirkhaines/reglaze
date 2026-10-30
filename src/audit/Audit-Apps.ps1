@@ -14,10 +14,12 @@
 function Get-InstalledApplicationsAudit {
     [CmdletBinding()]
     param(
-        [string]$RepoRoot = $null
+        [string]$RepoRoot = $null,
+        [string]$UserConfigDir = $null,
+        [string]$UserCatalogPath = $null
     )
 
-    $Catalog = Get-ReglazeCatalog -RepoRoot $RepoRoot
+    $Catalog = Get-ReglazeCatalog -RepoRoot $RepoRoot -UserConfigDir $UserConfigDir -UserCatalogPath $UserCatalogPath
 
     # 1. Query WinGet Packages
     $WinGetPackages = @()
@@ -71,14 +73,15 @@ function Get-InstalledApplicationsAudit {
                             if (-not $WinGetIds.Contains($Id)) {
                                 $WinGetIds.Add($Id) | Out-Null
                                 
-                                # Match against catalog: exact winget_id or name
+                                # Match against catalog: exact winget_id / package_id or name
                                 $MatchedApp = $Catalog | Where-Object { 
-                                    ($_.install -and $_.install.winget_id -and $_.install.winget_id -eq $Id)
+                                    ($_.install -and (($_.install.winget_id -and $_.install.winget_id -ieq $Id) -or ($_.install.package_id -and $_.install.package_id -ieq $Id)))
                                 } | Select-Object -First 1
 
                                 if (-not $MatchedApp) {
                                     $MatchedApp = $Catalog | Where-Object {
-                                        ($_.name -and ($Name -eq $_.name -or $Name -like "*$($_.name)*" -or $_.name -like "*$($Name)*")) -or
+                                        ($_.name -and ($Name -ieq $_.name -or $Name -like "*$($_.name)*" -or $_.name -like "*$($Name)*")) -or
+                                        ($_.app_id -and $Name -ieq $_.app_id) -or
                                         ($_.install -and $_.install.winget_id -and ($Id -like "*$($_.install.winget_id)*" -or ($Id -like "Python.*" -and $_.app_id -eq "python3")))
                                     } | Sort-Object { if ($_.name) { $_.name.Length } else { $_.app_id.Length } } -Descending | Select-Object -First 1
                                 }
@@ -107,7 +110,35 @@ function Get-InstalledApplicationsAudit {
         }
     }
 
-    # 2. Query Add/Remove Programs (ARP) Registry Hives
+    # 2. Discover Game Libraries across all drives & detect installed games first so ARP can de-duplicate Steam games
+    $SteamLibs = Get-SteamLibraries
+    $SteamGames = Get-SteamInstalledGames -Libraries $SteamLibs
+
+    $GameLibraryEntries = [System.Collections.Generic.List[PSCustomObject]]::new()
+    foreach ($Lib in $SteamLibs) {
+        $LibGames = @($SteamGames | Where-Object { $_.LibraryPath -eq $Lib })
+        $GameLibraryEntries.Add([PSCustomObject]@{
+            manager     = "steam"
+            path        = $Lib
+            game_count  = $LibGames.Count
+            games       = @($LibGames | ForEach-Object {
+                $GameAppId = $_.SteamId
+                $GameTitle = $_.GameName
+                $CatalogMatch = $Catalog | Where-Object {
+                    ($_.install -and $null -ne $_.install.steam_id -and [int]$_.install.steam_id -eq [int]$GameAppId) -or
+                    ($GameTitle -and $_.name -and $_.name -ieq $GameTitle) -or
+                    ($GameTitle -and $_.app_id -and $_.app_id -ieq $GameTitle)
+                } | Select-Object -First 1
+                [PSCustomObject]@{
+                    steam_id       = $GameAppId
+                    name           = $GameTitle
+                    matched_app_id = if ($CatalogMatch) { $CatalogMatch.app_id } else { $null }
+                }
+            })
+        })
+    }
+
+    # 3. Query Add/Remove Programs (ARP) Registry Hives
     $RegistryHives = @(
         @{ Path = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*"; Hive = "HKLM_64" },
         @{ Path = "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*"; Hive = "HKLM_32" },
@@ -131,19 +162,34 @@ function Get-InstalledApplicationsAudit {
             if ($SeenNames.Contains($DisplayName)) { continue }
             $SeenNames.Add($DisplayName) | Out-Null
 
-            # Check if this app is already claimed by WinGet
+            # Detect if this ARP entry is a Steam game
+            $ArpSteamId = $null
+            if ($Entry.PSChildName -and $Entry.PSChildName -match "^Steam App (\d+)$") {
+                $ArpSteamId = [int]$Matches[1]
+            } elseif ($Entry.UninstallString -and $Entry.UninstallString -match "steam://uninstall/(\d+)") {
+                $ArpSteamId = [int]$Matches[1]
+            }
+
+            # Check if this app is already claimed by WinGet or discovered Steam Libraries
             $AlreadyInWinGet = $WinGetPackages | Where-Object { 
                 $_.name -eq $DisplayName -or 
                 ($_.id -and $DisplayName -like "*$($_.id)*")
             }
+            $AlreadyInSteamLibs = $SteamGames | Where-Object {
+                ($null -ne $ArpSteamId -and [int]$_.SteamId -eq $ArpSteamId) -or
+                ($_.GameName -and $_.GameName -ieq $DisplayName)
+            }
 
-            if (-not $AlreadyInWinGet) {
+            if (-not $AlreadyInWinGet -and -not $AlreadyInSteamLibs) {
                 # Attempt to match with catalog (exact match first, then longest name match)
                 $MatchedApp = $Catalog | Where-Object {
-                    $DisplayName -eq $_.name -or
-                    ($_.app_id -and $DisplayName -eq $_.app_id) -or
-                    ($_.install -and $_.install.winget_id -and $DisplayName -eq $_.install.winget_id) -or
-                    ($_.install -and $_.install.steam_id -and $DisplayName -like "*$($_.install.steam_id)*")
+                    $DisplayName -ieq $_.name -or
+                    ($_.app_id -and $DisplayName -ieq $_.app_id) -or
+                    ($_.install -and $_.install.winget_id -and $DisplayName -ieq $_.install.winget_id) -or
+                    ($_.install -and $null -ne $_.install.steam_id -and (
+                        ($null -ne $ArpSteamId -and [int]$_.install.steam_id -eq $ArpSteamId) -or
+                        ($DisplayName -like "*$($_.install.steam_id)*")
+                    ))
                 } | Select-Object -First 1
 
                 if (-not $MatchedApp) {
@@ -159,7 +205,7 @@ function Get-InstalledApplicationsAudit {
                     continue
                 }
 
-                $NonWinGetApps += [PSCustomObject]@{
+                $AppRecord = [PSCustomObject]@{
                     display_name     = $DisplayName
                     display_version  = if ($Entry.DisplayVersion) { "$($Entry.DisplayVersion)".Trim() } else { "Unknown" }
                     publisher        = if ($Entry.Publisher) { "$($Entry.Publisher)".Trim() } else { "Unknown" }
@@ -167,31 +213,12 @@ function Get-InstalledApplicationsAudit {
                     registry_hive    = $Target.Hive
                     matched_app_id   = if ($MatchedApp) { $MatchedApp.app_id } else { $null }
                 }
+                if ($null -ne $ArpSteamId) {
+                    Add-Member -InputObject $AppRecord -MemberType NoteProperty -Name "steam_id" -Value $ArpSteamId -Force
+                }
+                $NonWinGetApps += $AppRecord
             }
         }
-    }
-
-    # 3. Discover Game Libraries across all drives & detect installed games
-    $SteamLibs = Get-SteamLibraries
-    $SteamGames = Get-SteamInstalledGames -Libraries $SteamLibs
-
-    $GameLibraryEntries = [System.Collections.Generic.List[PSCustomObject]]::new()
-    foreach ($Lib in $SteamLibs) {
-        $LibGames = @($SteamGames | Where-Object { $_.LibraryPath -eq $Lib })
-        $GameLibraryEntries.Add([PSCustomObject]@{
-            manager     = "steam"
-            path        = $Lib
-            game_count  = $LibGames.Count
-            games       = @($LibGames | ForEach-Object {
-                $GameAppId = $_.SteamId
-                $CatalogMatch = $Catalog | Where-Object { $_.install -and $_.install.steam_id -eq $GameAppId } | Select-Object -First 1
-                [PSCustomObject]@{
-                    steam_id       = $GameAppId
-                    name           = $_.GameName
-                    matched_app_id = if ($CatalogMatch) { $CatalogMatch.app_id } else { $null }
-                }
-            })
-        })
     }
 
     return [PSCustomObject]@{

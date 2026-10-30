@@ -22,6 +22,9 @@ function Build-WinGetDSCManifest {
         [Parameter(Mandatory=$false)]
         [string]$RepoRoot = $null,
 
+        [Parameter(Mandatory=$false)]
+        [string]$UserConfigDir = $null,
+
         [Parameter(Mandatory=$true)]
         [string]$OutputPath
     )
@@ -38,6 +41,7 @@ function Build-WinGetDSCManifest {
         $AppProperties = @($Blueprint.applications.PSObject.Properties)
         foreach ($Prop in $AppProperties) {
             $AppId = $Prop.Name
+            if ($AppId -eq "custom") { continue }
             $AppConfig = $Prop.Value
 
             # If user explicitly disabled installation for this app
@@ -50,9 +54,17 @@ function Build-WinGetDSCManifest {
             $AppName = $AppId
 
             # Check if explicit install info in blueprint
-            if ($AppConfig.install -and $AppConfig.install.package_id) {
+            $ExplicitPkgId = if ($AppConfig.install -and $AppConfig.install.package_id) {
+                [string]$AppConfig.install.package_id
+            } elseif ($AppConfig.install -and $AppConfig.install.winget_id) {
+                [string]$AppConfig.install.winget_id
+            } else {
+                $null
+            }
+
+            if ($ExplicitPkgId) {
                 if (-not $AppConfig.install.method -or $AppConfig.install.method -eq "winget") {
-                    $PackageId = [string]$AppConfig.install.package_id
+                    $PackageId = $ExplicitPkgId
                     if ($AppConfig.install.source) {
                         $Source = [string]$AppConfig.install.source
                     }
@@ -61,13 +73,17 @@ function Build-WinGetDSCManifest {
                 # Non-winget install method explicitly declared (e.g. steam, manual)
                 continue
             } else {
-                # Look up in application catalog
-                $CatalogApp = Get-ReglazeApplicationById -AppId $AppId -RepoRoot $RepoRoot
+                # Look up in application catalog (built-in + user applications.json)
+                $CatalogApp = Get-ReglazeApplicationById -AppId $AppId -RepoRoot $RepoRoot -UserConfigDir $UserConfigDir
                 if ($CatalogApp) {
                     $AppName = if ($CatalogApp.name) { $CatalogApp.name } else { $AppId }
                     $Method = if ($CatalogApp.install -and $CatalogApp.install.method) { $CatalogApp.install.method } else { "winget" }
-                    if ($Method -eq "winget" -and $CatalogApp.install -and $CatalogApp.install.winget_id) {
-                        $PackageId = [string]$CatalogApp.install.winget_id
+                    if ($Method -eq "winget" -and $CatalogApp.install) {
+                        if ($CatalogApp.install.winget_id) {
+                            $PackageId = [string]$CatalogApp.install.winget_id
+                        } elseif ($CatalogApp.install.package_id) {
+                            $PackageId = [string]$CatalogApp.install.package_id
+                        }
                     }
                 }
             }
@@ -93,30 +109,47 @@ function Build-WinGetDSCManifest {
         }
     }
 
-    # 2. Inspect Custom Applications section
-    if ($Blueprint.custom -and $Blueprint.custom -is [System.Collections.IEnumerable]) {
-        foreach ($CustomApp in $Blueprint.custom) {
-            if ($CustomApp.install -and $CustomApp.install.package_id) {
-                $Method = if ($CustomApp.install.method) { $CustomApp.install.method } else { "winget" }
-                if ($Method -eq "winget") {
-                    $PackageId = [string]$CustomApp.install.package_id
-                    $Source = if ($CustomApp.install.source) { [string]$CustomApp.install.source } else { "winget" }
-                    if ($Source -eq "winget" -and ($PackageId -match '^[A-Z0-9]{12}$' -or $PackageId -match '^9[A-Z0-9]{11}$')) {
-                        $Source = "msstore"
-                    }
+    # 2. Inspect Custom Applications section (both applications.custom and top-level custom)
+    $CombinedCustomApps = @()
+    if ($Blueprint.applications -and $Blueprint.applications.custom -and ($Blueprint.applications.custom -is [System.Collections.IEnumerable]) -and -not ($Blueprint.applications.custom -is [string])) {
+        $CombinedCustomApps += @($Blueprint.applications.custom)
+    }
+    if ($Blueprint.custom -and ($Blueprint.custom -is [System.Collections.IEnumerable]) -and -not ($Blueprint.custom -is [string])) {
+        $CombinedCustomApps += @($Blueprint.custom)
+    }
+    foreach ($CustomApp in $CombinedCustomApps) {
+        if ($null -ne $CustomApp.install -and ($CustomApp.install -eq $false -or $CustomApp.install.enabled -eq $false)) {
+            continue
+        }
+        $CustPkgId = if ($CustomApp.install -and $CustomApp.install.package_id) {
+            [string]$CustomApp.install.package_id
+        } elseif ($CustomApp.install -and $CustomApp.install.winget_id) {
+            [string]$CustomApp.install.winget_id
+        } elseif ($CustomApp.winget_id) {
+            [string]$CustomApp.winget_id
+        } else {
+            $null
+        }
+        if ($CustPkgId) {
+            $Method = if ($CustomApp.install -and $CustomApp.install.method) { $CustomApp.install.method } else { "winget" }
+            if ($Method -eq "winget") {
+                $PackageId = $CustPkgId
+                $Source = if ($CustomApp.install -and $CustomApp.install.source) { [string]$CustomApp.install.source } else { "winget" }
+                if ($Source -eq "winget" -and ($PackageId -match '^[A-Z0-9]{12}$' -or $PackageId -match '^9[A-Z0-9]{11}$' -or ($PackageId -notmatch '\.' -and $PackageId -match '^[A-Z0-9]{10,15}$'))) {
+                    $Source = "msstore"
+                }
 
-                    if (-not $SeenPackageIds.Contains($PackageId)) {
-                        $SeenPackageIds.Add($PackageId) | Out-Null
-                        $CleanResourceId = ($PackageId -replace '[^a-zA-Z0-9_]', '_')
-                        $CustomName = if ($CustomApp.name) { $CustomApp.name } else { $PackageId }
-                        $PackagesToInstall.Add([PSCustomObject]@{
-                            AppId      = "custom"
-                            AppName    = $CustomName
-                            PackageId  = $PackageId
-                            ResourceId = "WinGetPackage_$CleanResourceId"
-                            Source     = $Source
-                        })
-                    }
+                if (-not $SeenPackageIds.Contains($PackageId)) {
+                    $SeenPackageIds.Add($PackageId) | Out-Null
+                    $CleanResourceId = ($PackageId -replace '[^a-zA-Z0-9_]', '_')
+                    $CustomName = if ($CustomApp.name) { $CustomApp.name } else { $PackageId }
+                    $PackagesToInstall.Add([PSCustomObject]@{
+                        AppId      = "custom"
+                        AppName    = $CustomName
+                        PackageId  = $PackageId
+                        ResourceId = "WinGetPackage_$CleanResourceId"
+                        Source     = $Source
+                    })
                 }
             }
         }

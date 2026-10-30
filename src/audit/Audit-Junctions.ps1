@@ -14,10 +14,12 @@ function Get-JunctionsAudit {
     [CmdletBinding()]
     param(
         [string]$RepoRoot = $null,
+        [string]$UserConfigDir = $null,
+        [string]$UserCatalogPath = $null,
         [string[]]$AdditionalPaths = @()
     )
 
-    $Catalog = Get-ReglazeCatalog -RepoRoot $RepoRoot
+    $Catalog = Get-ReglazeCatalog -RepoRoot $RepoRoot -UserConfigDir $UserConfigDir -UserCatalogPath $UserCatalogPath
     $DetectedJunctions = @()
     $SeenSources = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
 

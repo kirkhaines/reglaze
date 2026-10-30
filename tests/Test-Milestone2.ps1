@@ -383,6 +383,83 @@ applications:
         -Condition ($SyncNestedResult.IsValid -eq $true -and [bool]($SyncNestedResult.Warnings -match "switches .* from sync behavior to stream")) `
         -Details ($SyncNestedResult.Warnings -join '; ')
 
+    # Test user applications.json in blueprint config directory (validation + WinGet DSC + payload junctions)
+    $UserCatDir = Join-Path $TestDir "user_cat_test"
+    New-Item -ItemType Directory -Path $UserCatDir -Force | Out-Null
+    $UserAppsFile = Join-Path $UserCatDir "applications.json"
+    @(
+        [PSCustomObject]@{
+            app_id  = "my_user_app"
+            name    = "My User App"
+            website = "https://example.com"
+            install = [PSCustomObject]@{
+                method    = "winget"
+                winget_id = "Example.MyUserApp"
+            }
+            directories = @(
+                [PSCustomObject]@{
+                    id                  = "settings"
+                    description         = "User app settings"
+                    default_path        = "%APPDATA%\MyUserApp"
+                    category            = "configs"
+                    needs_mapping       = $true
+                    safe_for_stream     = $true
+                    recommended_storage = "streaming"
+                    notes               = "Flat config files."
+                }
+            )
+        }
+    ) | ConvertTo-Json -Depth 6 | Set-Content -Path $UserAppsFile -Encoding UTF8
+
+    $UserCatYaml = Join-Path $UserCatDir "reglaze.yaml"
+    @"
+version: "1.0.0"
+profile: "workstation"
+system:
+  computer_name: "TESTPC"
+  users:
+    local_admin:
+      username: "LocalAdmin"
+    primary_user:
+      username: "developer"
+disks:
+  target_os_disk:
+    disk_id: 0
+    serial_number: "NVME_OS_01"
+storage:
+  streaming:
+    mount_point: "E:"
+    verify_folder: "E:\My Drive"
+applications:
+  my_user_app:
+    directories:
+      settings:
+        target: "%STREAM%\Backups\my_user_app\settings"
+  custom:
+    - name: "Unrecognized Winget Tool"
+      install:
+        method: "winget"
+        winget_id: "Vendor.UnrecognizedTool"
+      directories: []
+"@ | Set-Content -Path $UserCatYaml -Encoding UTF8
+
+    $UserCatVal = Test-ReglazeBlueprint -Path $UserCatYaml -RepoRoot $RepoRoot
+    $UserCatPayloadDir = Join-Path $UserCatDir "payload"
+    $UserCatPayloadRes = Build-ReglazePayload -Blueprint $UserCatVal.Blueprint -RepoRoot $RepoRoot -PayloadDir $UserCatPayloadDir -BlueprintFile $UserCatYaml
+    $UserCatDscContent = Get-Content -Raw $UserCatPayloadRes.DscPath
+    $UserCatJuncs = Get-Content -Raw $UserCatPayloadRes.JunctionsPath | ConvertFrom-Json
+
+    Assert-Test -Name "11d. User Catalog & Custom Apps: loads <config-dir>/applications.json and compiles DSC + junctions without unknown-app warnings" `
+        -Condition (
+            $UserCatVal.IsValid -eq $true -and
+            $UserCatVal.Warnings.Count -eq 0 -and
+            $UserCatDscContent -match "Example\.MyUserApp" -and
+            $UserCatDscContent -match "Vendor\.UnrecognizedTool" -and
+            $UserCatJuncs.Count -eq 1 -and
+            $UserCatJuncs[0].AppId -eq "my_user_app"
+        ) `
+        -Details "Valid: $($UserCatVal.IsValid), Warnings: $($UserCatVal.Warnings -join '; '), JuncCount: $($UserCatJuncs.Count)"
+
     # -------------------------------------------------------------------------
     # TEST 4: WinGet DSC Manifest Generator
     # -------------------------------------------------------------------------

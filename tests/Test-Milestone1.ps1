@@ -227,6 +227,78 @@ Assert-Test "Invoke-Audit.ps1 inherits profile from existing reglaze.yaml and ar
     return ($ArchiveExists -and $FreshBlueprintExists -and $ArchivePreserved -and $FreshHasDate -and $InheritedProfile)
 }
 
+Assert-Test "Invoke-Audit.ps1 populates unrecognized apps into applications.custom and promotes them when user applications.json is added" {
+    $AuditScript = Join-Path $RepoRoot "src\audit\Invoke-Audit.ps1"
+    $AuditJson = Join-Path $TestOutputDir "audit-reference.json"
+    $Blueprint = Join-Path $TestOutputDir "reglaze.yaml"
+
+    $AuditData = Get-Content -Raw $AuditJson | ConvertFrom-Json
+    $YamlBefore = Get-Content -Raw $Blueprint
+
+    # Verify custom: section exists in scaffolded reglaze.yaml
+    if ($YamlBefore -notmatch '(?m)^\s*custom:') { return $false }
+
+    # Find an unmatched non-winget or winget app from audit-reference.json (or synthesize a user catalog entry matching a detected ARP app)
+    $UnmatchedArp = @($AuditData.applications.detected_non_winget_applications | Where-Object { -not $_.matched_app_id }) | Select-Object -First 1
+    if ($UnmatchedArp) {
+        $TargetDispName = $UnmatchedArp.display_name
+        # Verify it was placed in custom: before user applications.json existed
+        $EscapedCheck = [regex]::Escape(($TargetDispName -replace '\\', '\\' -replace '"', '\"'))
+        if ($YamlBefore -notmatch $EscapedCheck) { return $false }
+
+        # Create user applications.json in $TestOutputDir defining this app
+        $UserAppsJson = @(
+            [PSCustomObject]@{
+                app_id      = "user_custom_promoted_app"
+                name        = $TargetDispName
+                website     = "https://example.com"
+                install     = [PSCustomObject]@{
+                    method                   = "manual"
+                    winget_id                = $null
+                    steam_id                 = $null
+                    download_url             = "https://example.com/download"
+                    default_target_directory = "%PROGRAMFILES%\PromotedApp"
+                    guide_file               = $null
+                    post_install_script      = $null
+                    instructions             = @("Install PromotedApp to target directory.")
+                }
+                directories = @(
+                    [PSCustomObject]@{
+                        id                  = "user_config"
+                        description         = "Promoted app configuration"
+                        default_path        = "%APPDATA%\PromotedApp"
+                        category            = "configs"
+                        needs_mapping       = $true
+                        safe_for_stream     = $true
+                        recommended_storage = "streaming"
+                        notes               = "Flat config files."
+                    }
+                )
+            }
+        )
+        $UserAppsPath = Join-Path $TestOutputDir "applications.json"
+        $UserAppsJson | ConvertTo-Json -Depth 6 | Set-Content -Path $UserAppsPath -Encoding UTF8
+
+        # Re-run audit and verify user_custom_promoted_app is now in main applications: list with user_config directory, and no longer in custom:
+        & $AuditScript -OutputDir $TestOutputDir -SkipElevation
+        $YamlAfter = Get-Content -Raw $Blueprint
+        $PromotedToMain = ($YamlAfter -match '(?m)^\s{2}user_custom_promoted_app:' -and $YamlAfter -match '%STREAM%\\\\Backups\\\\user_custom_promoted_app\\\\user_config')
+        return $PromotedToMain
+    } else {
+        # Fallback if test host had 0 unmatched ARP apps: test Get-ReglazeCatalog user merge directly
+        $UserAppsPath = Join-Path $TestOutputDir "applications.json"
+        @(
+            [PSCustomObject]@{
+                app_id      = "user_custom_promoted_app"
+                name        = "Synthetic User App"
+                directories = @()
+            }
+        ) | ConvertTo-Json -Depth 5 | Set-Content -Path $UserAppsPath -Encoding UTF8
+        $Lookup = Get-ReglazeApplicationById -AppId "user_custom_promoted_app" -RepoRoot $RepoRoot -UserConfigDir $TestOutputDir
+        return ($null -ne $Lookup -and $Lookup._CatalogSource -eq "user")
+    }
+}
+
 # Clean up scratch test output
 if (Test-Path $TestOutputDir) {
     Remove-Item -Path $TestOutputDir -Recurse -Force

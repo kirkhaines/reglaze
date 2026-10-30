@@ -30,8 +30,13 @@ function Test-ReglazeBlueprint {
     param(
         [Parameter(Mandatory=$true)]
         [string]$Path,
-        [string]$RepoRoot = $null
+        [string]$RepoRoot = $null,
+        [string]$UserConfigDir = $null
     )
+
+    if (-not $UserConfigDir -and $Path) {
+        $UserConfigDir = Split-Path -Parent $Path
+    }
 
     $Errors = [System.Collections.Generic.List[string]]::new()
     $Warnings = [System.Collections.Generic.List[string]]::new()
@@ -183,12 +188,13 @@ function Test-ReglazeBlueprint {
     }
 
     # 6. Safety & Application Catalog Validation
-    $Catalog = Get-ReglazeCatalog -RepoRoot $RepoRoot
+    $Catalog = Get-ReglazeCatalog -RepoRoot $RepoRoot -UserConfigDir $UserConfigDir
 
     if ($Blueprint.applications) {
         $AppProps = @($Blueprint.applications.PSObject.Properties)
         foreach ($Prop in $AppProps) {
             $AppId = $Prop.Name
+            if ($AppId -eq "custom") { continue }
             $AppConfig = $Prop.Value
             $CatalogApp = $Catalog | Where-Object { $_.app_id -eq $AppId } | Select-Object -First 1
 
@@ -298,6 +304,7 @@ function Test-ReglazeBlueprint {
         $AppProps = @($Blueprint.applications.PSObject.Properties)
         foreach ($Prop in $AppProps) {
             $AppId = $Prop.Name
+            if ($AppId -eq "custom") { continue }
             $AppConfig = $Prop.Value
             if ($AppConfig -and $AppConfig.install -and $AppConfig.install.target_directory) {
                 $RawInstallDir = [string]$AppConfig.install.target_directory
@@ -339,6 +346,7 @@ function Test-ReglazeBlueprint {
         $AppProps = @($Blueprint.applications.PSObject.Properties)
         foreach ($Prop in $AppProps) {
             $AppId = $Prop.Name
+            if ($AppId -eq "custom") { continue }
             $AppConfig = $Prop.Value
             $CatalogApp = $Catalog | Where-Object { $_.app_id -eq $AppId } | Select-Object -First 1
 
@@ -377,25 +385,30 @@ function Test-ReglazeBlueprint {
         }
     }
 
-    # Collect from custom
-    if ($Blueprint.custom -and $Blueprint.custom -is [System.Collections.IEnumerable]) {
-        foreach ($CustomApp in $Blueprint.custom) {
-            if ($CustomApp.directories) {
-                foreach ($CustDir in $CustomApp.directories) {
-                    if ($CustDir.link -and $CustDir.target) {
-                        $ResolvedLink = Resolve-VariableString -InputString $CustDir.link -VariableMap $VarMap
-                        $ResolvedTarget = Resolve-VariableString -InputString $CustDir.target -VariableMap $VarMap
+    # Collect from custom (both applications.custom and top-level custom)
+    $CombinedCustomApps = @()
+    if ($Blueprint.applications -and $Blueprint.applications.custom -and ($Blueprint.applications.custom -is [System.Collections.IEnumerable]) -and -not ($Blueprint.applications.custom -is [string])) {
+        $CombinedCustomApps += @($Blueprint.applications.custom)
+    }
+    if ($Blueprint.custom -and ($Blueprint.custom -is [System.Collections.IEnumerable]) -and -not ($Blueprint.custom -is [string])) {
+        $CombinedCustomApps += @($Blueprint.custom)
+    }
+    foreach ($CustomApp in $CombinedCustomApps) {
+        if ($CustomApp.directories) {
+            foreach ($CustDir in $CustomApp.directories) {
+                if ($CustDir.link -and $CustDir.target) {
+                    $ResolvedLink = Resolve-VariableString -InputString $CustDir.link -VariableMap $VarMap
+                    $ResolvedTarget = Resolve-VariableString -InputString $CustDir.target -VariableMap $VarMap
 
-                        $AllJunctions.Add([PSCustomObject]@{
-                            AppId            = "custom"
-                            DirectoryId      = if ($CustDir.name) { $CustDir.name } else { "custom" }
-                            Link             = $ResolvedLink
-                            Target           = $ResolvedTarget
-                            RawTarget        = $CustDir.target
-                            RawLink          = $CustDir.link
-                            SafeForStream    = $true
-                        })
-                    }
+                    $AllJunctions.Add([PSCustomObject]@{
+                        AppId            = "custom"
+                        DirectoryId      = if ($CustDir.name) { $CustDir.name } else { "custom" }
+                        Link             = $ResolvedLink
+                        Target           = $ResolvedTarget
+                        RawTarget        = $CustDir.target
+                        RawLink          = $CustDir.link
+                        SafeForStream    = $true
+                    })
                 }
             }
         }

@@ -113,8 +113,9 @@ function Build-ReglazePayload {
     # =========================================================================
     # 1. Generate WinGet DSC Manifest (configuration.dsc.yaml)
     # =========================================================================
+    $UserConfigDir = if ($BlueprintFile) { Split-Path -Parent $BlueprintFile } else { $null }
     $DscPath = Join-Path $PayloadDir "configuration.dsc.yaml"
-    Build-WinGetDSCManifest -Blueprint $Blueprint -RepoRoot $RepoRoot -OutputPath $DscPath | Out-Null
+    Build-WinGetDSCManifest -Blueprint $Blueprint -RepoRoot $RepoRoot -UserConfigDir $UserConfigDir -OutputPath $DscPath | Out-Null
 
     # =========================================================================
     # 2. Generate Preserved Disk & Drive Letter Reconciliation Config (disk-config.json)
@@ -160,6 +161,7 @@ function Build-ReglazePayload {
 
     if ($Blueprint.applications) {
         foreach ($Prop in @($Blueprint.applications.PSObject.Properties)) {
+            if ($Prop.Name -eq "custom") { continue }
             $AppCfg = $Prop.Value
             if ($AppCfg.install -and $AppCfg.install.target_directory) {
                 & $AddReferencedDrive $AppCfg.install.target_directory
@@ -174,13 +176,18 @@ function Build-ReglazePayload {
         }
     }
 
-    if ($Blueprint.custom -and $Blueprint.custom -is [System.Collections.IEnumerable]) {
-        foreach ($CustApp in $Blueprint.custom) {
-            if ($CustApp.directories) {
-                foreach ($CDir in $CustApp.directories) {
-                    if ($CDir.target) { & $AddReferencedDrive $CDir.target }
-                    if ($CDir.link) { & $AddReferencedDrive $CDir.link }
-                }
+    $CombinedCustomApps = @()
+    if ($Blueprint.applications -and $Blueprint.applications.custom -and ($Blueprint.applications.custom -is [System.Collections.IEnumerable]) -and -not ($Blueprint.applications.custom -is [string])) {
+        $CombinedCustomApps += @($Blueprint.applications.custom)
+    }
+    if ($Blueprint.custom -and ($Blueprint.custom -is [System.Collections.IEnumerable]) -and -not ($Blueprint.custom -is [string])) {
+        $CombinedCustomApps += @($Blueprint.custom)
+    }
+    foreach ($CustApp in $CombinedCustomApps) {
+        if ($CustApp.directories) {
+            foreach ($CDir in $CustApp.directories) {
+                if ($CDir.target) { & $AddReferencedDrive $CDir.target }
+                if ($CDir.link) { & $AddReferencedDrive $CDir.link }
             }
         }
     }
@@ -327,7 +334,7 @@ function Build-ReglazePayload {
     # 4. Generate Pre-Computed Junctions Manifest (junctions-manifest.json)
     # =========================================================================
     $JunctionsList = [System.Collections.Generic.List[PSCustomObject]]::new()
-    $Catalog = Get-ReglazeCatalog -RepoRoot $RepoRoot
+    $Catalog = Get-ReglazeCatalog -RepoRoot $RepoRoot -UserConfigDir $UserConfigDir
 
     $TestIsCloudOrPhase5Target = {
         param([string]$RawTarget, [string]$ResolvedTarget, $CatApp)
@@ -344,6 +351,7 @@ function Build-ReglazePayload {
         $AppProps = @($Blueprint.applications.PSObject.Properties)
         foreach ($Prop in $AppProps) {
             $AppId = $Prop.Name
+            if ($AppId -eq "custom") { continue }
             $AppConfig = $Prop.Value
             $CatalogApp = $Catalog | Where-Object { $_.app_id -eq $AppId } | Select-Object -First 1
 
@@ -391,32 +399,30 @@ function Build-ReglazePayload {
         }
     }
 
-    # Inspect custom directory mappings
-    if ($Blueprint.custom -and $Blueprint.custom -is [System.Collections.IEnumerable]) {
-        foreach ($CustomApp in $Blueprint.custom) {
-            if ($CustomApp.directories) {
-                foreach ($CustDir in $CustomApp.directories) {
-                    if ($CustDir.link -and $CustDir.target) {
-                        $ResolvedLink = Resolve-VariableString -InputString $CustDir.link -VariableMap $VarMap
-                        $ResolvedTarget = Resolve-VariableString -InputString $CustDir.target -VariableMap $VarMap
-                        $RequiresElevation = [bool]($ResolvedLink -like "C:\ProgramData*" -or $ResolvedLink -like "C:\Program Files*")
-                        $DependsOnPhase5 = & $TestIsCloudOrPhase5Target $CustDir.target $ResolvedTarget $null
-                        $Scope = if ($RequiresElevation -and -not $DependsOnPhase5) { "machine" } else { "user" }
-                        $StorageType = if ($CustDir.storage_type) { $CustDir.storage_type } else { "streaming" }
+    # Inspect custom directory mappings (both applications.custom and top-level custom)
+    foreach ($CustomApp in $CombinedCustomApps) {
+        if ($CustomApp.directories) {
+            foreach ($CustDir in $CustomApp.directories) {
+                if ($CustDir.link -and $CustDir.target) {
+                    $ResolvedLink = Resolve-VariableString -InputString $CustDir.link -VariableMap $VarMap
+                    $ResolvedTarget = Resolve-VariableString -InputString $CustDir.target -VariableMap $VarMap
+                    $RequiresElevation = [bool]($ResolvedLink -like "C:\ProgramData*" -or $ResolvedLink -like "C:\Program Files*")
+                    $DependsOnPhase5 = & $TestIsCloudOrPhase5Target $CustDir.target $ResolvedTarget $null
+                    $Scope = if ($RequiresElevation -and -not $DependsOnPhase5) { "machine" } else { "user" }
+                    $StorageType = if ($CustDir.storage_type) { $CustDir.storage_type } else { "streaming" }
 
-                        $JunctionsList.Add([PSCustomObject]@{
-                            AppId             = "custom"
-                            DirectoryId       = if ($CustDir.name) { ($CustDir.name -replace '[^a-zA-Z0-9_]', '_').ToLower() } else { "custom_dir" }
-                            Description       = if ($CustDir.name) { $CustDir.name } else { "Custom Directory Junction" }
-                            Link              = $ResolvedLink
-                            Target            = $ResolvedTarget
-                            Scope             = $Scope
-                            RequiresElevation = $RequiresElevation
-                            StorageType       = $StorageType
-                            SafeForStream     = $true
-                            CollisionAction   = "backup"
-                        })
-                    }
+                    $JunctionsList.Add([PSCustomObject]@{
+                        AppId             = "custom"
+                        DirectoryId       = if ($CustDir.name) { ($CustDir.name -replace '[^a-zA-Z0-9_]', '_').ToLower() } else { "custom_dir" }
+                        Description       = if ($CustDir.name) { $CustDir.name } else { "Custom Directory Junction" }
+                        Link              = $ResolvedLink
+                        Target            = $ResolvedTarget
+                        Scope             = $Scope
+                        RequiresElevation = $RequiresElevation
+                        StorageType       = $StorageType
+                        SafeForStream     = $true
+                        CollisionAction   = "backup"
+                    })
                 }
             }
         }

@@ -337,7 +337,89 @@ During compilation (Phase 1), `reglaze` parses the `applications` block declared
        action: "omit" # or "allow_stream"
        reason: "Using stock presets on fresh install"
    ```
-7. **Custom Applications & Arbitrary Paths:** Any application or folder not found in `data/applications.json` can be configured under `applications.custom:`, specifying explicit `link`, `target`, and `storage_type` parameters.
+7. **Unrecognized / Custom Applications (`applications.custom`):** During `reglaze audit`, any installed WinGet packages, Steam games, Add/Remove Programs (ARP) registry entries, or existing NTFS directory junctions that do not match a catalog entry are automatically populated under `applications.custom:` in `reglaze.yaml`. You can either configure `link`, `target`, and `storage_type` directly under `applications.custom:`, or promote those applications into reusable catalog definitions via a personal `applications.json` file (see below).
+
+### User-Extensible Application Catalog (`<output-dir>/applications.json`) & LLM Prompt
+
+To add application definitions that are **reusable across audits** without modifying the `reglaze` source repository—and without baking directory schemas solely into `reglaze.yaml` where re-running `reglaze audit` could overwrite them—you can place a personal **`applications.json`** file in your Reglaze configuration/output directory alongside `reglaze.yaml` and `audit-reference.json`:
+
+* **Automatic Discovery & Override Precedence:** `reglaze audit`, `reglaze validate`, and `reglaze compile` automatically load `<output-dir>/applications.json` and merge it with the built-in catalog (`data/applications/`). Any `app_id` in your personal `applications.json` either adds a new catalog application or overrides the built-in entry with the same `app_id`.
+* **Automatic Promotion out of `custom:`:** After placing your `applications.json` in the output directory (or appending new entries to it), simply run `reglaze audit` again. Applications that were previously listed under `applications.custom:` will automatically match your `applications.json`, move into the main `applications:` section, and have their `directories:` pre-populated with recommended junction targets.
+
+#### Generating Your `applications.json` with a Standard Chat LLM
+
+You can attach your **`audit-reference.json`** and **`reglaze.yaml`** (plus your existing **`applications.json`**, if updating one) to any chat LLM (ChatGPT, Claude, Gemini) with the following prompt:
+
+````markdown
+I am configuring a declarative Windows workstation blueprint using `reglaze`.
+Attached are my machine's `audit-reference.json` and `reglaze.yaml` (and optionally my existing `applications.json`).
+
+Please inspect the unrecognized applications listed under `applications.custom` in `reglaze.yaml` (cross-referencing `installed_winget_packages`, `detected_non_winget_applications`, `detected_game_libraries`, and `detected_directory_junctions` in `audit-reference.json`) and generate a complete `applications.json` file for my Reglaze configuration directory.
+
+### Requirements for `applications.json`
+
+1. **Top-Level Format:** Output a valid JSON array of application objects (`[ { ... }, ... ]`). If I attached an existing `applications.json`, preserve its existing entries and merge the new ones.
+2. **Matching Identifiers (Critical for `reglaze audit` auto-correlation):**
+   - `app_id`: snake_case identifier (e.g., `"obs_studio"`, `"baldur_gate_3"`).
+   - `name`: Must match the application's `name` / `display_name` from `reglaze.yaml` / `audit-reference.json` so `reglaze audit` automatically correlates it.
+   - `website`: Official homepage URL.
+   - `install`:
+     - If installed via WinGet: `"method": "winget"`, `"winget_id": "<exact WinGet id>"` (from `applications.custom` or `installed_winget_packages`).
+     - If installed via Steam: `"method": "steam"`, `"steam_id": <integer Steam App ID>`.
+     - If installed manually (non-WinGet ARP software): `"method": "manual"`, `"download_url": "<official download page>"`, `"default_target_directory": "<install path using %PROGRAMFILES%, %LOCALAPPDATA%, %GAMES_DIR%, etc.>"`, and step-by-step `"instructions": [ "..." ]`.
+     - Set unused fields (`winget_id`, `steam_id`, `download_url`, `default_target_directory`, `guide_file`, `post_install_script`) to `null`, and `instructions` to `[]` when not needed.
+3. **Directory Mappings & Storage Tier Safety Rules (`directories`):**
+   - For each application, research where it stores persistent user state on Windows (settings/configs, user profiles, plugins/extensions, save games, custom songs/mods, or database catalogs).
+   - Use Reglaze path placeholders in `default_path`: `%APPDATA%`, `%LOCALAPPDATA%`, `%USERPROFILE%\\AppData\\LocalLow`, `%USERPROFILE%\\Documents`, `%USERPROFILE%\\Saved Games`, `%PROGRAMDATA%`, `%PROGRAMFILES%`, `%PROGRAMFILES(X86)%`, `%GAMES_DIR%`, `%STEAM_DIR%`.
+   - Each directory object MUST include:
+     - `"id"`: snake_case folder identifier (e.g., `"user_settings"`, `"game_saves"`, `"catalog"`).
+     - `"description"`: Brief explanation of what is stored here.
+     - `"default_path"`: Default Windows path using `%VAR%` placeholders.
+     - `"category"`: One of `"configs"`, `"saves"`, `"songs"`, `"catalog"`, `"library"`.
+     - `"needs_mapping"`: `true` if wiping `C:` would lose important user state; `false` if ephemeral or purely cloud-hosted.
+     - `"safe_for_stream"`:
+       - `false` if the directory contains SQLite databases, LevelDB/RocksDB stores, high-I/O caches, or lock-sensitive files that corrupt on virtual cloud streaming drives (such as Google Drive `G:` / `E:`).
+       - `true` if the directory contains flat config files (JSON, INI, XML, YAML), discrete save files, or static assets safe for virtual cloud streaming.
+     - `"recommended_storage"`:
+       - `"streaming"` when `safe_for_stream` is `true`.
+       - `"sync"` when `safe_for_stream` is `false` (requires a local NTFS folder backed by two-way cloud sync).
+       - `"local_preserved"` for large bulk data, media caches, or game assets that belong on `%DATA_DRIVE%`.
+     - `"notes"`: Short rationale for the storage recommendation (especially file-locking or SQLite behavior).
+   - If an application is a stateless CLI tool, runtime, or hardware driver utility that needs no directory junctions, include the application with `"directories": []` so `reglaze audit` recognizes it and moves it out of `applications.custom`.
+
+### Example Schema Entry
+```json
+[
+  {
+    "app_id": "example_app",
+    "name": "Example Application",
+    "website": "https://example.com",
+    "install": {
+      "method": "winget",
+      "winget_id": "Vendor.ExampleApp",
+      "steam_id": null,
+      "download_url": null,
+      "default_target_directory": null,
+      "guide_file": null,
+      "post_install_script": null,
+      "instructions": []
+    },
+    "directories": [
+      {
+        "id": "app_config",
+        "description": "User preferences and plugin configurations",
+        "default_path": "%APPDATA%\\ExampleApp",
+        "category": "configs",
+        "needs_mapping": true,
+        "safe_for_stream": true,
+        "recommended_storage": "streaming",
+        "notes": "Flat JSON/INI configuration files; safe for virtual cloud streaming."
+      }
+    ]
+  }
+]
+```
+````
 
 ### Directory Junction Mechanics
 

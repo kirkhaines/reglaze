@@ -91,14 +91,18 @@ if ($BitLockerData.Count -gt 0) {
     }
 }
 
-# 5. Execute Comprehensive Application Discovery (WinGet + Add/Remove Programs)
-Write-ReglazeStep "Auditing Applications (WinGet Packages & Add/Remove Programs)..."
-$AppsData = Get-InstalledApplicationsAudit -RepoRoot $RepoRoot
+# 5. Execute Comprehensive Application Discovery (WinGet + Add/Remove Programs + Steam)
+Write-ReglazeStep "Auditing Applications (WinGet Packages, Steam Libraries & Add/Remove Programs)..."
+$UserCatalogFile = Join-Path $TargetDir "applications.json"
+if (Test-Path -LiteralPath $UserCatalogFile) {
+    Write-ReglazeInfo "Loaded custom user application catalog: $UserCatalogFile"
+}
+$AppsData = Get-InstalledApplicationsAudit -RepoRoot $RepoRoot -UserConfigDir $TargetDir
 Write-ReglazeSuccess "Found $($AppsData.installed_winget_packages.Count) WinGet packages and $($AppsData.detected_non_winget_applications.Count) non-WinGet applications."
 
 # 6. Execute Directory Junctions Discovery
 Write-ReglazeStep "Auditing Existing NTFS Directory Junctions & Reparse Points..."
-$JunctionsData = Get-JunctionsAudit -RepoRoot $RepoRoot
+$JunctionsData = Get-JunctionsAudit -RepoRoot $RepoRoot -UserConfigDir $TargetDir
 Write-ReglazeSuccess "Detected $($JunctionsData.Count) directory junction(s)."
 
 # 7. Execute Windows Settings Discovery
@@ -438,7 +442,7 @@ $YamlLines = @(
         'applications:'
     )
 
-    # Correlate detected apps from catalog
+    # Correlate detected apps from catalog (built-in + user applications.json)
     $DiscoveredAppIds = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
     foreach ($Pkg in $AppsData.installed_winget_packages) {
         if ($Pkg.matched_app_id) { $DiscoveredAppIds.Add($Pkg.matched_app_id) | Out-Null }
@@ -446,22 +450,40 @@ $YamlLines = @(
     foreach ($App in $AppsData.detected_non_winget_applications) {
         if ($App.matched_app_id) { $DiscoveredAppIds.Add($App.matched_app_id) | Out-Null }
     }
+    if ($AppsData.detected_game_libraries) {
+        foreach ($Lib in $AppsData.detected_game_libraries) {
+            if ($Lib.games) {
+                foreach ($Game in $Lib.games) {
+                    if ($Game.matched_app_id) { $DiscoveredAppIds.Add($Game.matched_app_id) | Out-Null }
+                }
+            }
+        }
+    }
+    if ($JunctionsData) {
+        foreach ($Junc in $JunctionsData) {
+            if ($Junc.matched_app_id) { $DiscoveredAppIds.Add($Junc.matched_app_id) | Out-Null }
+        }
+    }
 
     $AvailableSyncVars = @($StorageProvidersData.sync_directories | Select-Object -ExpandProperty sync_variable)
 
     if ($DiscoveredAppIds.Count -gt 0) {
         foreach ($AppId in ($DiscoveredAppIds | Sort-Object)) {
-            $CatalogApp = Get-ReglazeApplicationById -AppId $AppId -RepoRoot $RepoRoot
+            $CatalogApp = Get-ReglazeApplicationById -AppId $AppId -RepoRoot $RepoRoot -UserConfigDir $TargetDir
             $YamlLines += "  ${AppId}:"
             if ($CatalogApp.directories -and $CatalogApp.directories.Count -gt 0) {
                 $YamlLines += '    directories:'
                 foreach ($Dir in $CatalogApp.directories) {
-                    $SuggestedTarget = if ($Dir.safe_for_stream) { 
+                    $SuggestedTarget = if ($Dir.recommended_storage -eq "local_preserved") {
+                        "%DATA_DRIVE%\\Backups\\$AppId\\$($Dir.id)"
+                    } elseif ($Dir.safe_for_stream -and $Dir.recommended_storage -ne "sync") { 
                         "%STREAM%\\Backups\\$AppId\\$($Dir.id)" 
                     } elseif ($AvailableSyncVars -contains "SYNC_DIRECTORYJUNCTIONS") {
                         "%SYNC_DIRECTORYJUNCTIONS%\\$AppId"
                     } elseif ($AvailableSyncVars -contains "SYNC_CATALOGS") {
                         "%SYNC_CATALOGS%\\$AppId"
+                    } elseif ($AvailableSyncVars.Count -gt 0) {
+                        "%$($AvailableSyncVars[0])%\\$AppId"
                     } else {
                         "%DATA_DRIVE%\\Backups\\$AppId"
                     }
@@ -475,6 +497,105 @@ $YamlLines = @(
     } else {
         $YamlLines += '  git: {}'
         $YamlLines += '  vscode: {}'
+    }
+
+    # Populate unrecognized applications from WinGet, Steam, Registry (ARP), and Junctions into applications.custom
+    $EscapeYamlStr = {
+        param([string]$Val)
+        if ([string]::IsNullOrEmpty($Val)) { return "" }
+        return ($Val -replace '\\', '\\' -replace '"', '\"')
+    }
+
+    $CustomYamlLines = [System.Collections.Generic.List[string]]::new()
+    $SeenCustomKeys = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+
+    # 1. Unmatched WinGet packages
+    foreach ($Pkg in @($AppsData.installed_winget_packages | Where-Object { -not $_.matched_app_id })) {
+        $PkgName = if ($Pkg.name) { $Pkg.name } else { $Pkg.id }
+        $DedupKey = "winget:$($Pkg.id)"
+        if (-not $SeenCustomKeys.Add($DedupKey)) { continue }
+        [void]$SeenCustomKeys.Add("name:$PkgName")
+
+        $EscName = & $EscapeYamlStr $PkgName
+        $EscId = & $EscapeYamlStr $Pkg.id
+        $CustomYamlLines.Add("    - name: `"$EscName`"")
+        $CustomYamlLines.Add("      install:")
+        $CustomYamlLines.Add("        method: `"winget`"")
+        $CustomYamlLines.Add("        winget_id: `"$EscId`"")
+        $CustomYamlLines.Add("      directories: []")
+    }
+
+    # 2. Unmatched Steam games (from Steam libraries and Steam ARP entries)
+    $UnmatchedSteamGames = [System.Collections.Generic.List[PSCustomObject]]::new()
+    if ($AppsData.detected_game_libraries) {
+        foreach ($Lib in $AppsData.detected_game_libraries) {
+            if ($Lib.games) {
+                foreach ($Game in $Lib.games) {
+                    if (-not $Game.matched_app_id -and $null -ne $Game.steam_id) {
+                        $UnmatchedSteamGames.Add([PSCustomObject]@{
+                            steam_id = [int]$Game.steam_id
+                            name     = if ($Game.name) { $Game.name } else { "Steam App $($Game.steam_id)" }
+                        })
+                    }
+                }
+            }
+        }
+    }
+    foreach ($App in @($AppsData.detected_non_winget_applications | Where-Object { -not $_.matched_app_id -and $null -ne $_.steam_id })) {
+        $UnmatchedSteamGames.Add([PSCustomObject]@{
+            steam_id = [int]$App.steam_id
+            name     = $App.display_name
+        })
+    }
+    foreach ($SGame in $UnmatchedSteamGames) {
+        $DedupKey = "steam:$($SGame.steam_id)"
+        if (-not $SeenCustomKeys.Add($DedupKey)) { continue }
+        [void]$SeenCustomKeys.Add("name:$($SGame.name)")
+
+        $EscGameName = & $EscapeYamlStr $SGame.name
+        $CustomYamlLines.Add("    - name: `"$EscGameName`"")
+        $CustomYamlLines.Add("      install:")
+        $CustomYamlLines.Add("        method: `"steam`"")
+        $CustomYamlLines.Add("        steam_id: $($SGame.steam_id)")
+        $CustomYamlLines.Add("      directories: []")
+    }
+
+    # 3. Unmatched non-WinGet Registry (ARP) applications
+    foreach ($App in @($AppsData.detected_non_winget_applications | Where-Object { -not $_.matched_app_id -and $null -eq $_.steam_id })) {
+        if (-not $App.display_name) { continue }
+        if (-not $SeenCustomKeys.Add("name:$($App.display_name)")) { continue }
+
+        $EscDispName = & $EscapeYamlStr $App.display_name
+        $CustomYamlLines.Add("    - name: `"$EscDispName`"")
+        $CustomYamlLines.Add("      install:")
+        $CustomYamlLines.Add("        method: `"manual`"")
+        if (-not [string]::IsNullOrWhiteSpace($App.install_location)) {
+            $EscLoc = & $EscapeYamlStr $App.install_location
+            $CustomYamlLines.Add("        target_directory: `"$EscLoc`"")
+        }
+        $CustomYamlLines.Add("      directories: []")
+    }
+
+    # 4. Unmatched NTFS Directory Junctions
+    foreach ($Junc in @($JunctionsData | Where-Object { -not $_.matched_app_id })) {
+        if (-not $Junc.source_path -or -not $Junc.target_path) { continue }
+        $LeafName = Split-Path -Leaf $Junc.source_path
+        $EscLeaf = & $EscapeYamlStr $LeafName
+        $EscLink = & $EscapeYamlStr $Junc.source_path
+        $EscTarget = & $EscapeYamlStr $Junc.target_path
+        $CustomYamlLines.Add("    - name: `"Custom Junction ($EscLeaf)`"")
+        $CustomYamlLines.Add("      install: false")
+        $CustomYamlLines.Add("      directories:")
+        $CustomYamlLines.Add("        - name: `"$EscLeaf`"")
+        $CustomYamlLines.Add("          link: `"$EscLink`"")
+        $CustomYamlLines.Add("          target: `"$EscTarget`"")
+    }
+
+    if ($CustomYamlLines.Count -gt 0) {
+        $YamlLines += '  custom:'
+        $YamlLines += $CustomYamlLines.ToArray()
+    } else {
+        $YamlLines += '  custom: []'
     }
 
     $WslDistroName = if ($WslData.default_distro) { $WslData.default_distro } else { "Ubuntu" }
