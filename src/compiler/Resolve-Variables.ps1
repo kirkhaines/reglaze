@@ -28,6 +28,7 @@ function Get-BlueprintVariables {
     } else {
         "User"
     }
+    $VarMap["USER_DIR"] = "C:\Users\$PrimaryUser"
     $VarMap["USERPROFILE"] = "C:\Users\$PrimaryUser"
     $VarMap["DOCUMENTS"] = "C:\Users\$PrimaryUser\Documents"
     $VarMap["APPDATA"] = "C:\Users\$PrimaryUser\AppData\Roaming"
@@ -66,6 +67,14 @@ function Get-BlueprintVariables {
         }
     }
 
+    # 4b. Default Steam Library Variable (overridden if declared in Blueprint.variables)
+    if ($Blueprint.storage -and $Blueprint.storage.steam_libraries -and $Blueprint.storage.steam_libraries.Count -gt 0) {
+        $VarMap["STEAM_DIR"] = [string]$Blueprint.storage.steam_libraries[0]
+    } else {
+        $VarMap["STEAM_DIR"] = "C:\Program Files (x86)\Steam"
+    }
+    $VarMap["STEAM_LIBRARY"] = $VarMap["STEAM_DIR"]
+
     # 5. Custom Blueprint Variables (e.g. GAMES_DIR, STEAM_DIR)
     if ($Blueprint.variables) {
         $CustomVars = $Blueprint.variables
@@ -75,6 +84,16 @@ function Get-BlueprintVariables {
             if ($Val) {
                 $VarMap[$PropName] = [string]$Val
             }
+        }
+        if ($VarMap.ContainsKey("STEAM_DIR") -and -not ($VarProps -contains "STEAM_LIBRARY")) {
+            $VarMap["STEAM_LIBRARY"] = $VarMap["STEAM_DIR"]
+        }
+        if ($VarProps -contains "USER_DIR" -and $VarMap.ContainsKey("USER_DIR")) {
+            $UDir = $VarMap["USER_DIR"].TrimEnd('\')
+            if (-not ($VarProps -contains "USERPROFILE")) { $VarMap["USERPROFILE"] = $UDir }
+            if (-not ($VarProps -contains "DOCUMENTS"))   { $VarMap["DOCUMENTS"] = "$UDir\Documents" }
+            if (-not ($VarProps -contains "APPDATA"))     { $VarMap["APPDATA"] = "$UDir\AppData\Roaming" }
+            if (-not ($VarProps -contains "LOCALAPPDATA")){ $VarMap["LOCALAPPDATA"] = "$UDir\AppData\Local" }
         }
     }
 

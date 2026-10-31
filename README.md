@@ -71,6 +71,7 @@ Modern software engineering treats servers and compute runtimes as disposable in
 | :--- | :--- | :--- |
 | **0. Pre-Flight Audit** | `audit.ps1` | Scans the active PC prior to wiping (requires `-Profile <name>` when no existing `reglaze.yaml` is present). Extracts BitLocker recovery keys, Windows activation/license info, physical disk and partition GUIDs/IDs, active directory junctions, installed WinGet packages, Git remotes, and environment variables. Records the computer-to-profile mapping in `profile-computers.json`, correlates detected software against `data/applications.json`, and emits `audit-reference.json` alongside an initial, scaffolded `reglaze.yaml`. |
 | **1. User Blueprint Review & Validation** | Manual / Config Editor & Compiler | The user inspects and edits `reglaze.yaml` against `audit-reference.json`. The `reglaze` compiler validates declared applications against `data/applications.json`: any directory marked `needs_mapping: true` must be mapped to its recommended target type (`streaming` vs `sync`), or the user must provide an explicit `override` with a rationale. Uncataloged apps and custom folders are declared under `custom:`. |
+| **1b. Pre-Install Data Staging (`migration-plan` & `migrate`)** | `Invoke-PreInstallMigration.ps1` | For existing Windows installs that do not yet use directory junctions, `reglaze migration-plan` inspects the edited `reglaze.yaml` and `audit-reference.json` to emit a draft `migration-manifest.yaml` with measured byte sizes and file counts. After the user reviews/edits the manifest to disable or remove any unneeded directories, `reglaze migrate` creates all target sync/streaming/data directories and transfers files using multi-threaded `robocopy.exe` (`/MT:16 /E /XO`) so the targets are ready before wiping the OS. |
 | **2. Media Generation** | `Compile-Reglaze.ps1` & `New-InstallMedia.ps1` | Compiles `reglaze.yaml` into tool-specific artifacts (`autounattend.xml`, `configuration.dsc.yaml`, `bootstrap.ps1`, `setup-wsl.sh`) and packages them onto bootable installation media (USB or ISO) with required drivers and bootstrap scripts. |
 | **3. Unattended Install** | `autounattend.xml` | Boots from media, identifies target OS disk via multi-factor hardware attributes (Serial Number, Bus Type, Model) to protect secondary drives, partitions and applies Windows image, provisions dedicated `LocalAdmin` with temporary setup auto-logon, and creates the primary standard user account (`local_to_msa`). |
 | **4. Machine Provisioning & BitLocker Recovery** | `bootstrap.ps1`, `Set-ReglazeDriveLetters.ps1` & WinGet DSC | Auto-logs into `LocalAdmin`. Reconciles preserved drive letters via a 3-phase atomic swap (clearing unconfigured fixed drives and moving removable media out of reserved letters), installs WHQL storage/chipset drivers, halts with a safe power-down checkpoint (`Stop-Computer`) if required preserved disks were physically disconnected during install so the user can reconnect them, unlocks preserved BitLocker volumes by hardware identity (`SerialNumber` + `PartitionGuid`), sets Google Drive `DefaultMountPoint` policy, provisions packages via WinGet DSC, pre-stages WSL2, and purges auto-logon credentials before rebooting. |
@@ -487,7 +488,17 @@ Before wiping an existing installation, `reglaze` runs a non-destructive discove
    * Verify declared applications against [data/applications.json](data/applications.json).
    * Ensure directories with `needs_mapping: true` have junction targets, or provide inline `overrides`.
    * Configure `wsl2` distro preferences and Google Drive OAuth API credentials under `storage.api_credentials`.
-4. **Run the Compiler & Media Generator:**
+4. **Stage Existing User Data Before Wiping (`migration-plan` & `migrate`):**
+   * Generate a draft migration manifest with measured directory sizes and file counts:
+     ```powershell
+     pwsh ./bin/reglaze.ps1 migration-plan -Config ./audit-output/reglaze.yaml
+     ```
+   * Review and edit `./audit-output/migration-manifest.yaml` (set `enabled: false` or delete any item you do not wish to retain).
+   * Create all required sync/streaming/data target directories and copy existing files using multi-threaded `robocopy.exe`:
+     ```powershell
+     pwsh ./bin/reglaze.ps1 migrate -Config ./audit-output/reglaze.yaml
+     ```
+5. **Run the Compiler & Media Generator:**
    ```powershell
    pwsh ./src/compiler/Compile-Reglaze.ps1 -Config ./examples/reglaze.yaml -OutputDir ./dist
    pwsh ./src/media/New-InstallMedia.ps1 -ArtifactsDir ./dist -TargetDrive "E:"

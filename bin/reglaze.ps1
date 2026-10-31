@@ -13,7 +13,7 @@
 [CmdletBinding()]
 param (
     [Parameter(Position=0)]
-    [ValidateSet("audit", "validate", "compile", "bootstrap", "hydrate", "media", "iso", "test", "version", "help")]
+    [ValidateSet("audit", "validate", "migration-plan", "plan-migration", "migration-manifest", "migrate", "run-migration", "apply-migration", "stage-data", "compile", "bootstrap", "hydrate", "media", "iso", "test", "version", "help")]
     [string]$Command = "help",
 
     [Parameter(Position=1)]
@@ -22,11 +22,17 @@ param (
     [Alias("c")]
     [string]$Config = $null,
 
+    [Alias("m")]
+    [string]$Manifest = $null,
+
     [Alias("o")]
     [string]$OutputDir = $null,
 
     [Alias("p")]
     [string]$Profile = $null,
+
+    [Parameter(Mandatory=$false)]
+    [int]$Threads = 16,
 
     [Parameter(Mandatory=$false)]
     [string]$UsbDrive = $null,
@@ -74,6 +80,51 @@ switch ($Command) {
             & $Validator -ConfigFile $ResolvedCfg
         } else {
             Write-ReglazeSuccess "Blueprint syntax check passed: $ResolvedCfg"
+        }
+    }
+
+    { $_ -in @("migration-plan", "plan-migration", "migration-manifest") } {
+        $ResolvedCfg = if ($Config) { $Config } elseif ($Target) { $Target } else { Resolve-ReglazeConfigFile }
+        if (-not $ResolvedCfg -or -not (Test-Path $ResolvedCfg)) {
+            Write-ReglazeError "Configuration file not found. Specify via -Config or set `$env:REGLAZE_DIR."
+            exit 1
+        }
+        $ResolvedManifestOut = if ($Manifest) { $Manifest } elseif ($OutputDir) { $OutputDir } else { $null }
+        $MigrationModule = Join-Path $RepoRoot "src\linking\Invoke-PreInstallMigration.ps1"
+        if (Test-Path $MigrationModule) {
+            . $MigrationModule
+            New-ReglazeMigrationPlan -ConfigFile $ResolvedCfg -OutputManifestPath $ResolvedManifestOut -RepoRoot $RepoRoot -Force:$Force | Out-Null
+        } else {
+            Write-ReglazeError "Pre-install migration module not found at: $MigrationModule"
+            exit 1
+        }
+    }
+
+    { $_ -in @("migrate", "run-migration", "apply-migration", "stage-data") } {
+        $ResolvedCfg = if ($Config) { $Config } else { $null }
+        $ResolvedManifest = if ($Manifest) { $Manifest } elseif ($Target -and ($Target -like "*.yaml" -or $Target -like "*.yml" -or $Target -like "*.json" -or (Test-Path $Target -PathType Container -ErrorAction SilentlyContinue))) {
+            if ($Target -like "*reglaze.yaml" -and -not $ResolvedCfg) {
+                $ResolvedCfg = $Target
+                $null
+            } else {
+                $Target
+            }
+        } else {
+            $null
+        }
+        if (-not $ResolvedCfg -and -not $ResolvedManifest) {
+            $ResolvedCfg = Resolve-ReglazeConfigFile
+        }
+        $MigrationModule = Join-Path $RepoRoot "src\linking\Invoke-PreInstallMigration.ps1"
+        if (Test-Path $MigrationModule) {
+            . $MigrationModule
+            $MigrateRes = Invoke-ReglazePreInstallMigration -ManifestPath $ResolvedManifest -ConfigFile $ResolvedCfg -Threads $Threads -Simulation:$Simulation -Force:$Force
+            if ($MigrateRes -and $MigrateRes.FailedCount -gt 0) {
+                exit 1
+            }
+        } else {
+            Write-ReglazeError "Pre-install migration module not found at: $MigrationModule"
+            exit 1
         }
     }
 
@@ -227,15 +278,17 @@ switch ($Command) {
         Write-Host "    pwsh ./bin/reglaze.ps1 <command> [options]"
         Write-Host ""
         Write-Host "  COMMANDS:" -ForegroundColor Yellow
-        Write-Host "    audit        Pre-flight discovery sweep (emits audit-reference.json and scaffolds reglaze.yaml)"
-        Write-Host "    validate     Validates blueprint against application catalog & safety constraints"
-        Write-Host "    compile      Compiles declarative blueprint into installation media artifacts"
-        Write-Host "    media        Builds vanilla UEFI bootable USB installation media with DISM split"
-        Write-Host "    iso          Discovers or downloads official Microsoft Windows 11 installation ISO"
-        Write-Host "    bootstrap    Machine-level unattended provisioning run under LocalAdmin (Phase 4)"
-        Write-Host "    hydrate      Staged user-level interactive hydration wizard (Phase 5)"
-        Write-Host "    test         Runs verification and diagnostic test suite"
-        Write-Host "    version      Prints current Reglaze CLI version"
+        Write-Host "    audit          Pre-flight discovery sweep (emits audit-reference.json and scaffolds reglaze.yaml)"
+        Write-Host "    validate       Validates blueprint against application catalog & safety constraints"
+        Write-Host "    migration-plan Generates draft pre-install migration manifest (migration-manifest.yaml) with size stats"
+        Write-Host "    migrate        Creates target sync/data directories and stages files via multi-threaded Robocopy"
+        Write-Host "    compile        Compiles declarative blueprint into installation media artifacts"
+        Write-Host "    media          Builds vanilla UEFI bootable USB installation media with DISM split"
+        Write-Host "    iso            Discovers or downloads official Microsoft Windows 11 installation ISO"
+        Write-Host "    bootstrap      Machine-level unattended provisioning run under LocalAdmin (Phase 4)"
+        Write-Host "    hydrate        Staged user-level interactive hydration wizard (Phase 5)"
+        Write-Host "    test           Runs verification and diagnostic test suite"
+        Write-Host "    version        Prints current Reglaze CLI version"
         Write-Host ""
         Write-Host "  ENVIRONMENT VARIABLES:" -ForegroundColor Yellow
         Write-Host "    `$env:REGLAZE_DIR      Target directory for live reglaze.yaml and audit-reference.json"
@@ -245,6 +298,8 @@ switch ($Command) {
         Write-Host "  EXAMPLES:" -ForegroundColor Yellow
         Write-Host "    pwsh ./bin/reglaze.ps1 audit -Profile `"workstation`" -OutputDir `"C:\reglaze-config`""
         Write-Host "    pwsh ./bin/reglaze.ps1 validate -Config `"C:\reglaze-config\reglaze.yaml`""
+        Write-Host "    pwsh ./bin/reglaze.ps1 migration-plan -Config `"C:\reglaze-config\reglaze.yaml`""
+        Write-Host "    pwsh ./bin/reglaze.ps1 migrate -Config `"C:\reglaze-config\reglaze.yaml`""
         Write-Host "    pwsh ./bin/reglaze.ps1 test"
         Write-Host ""
     }

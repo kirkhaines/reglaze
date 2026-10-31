@@ -66,7 +66,11 @@ function ConvertFrom-ReglazeYaml {
         if ($v -eq '[]') { return @() }
         if ($v -match '^-?\d+$') { return [int64]$v }
         if ($v -match '^-?\d+\.\d+$') { return [double]$v }
-        if (($v.StartsWith('"') -and $v.EndsWith('"')) -or ($v.StartsWith("'") -and $v.EndsWith("'"))) {
+        if ($v.StartsWith('"') -and $v.EndsWith('"')) {
+            $inner = $v.Substring(1, $v.Length - 2)
+            return ($inner -replace '\\\\', '\' -replace '\\"', '"')
+        }
+        if ($v.StartsWith("'") -and $v.EndsWith("'")) {
             return $v.Substring(1, $v.Length - 2)
         }
         return $v

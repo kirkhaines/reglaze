@@ -913,10 +913,17 @@ if ($WslData.detected_packages -and $WslData.detected_packages.Count -gt 0) {
     $YamlLines.Add('  packages: []')
 }
 
+$DefaultDevReposRoot = if ($AvailableSyncVars -contains "SYNC_PROJECTS") {
+    "%SYNC_PROJECTS%"
+} elseif ($AvailableSyncVars.Count -gt 0) {
+    "%$($AvailableSyncVars[0])%"
+} else {
+    "%DATA_DRIVE%\\Projects"
+}
 @(
     '',
     'dev_repos:',
-    '  root: "%SYNC_PROJECTS%"',
+    "  root: `"$DefaultDevReposRoot`"",
     '  remotes: []'
 ) | ForEach-Object { $YamlLines.Add($_) }
 

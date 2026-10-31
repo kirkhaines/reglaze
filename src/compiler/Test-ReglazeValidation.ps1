@@ -323,10 +323,15 @@ function Test-ReglazeBlueprint {
     }
 
     if ($Blueprint.dev_repos -and $Blueprint.dev_repos.root) {
+        $HasDevRemotes = ($Blueprint.dev_repos.remotes -and @($Blueprint.dev_repos.remotes).Count -gt 0)
         $ResolvedDevRoot = Resolve-VariableString -InputString $Blueprint.dev_repos.root -VariableMap $VarMap
         $DevUnresolved = Test-UnresolvedTokens -InputString $ResolvedDevRoot
         if ($DevUnresolved.Count -gt 0) {
-            $Errors.Add("Unresolvable variable token(s) in dev_repos.root '$($Blueprint.dev_repos.root)': $($DevUnresolved -join ', ')")
+            if ($HasDevRemotes) {
+                $Errors.Add("Unresolvable variable token(s) in dev_repos.root '$($Blueprint.dev_repos.root)': $($DevUnresolved -join ', ')")
+            } else {
+                $Warnings.Add("Unresolvable variable token(s) in unused dev_repos.root '$($Blueprint.dev_repos.root)' (remotes is empty): $($DevUnresolved -join ', ')")
+            }
         } else {
             $DevDrive = ([System.IO.Path]::GetPathRoot($ResolvedDevRoot)).TrimEnd('\')
             if ($DevDrive -and -not $AllowedTargetDrives.Contains($DevDrive)) {

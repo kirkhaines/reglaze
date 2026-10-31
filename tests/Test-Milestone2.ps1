@@ -34,6 +34,7 @@ $RepoRoot = Split-Path -Parent $PSScriptRoot
 . (Join-Path $RepoRoot "src\compiler\Compile-Reglaze.ps1")
 . (Join-Path $RepoRoot "src\media\Get-WindowsIso.ps1")
 . (Join-Path $RepoRoot "src\media\Build-Media.ps1")
+. (Join-Path $RepoRoot "src\linking\Invoke-PreInstallMigration.ps1")
 
 $PassCount = 0
 $FailCount = 0
@@ -633,6 +634,112 @@ applications:
     Assert-Test -Name "25. ISO Selection: Find-LocalWindowsIso scans candidates and selects the most recent release" `
         -Condition ($SelectedIso -eq $NewerIsoPath) `
         -Details "Selected: $SelectedIso, Expected: $NewerIsoPath"
+
+    # -------------------------------------------------------------------------
+    # TEST 13: Pre-Install Migration Planner & Multi-Threaded Robocopy Staging
+    # -------------------------------------------------------------------------
+    $MigRoot = Join-Path $TestDir "migration_test"
+    $MigSourceUser = Join-Path $MigRoot "source_user"
+    $MigStreamRoot = Join-Path $MigRoot "stream_drive"
+    $MigSyncRoot   = Join-Path $MigRoot "sync_drive"
+    $MigDataRoot   = Join-Path $MigRoot "data_drive"
+    $MigCfgDir     = Join-Path $MigRoot "config"
+
+    New-Item -ItemType Directory -Path $MigCfgDir -Force | Out-Null
+
+    # Create mock source directories and files
+    $MockVscodeDir = Join-Path $MigSourceUser "AppData\Roaming\Code\User"
+    $MockEmulatorDir  = Join-Path $MigSourceUser "AppData\Roaming\CustomEmulator"
+    $MockMediaDir  = Join-Path $MigSourceUser "AppData\Local\MediaTool\Cache"
+    $MockGitConfig = Join-Path $MigSourceUser ".gitconfig"
+
+    New-Item -ItemType Directory -Path $MockVscodeDir -Force | Out-Null
+    New-Item -ItemType Directory -Path (Join-Path $MockEmulatorDir "game1") -Force | Out-Null
+    New-Item -ItemType Directory -Path $MockMediaDir -Force | Out-Null
+
+    Set-Content -Path (Join-Path $MockVscodeDir "settings.json") -Value '{"editor.fontSize": 14}' -Encoding UTF8
+    Set-Content -Path (Join-Path $MockEmulatorDir "game1\save1.dat") -Value 'EMULATOR_SAVE_DATA_12345' -Encoding UTF8
+    Set-Content -Path (Join-Path $MockMediaDir "cache.bin") -Value 'SKIP_THIS_LARGE_CONTENT' -Encoding UTF8
+    Set-Content -Path $MockGitConfig -Value "[user]`n`tname = Developer" -Encoding UTF8
+
+    $EscSourceUser = $MigSourceUser -replace '\\', '\\'
+    $EscStreamRoot = $MigStreamRoot -replace '\\', '\\'
+    $EscSyncRoot   = $MigSyncRoot -replace '\\', '\\'
+    $EscDataRoot   = $MigDataRoot -replace '\\', '\\'
+
+    $MigBlueprintYaml = @"
+profile: "workstation"
+variables:
+  USER_DIR: "$EscSourceUser"
+  STREAM: "$EscStreamRoot"
+  SYNC_JUNCTIONS: "$EscSyncRoot"
+  DATA_DRIVE: "$EscDataRoot"
+system:
+  computer_name: "WORKSTATION-01"
+  username: "developer"
+storage:
+  sync:
+    provider: "google_drive"
+    source_computer: "WORKSTATION-01"
+    directories:
+      projects:
+        local_path: "%SYNC_JUNCTIONS%"
+        cloud_folder: "SyncJunctions"
+        sync_variable: "SYNC_JUNCTIONS"
+applications:
+  vscode:
+    directories:
+      user_settings:
+        target: "%STREAM%\\vscode\\user_settings"
+  git:
+    directories:
+      gitconfig:
+        target: "%STREAM%\\git\\gitconfig"
+  custom:
+    - name: "CustomEmulator"
+      directories:
+        - name: "Emulator Saves"
+          storage_type: "streaming"
+          link: "%USER_DIR%\\AppData\\Roaming\\CustomEmulator"
+          target: "%STREAM%\\CustomEmulator\\saves"
+    - name: "MediaTool"
+      directories:
+        - name: "Media Cache"
+          storage_type: "local_preserved"
+          link: "%USER_DIR%\\AppData\\Local\\MediaTool\\Cache"
+          target: "%DATA_DRIVE%\\MediaCache"
+"@
+    $MigBpPath = Join-Path $MigCfgDir "reglaze.yaml"
+    Set-Content -Path $MigBpPath -Value $MigBlueprintYaml -Encoding UTF8
+
+    $PlanResult = New-ReglazeMigrationPlan -ConfigFile $MigBpPath -RepoRoot $RepoRoot -Force
+    Assert-Test -Name "26. Migration Planner: New-ReglazeMigrationPlan generates migration-manifest.yaml with measured file counts & sizes" `
+        -Condition ((Test-Path $PlanResult.ManifestPath) -and $PlanResult.ItemCount -eq 4 -and $PlanResult.TotalCloudBytes -gt 0 -and $PlanResult.LocalBytes -gt 0) `
+        -Details "Items: $($PlanResult.ItemCount), CloudBytes: $($PlanResult.TotalCloudBytes), LocalBytes: $($PlanResult.LocalBytes)"
+
+    # Simulate user editing migration-manifest.yaml to disable MediaTool content transfer
+    $ManifestRaw = Get-Content -Raw -Path $PlanResult.ManifestPath -Encoding UTF8
+    $EditedManifest = $ManifestRaw -replace '(?ms)(id: "custom\.mediatool\.media_cache".*?enabled:\s*)true', '${1}false'
+    Set-Content -Path $PlanResult.ManifestPath -Value $EditedManifest -Encoding UTF8
+
+    $StageResult = Invoke-ReglazePreInstallMigration -ManifestPath $PlanResult.ManifestPath -Threads 8
+    $ExpectedVscodeTarget = Join-Path $MigStreamRoot "vscode\user_settings\settings.json"
+    $ExpectedEmulatorTarget  = Join-Path $MigStreamRoot "CustomEmulator\saves\game1\save1.dat"
+    $ExpectedGitTarget    = Join-Path $MigStreamRoot "git\gitconfig\.gitconfig"
+    $DisabledMediaTarget  = Join-Path $MigDataRoot "MediaCache\cache.bin"
+
+    Assert-Test -Name "27. Migration Staging: Invoke-ReglazePreInstallMigration copies enabled items via Robocopy and skips user-disabled items" `
+        -Condition (
+            $StageResult.Status -eq "Success" -and
+            $StageResult.CopiedCount -eq 3 -and
+            $StageResult.SkippedDisabled -eq 1 -and
+            (Test-Path $MigSyncRoot) -and
+            (Test-Path $ExpectedVscodeTarget) -and
+            (Test-Path $ExpectedEmulatorTarget) -and
+            (Test-Path $ExpectedGitTarget) -and
+            -not (Test-Path $DisabledMediaTarget)
+        ) `
+        -Details "Status: $($StageResult.Status), Copied: $($StageResult.CopiedCount), SkippedDisabled: $($StageResult.SkippedDisabled)"
 
 } finally {
     Remove-Item env:LOCAL_ADMIN_PASSWORD -ErrorAction SilentlyContinue
