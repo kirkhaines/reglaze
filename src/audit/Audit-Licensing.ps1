@@ -108,13 +108,16 @@ function Get-UserIdentityAudit {
         } catch {}
     }
 
+    $CleanUsername = if ($env:USERNAME) { ($env:USERNAME -replace '[\r\n\0]', '').Trim() } else { "user" }
     $IsDetected = ($Email -ne $null)
-    if (-not $Email) {
-        $Email = "$($env:USERNAME)@example.com"
+    if ($Email) {
+        $Email = ($Email -replace '[\r\n\0]', '').Trim()
+    } else {
+        $Email = "$CleanUsername@example.com"
     }
 
     return [PSCustomObject]@{
-        username       = $env:USERNAME
+        username       = $CleanUsername
         email          = $Email
         account_type   = if ($IsDetected) { "local_to_msa" } else { "local" }
         email_detected = $IsDetected

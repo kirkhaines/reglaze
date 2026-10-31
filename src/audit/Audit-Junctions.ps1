@@ -93,7 +93,7 @@ function Get-JunctionsAudit {
 
     # Scan shallowly (depth 2) across candidates to preserve speed
     foreach ($Root in $CandidateRoots) {
-        if ($Root -and (Test-Path $Root)) {
+        if ($Root -and (Test-Path $Root -ErrorAction SilentlyContinue)) {
             try {
                 # Check root directory itself
                 $RootItem = Get-Item -LiteralPath $Root -Force -ErrorAction SilentlyContinue

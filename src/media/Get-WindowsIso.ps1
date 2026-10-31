@@ -70,12 +70,12 @@ function Find-LocalWindowsIso {
         $env:USERPROFILE,
         "C:\Users\$($env:USERNAME)",
         "D:\Users\$($env:USERNAME)"
-    ) | Where-Object { $_ -and (Test-Path -LiteralPath $_) }
+    ) | Where-Object { $_ -and (Test-Path -LiteralPath $_ -ErrorAction SilentlyContinue) }
 
     foreach ($Prof in $UserProfiles) {
         $DlPath = Join-Path $Prof "Downloads"
-        if (Test-Path -LiteralPath $DlPath) {
-            try { $CandidateDirs.Add((Get-Item -LiteralPath $DlPath).FullName) | Out-Null } catch {}
+        if (Test-Path -LiteralPath $DlPath -ErrorAction SilentlyContinue) {
+            try { $CandidateDirs.Add((Get-Item -LiteralPath $DlPath -ErrorAction SilentlyContinue).FullName) | Out-Null } catch {}
         }
     }
 
@@ -84,8 +84,8 @@ function Find-LocalWindowsIso {
         $ShellDl = (Get-ItemProperty "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders" -ErrorAction SilentlyContinue).'{374DE290-123F-4565-9164-39C4925E467B}'
         if ($ShellDl) {
             $Expanded = [System.Environment]::ExpandEnvironmentVariables($ShellDl)
-            if (Test-Path -LiteralPath $Expanded) {
-                $CandidateDirs.Add((Get-Item -LiteralPath $Expanded).FullName) | Out-Null
+            if (Test-Path -LiteralPath $Expanded -ErrorAction SilentlyContinue) {
+                $CandidateDirs.Add((Get-Item -LiteralPath $Expanded -ErrorAction SilentlyContinue).FullName) | Out-Null
             }
         }
     } catch {}

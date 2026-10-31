@@ -15,14 +15,24 @@
                 },
     "directories":  [
                         {
-                            "id":  "user_data",
-                            "description":  "Brave browser user profile, extensions, and local web state",
-                            "default_path":  "%LOCALAPPDATA%\\BraveSoftware\\Brave-Browser\\User Data",
+                            "id":  "local_extension_settings",
+                            "description":  "Brave extension local configurations, userscripts, and rules (chrome.storage.local)",
+                            "default_path":  "%LOCALAPPDATA%\\BraveSoftware\\Brave-Browser\\User Data\\Default\\Local Extension Settings",
                             "category":  "configs",
                             "needs_mapping":  false,
                             "safe_for_stream":  false,
                             "recommended_storage":  "sync",
-                            "notes":  "Chromium SQLite databases (History, Cookies, Web Data) use WAL locking mode, which causes corruption or lock timeouts on cloud streaming virtual filesystems. Direct filesystem streaming is unsafe. Use Brave Sync Chain natively, or map to a local sync folder if offline state preservation is required."
+                            "notes":  "Preserves complex extension configurations (uBlock custom rules, Tampermonkey userscripts, Stylus styles). Uses LevelDB key-value stores; requires local sync rather than streaming."
+                        },
+                        {
+                            "id":  "sync_extension_settings",
+                            "description":  "Brave extension synced storage state (chrome.storage.sync)",
+                            "default_path":  "%LOCALAPPDATA%\\BraveSoftware\\Brave-Browser\\User Data\\Default\\Sync Extension Settings",
+                            "category":  "configs",
+                            "needs_mapping":  false,
+                            "safe_for_stream":  false,
+                            "recommended_storage":  "sync",
+                            "notes":  "Small LevelDB storage for synced extension settings. Optional; Brave Sync Chain does not sync local extension state."
                         }
                     ]
 }

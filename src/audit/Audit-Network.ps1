@@ -183,8 +183,8 @@ function Get-NetworkAudit {
                 $RemotePort = if ($PortFilter -and $PortFilter.RemotePort) { ($PortFilter.RemotePort -join ",") } else { "Any" }
                 $Program = if ($AppFilter -and $AppFilter.Program) { [string]$AppFilter.Program } else { "Any" }
 
-                # Skip rules belonging to standard Steam games or auto-registered browser mDNS rules if requested
-                if ($Program -ne "Any" -and $Program -match '(?i)(\\Steam\\steamapps\\common\\|\\Google\\Chrome\\Application\\chrome\.exe|\\BraveSoftware\\|\\Mozilla Firefox\\)') {
+                # Skip rules belonging to Steam client/games or auto-registered browser rules that are recreated on install
+                if ($Program -ne "Any" -and $Program -match '(?i)(\\Steam\\(steam\.exe|bin\\|steamapps\\common\\)|\\Google\\Chrome\\Application\\chrome\.exe|\\BraveSoftware\\|\\Mozilla Firefox\\)') {
                     continue
                 }
 

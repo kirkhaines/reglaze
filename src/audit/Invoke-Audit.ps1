@@ -322,7 +322,7 @@ $StreamVerifyYaml = $StreamVerify -replace '\\', '\\'
 $EscapeYamlStr = {
     param([string]$Val)
     if ([string]::IsNullOrEmpty($Val)) { return "" }
-    $Clean = ($Val -replace "`0", "")
+    $Clean = ($Val -replace "[\r\n\0]", "").Trim()
     return ($Clean -replace '\\', '\\' -replace '"', '\"')
 }
 
@@ -720,13 +720,14 @@ if ($PreservedSteamLibs.Count -gt 0) {
     $YamlLines.Add('  steam_libraries: []')
 }
 
+$CleanUserStr = if ($UserIdentityData.username) { & $EscapeYamlStr ($UserIdentityData.username -replace '[\r\n\0]', '').Trim() } else { "user" }
 @(
     '  api_credentials:',
     '    client_id_env: "GDRIVE_CLIENT_ID"',
     '    client_secret_env: "GDRIVE_CLIENT_SECRET"',
     '',
     'variables:',
-    '  USER_DIR: "%OS_DRIVE%\\Users\\' + $UserIdentityData.username + '"',
+    "  USER_DIR: `"%OS_DRIVE%\\Users\\$CleanUserStr`"",
     '  GAMES_DIR: "%DATA_DRIVE%\\Games"',
     '  STEAM_DIR: "%DATA_DRIVE%\\SteamLibrary"',
     '',

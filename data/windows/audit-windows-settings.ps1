@@ -130,18 +130,44 @@ try {
 } catch {}
 
 # 2. Quick Access Pinned Folders, Taskbar Pinned Apps & Start Menu Pinned Apps
+$ShellApp = $null
 try {
     $ShellApp = New-Object -ComObject Shell.Application -ErrorAction SilentlyContinue
+} catch {}
+
+try {
     if ($ShellApp) {
+        # Build set of the 6 default Windows user folders (both %USERPROFILE%\<Folder> and relocated User Shell Folders)
+        $DefaultQaFolders = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+        foreach ($SubName in @("Desktop", "Downloads", "Documents", "Pictures", "Music", "Videos")) {
+            if ($env:USERPROFILE) {
+                [void]$DefaultQaFolders.Add((Join-Path $env:USERPROFILE $SubName).TrimEnd('\'))
+            }
+        }
+        $UsfReg = Get-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders" -ErrorAction SilentlyContinue
+        if ($UsfReg) {
+            foreach ($UsfProp in @("Desktop", "Personal", "{374DE290-123F-4565-9164-39C4925E467B}", "My Pictures", "My Music", "My Video")) {
+                $RawUsf = $UsfReg.$UsfProp
+                if (-not [string]::IsNullOrWhiteSpace($RawUsf)) {
+                    $ExpUsf = [Environment]::ExpandEnvironmentVariables($RawUsf).TrimEnd('\')
+                    [void]$DefaultQaFolders.Add($ExpUsf)
+                }
+            }
+        }
+
         $QaNamespace = $ShellApp.Namespace("shell:::{679f85cb-0220-4080-b29b-5540cc05aab6}")
         if ($QaNamespace) {
             $QaPins = [System.Collections.Generic.List[string]]::new()
+            $SeenQa = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
             foreach ($Item in $QaNamespace.Items()) {
-                if ($Item.IsFolder -and $Item.Path -and (Test-Path -LiteralPath $Item.Path -ErrorAction SilentlyContinue)) {
-                    if (-not $QaPins.Contains($Item.Path)) {
-                        $QaPins.Add($Item.Path)
+                try {
+                    if ($Item.IsFolder -and $Item.Path -and (Test-Path -LiteralPath $Item.Path -ErrorAction SilentlyContinue)) {
+                        $NormQa = $Item.Path.TrimEnd('\')
+                        if (-not $DefaultQaFolders.Contains($NormQa) -and $SeenQa.Add($NormQa)) {
+                            $QaPins.Add($Item.Path)
+                        }
                     }
-                }
+                } catch {}
             }
             $Settings.explorer.quick_access_pins = $QaPins.ToArray()
         }
@@ -149,18 +175,82 @@ try {
 } catch {}
 
 try {
-    $TaskbarPinDir = Join-Path $env:APPDATA "Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar"
+    $UserPinnedRoot = Join-Path $env:APPDATA "Microsoft\Internet Explorer\Quick Launch\User Pinned"
+    $TaskbarPinDir = Join-Path $UserPinnedRoot "TaskBar"
+    $ImplicitPinDir = Join-Path $UserPinnedRoot "ImplicitAppShortcuts"
+
+    $LnkFiles = [System.Collections.Generic.List[System.IO.FileInfo]]::new()
     if (Test-Path -LiteralPath $TaskbarPinDir) {
+        foreach ($F in (Get-ChildItem -LiteralPath $TaskbarPinDir -Filter "*.lnk" -File -Force -ErrorAction SilentlyContinue)) {
+            $LnkFiles.Add($F)
+        }
+    }
+    if (Test-Path -LiteralPath $ImplicitPinDir) {
+        foreach ($F in (Get-ChildItem -LiteralPath $ImplicitPinDir -Filter "*.lnk" -File -Recurse -Force -ErrorAction SilentlyContinue)) {
+            $LnkFiles.Add($F)
+        }
+    }
+
+    if ($LnkFiles.Count -gt 0) {
         $WshShell = New-Object -ComObject WScript.Shell -ErrorAction SilentlyContinue
         $PinnedTargets = [System.Collections.Generic.List[string]]::new()
-        foreach ($Lnk in (Get-ChildItem -LiteralPath $TaskbarPinDir -Filter "*.lnk" -ErrorAction SilentlyContinue)) {
+        $SeenPinned = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+
+        foreach ($Lnk in $LnkFiles) {
+            $ResolvedTarget = $null
+
+            # Method 1: WScript.Shell CreateShortcut
             if ($WshShell) {
-                $Sc = $WshShell.CreateShortcut($Lnk.FullName)
-                if ($Sc -and -not [string]::IsNullOrWhiteSpace($Sc.TargetPath)) {
-                    $PinnedTargets.Add($Sc.TargetPath)
-                } else {
-                    $PinnedTargets.Add($Lnk.BaseName)
-                }
+                try {
+                    $Sc = $WshShell.CreateShortcut($Lnk.FullName)
+                    if ($Sc -and -not [string]::IsNullOrWhiteSpace($Sc.TargetPath)) {
+                        $ResolvedTarget = $Sc.TargetPath.Trim()
+                    }
+                } catch {}
+            }
+
+            # Method 2: Shell.Application ShellLinkObject fallback
+            if ([string]::IsNullOrWhiteSpace($ResolvedTarget) -and $ShellApp) {
+                try {
+                    $DirNs = $ShellApp.Namespace($Lnk.DirectoryName)
+                    if ($DirNs) {
+                        $FolderItem = $DirNs.ParseName($Lnk.Name)
+                        if ($FolderItem -and $FolderItem.IsLink) {
+                            $ShellLink = $FolderItem.GetLink
+                            if ($ShellLink -and -not [string]::IsNullOrWhiteSpace($ShellLink.Path) -and $ShellLink.Path -notmatch '^::\{') {
+                                $ResolvedTarget = $ShellLink.Path.Trim()
+                            }
+                        }
+                    }
+                } catch {}
+            }
+
+            # Method 3: Raw .lnk binary executable path extraction (for custom AppUserModelID/MSI shortcuts like Steam)
+            if ([string]::IsNullOrWhiteSpace($ResolvedTarget)) {
+                try {
+                    $Bytes = [System.IO.File]::ReadAllBytes($Lnk.FullName)
+                    $AsciiText = [System.Text.Encoding]::ASCII.GetString($Bytes)
+                    $UnicodeText = [System.Text.Encoding]::Unicode.GetString($Bytes)
+                    foreach ($CandidateText in @($UnicodeText, $AsciiText)) {
+                        $MatchesExe = [regex]::Matches($CandidateText, '[A-Za-z]:\\[^\x00-\x1F"<>|?*]+?\.exe')
+                        foreach ($M in $MatchesExe) {
+                            if (Test-Path -LiteralPath $M.Value -ErrorAction SilentlyContinue) {
+                                $ResolvedTarget = $M.Value
+                                break
+                            }
+                        }
+                        if (-not [string]::IsNullOrWhiteSpace($ResolvedTarget)) { break }
+                    }
+                } catch {}
+            }
+
+            # Method 4: BaseName fallback
+            if ([string]::IsNullOrWhiteSpace($ResolvedTarget)) {
+                $ResolvedTarget = $Lnk.BaseName
+            }
+
+            if (-not [string]::IsNullOrWhiteSpace($ResolvedTarget) -and $SeenPinned.Add($ResolvedTarget)) {
+                $PinnedTargets.Add($ResolvedTarget)
             }
         }
         $Settings.taskbar.pinned_apps = $PinnedTargets.ToArray()
@@ -186,7 +276,29 @@ try {
 } catch {}
 
 try {
-    # Start Menu Pins via Export-StartLayout (read-only export to temp file)
+    # Start Menu Pins via Export-StartLayout (read-only export to temp file), filtering out default Windows 11 inbox pins
+    $IsDefaultStartPin = {
+        param([string]$PinVal)
+        if ([string]::IsNullOrWhiteSpace($PinVal)) { return $true }
+        $Trimmed = $PinVal.Trim()
+
+        # Default Windows 11 packagedAppId / AUMID inbox pins
+        if ($Trimmed -match '^(Microsoft\.WindowsStore|windows\.immersivecontrolpanel|Microsoft\.Windows\.Photos|Microsoft\.GamingApp|Microsoft\.XboxGamingOverlay|Microsoft\.XboxApp|Microsoft\.MicrosoftSolitaireCollection|Microsoft\.Paint|7EE7776C\.LinkedInforWindows|Microsoft\.WindowsCalculator|Microsoft\.WindowsAlarms|Microsoft\.WindowsNotepad|Microsoft\.ScreenSketch|Microsoft\.OutlookforWindows|Microsoft\.Todos|Clipchamp\.Clipchamp|Microsoft\.BingNews|Microsoft\.BingWeather|Microsoft\.YourPhone|Microsoft\.GetHelp|Microsoft\.WindowsFeedbackHub|Microsoft\.WindowsSoundRecorder|Microsoft\.WindowsCamera|Microsoft\.ZuneMusic|Microsoft\.ZuneVideo|Microsoft\.PowerAutomateDesktop|Microsoft\.MicrosoftStickyNotes|Microsoft\.MicrosoftOfficeHub|Microsoft\.Copilot|Microsoft\.365Copilot|MicrosoftCorporationII\.QuickAssist|Microsoft\.WindowsTerminal|Microsoft\.WindowsMaps|Microsoft\.People|Microsoft\.WindowsCommunicationsApps)_') {
+            return $true
+        }
+
+        # Default Windows 11 desktopAppLink / desktopAppId inbox pins (Microsoft Edge, File Explorer)
+        $Leaf = Split-Path -Leaf $Trimmed -ErrorAction SilentlyContinue
+        if ($Leaf -match '^(Microsoft Edge\.lnk|File Explorer\.lnk|Windows Explorer\.lnk)$') {
+            return $true
+        }
+        if ($Trimmed -match '^(MSEdge|Microsoft\.Windows\.Explorer|Microsoft\.AutoGenerated\.)') {
+            return $true
+        }
+
+        return $false
+    }
+
     if (Get-Command "Export-StartLayout" -ErrorAction SilentlyContinue) {
         $TempStartJson = Join-Path $env:TEMP "reglaze_startlayout_$((Get-Random)).json"
         Export-StartLayout -Path $TempStartJson -ErrorAction SilentlyContinue
@@ -196,12 +308,16 @@ try {
             if ($StartObj -and $StartObj.pinnedList) {
                 $StartPins = [System.Collections.Generic.List[string]]::new()
                 foreach ($Pin in $StartObj.pinnedList) {
+                    $CandidatePin = $null
                     if ($Pin.desktopAppLink) {
-                        $StartPins.Add([Environment]::ExpandEnvironmentVariables($Pin.desktopAppLink))
+                        $CandidatePin = [Environment]::ExpandEnvironmentVariables($Pin.desktopAppLink)
                     } elseif ($Pin.desktopAppId) {
-                        $StartPins.Add($Pin.desktopAppId)
+                        $CandidatePin = $Pin.desktopAppId
                     } elseif ($Pin.packagedAppId) {
-                        $StartPins.Add($Pin.packagedAppId)
+                        $CandidatePin = $Pin.packagedAppId
+                    }
+                    if ($CandidatePin -and -not (& $IsDefaultStartPin $CandidatePin)) {
+                        $StartPins.Add($CandidatePin)
                     }
                 }
                 $Settings.start_menu.pinned_apps = $StartPins.ToArray()
@@ -509,7 +625,7 @@ try {
     }
 
     $SshDir = Join-Path $env:USERPROFILE ".ssh"
-    if (Test-Path -LiteralPath $SshDir) {
+    if (Test-Path -LiteralPath $SshDir -ErrorAction SilentlyContinue) {
         $SshItem = Get-Item -LiteralPath $SshDir -Force -ErrorAction SilentlyContinue
         $IsJunction = ($null -ne $SshItem -and (($SshItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0))
         if (-not $IsJunction -and $SshDir -like "C:\*") {

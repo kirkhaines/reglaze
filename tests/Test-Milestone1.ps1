@@ -164,15 +164,19 @@ Assert-Test "Resolve-ConflictFreeStreamingMountLetter prefers G: when free and p
     return ($WhenGFree -eq "G:" -and $WhenGTaken -eq "E:" -and $WhenDETaken -eq "F:")
 }
 
-Assert-Test "Test-IsIgnoredApplication filters Windows inbox MSIX, OS components, VC++ redistributables, NVIDIA drivers, and Steamworks redistributables" {
+Assert-Test "Test-IsIgnoredApplication filters Windows inbox MSIX, OS components, Teams/Outlook/WindowsTerminal/Copilot, VC++ redistributables, NVIDIA drivers, and Steamworks redistributables" {
     $IgnoreMsix = Test-IsIgnoredApplication -WingetId "MSIX\Microsoft.WindowsCalculator_11.2607.0.0_x64__8wekyb3d8bbwe" -Name "Windows Calculator"
     $IgnoreAppInstaller = Test-IsIgnoredApplication -WingetId "Microsoft.AppInstaller" -Name "App Installer"
+    $IgnoreTeams = Test-IsIgnoredApplication -WingetId "Microsoft.Teams" -Name "Microsoft Teams"
+    $IgnoreOutlook = Test-IsIgnoredApplication -WingetId "Microsoft.Outlook" -Name "Outlook for Windows"
+    $IgnoreWinTerm = Test-IsIgnoredApplication -WingetId "Microsoft.WindowsTerminal" -Name "Windows Terminal"
+    $IgnoreCopilotArp = Test-IsIgnoredApplication -Name "Copilot" -InstallLocation "C:\Program Files (x86)\Microsoft\Copilot\Application"
     $IgnoreVcRedist = Test-IsIgnoredApplication -Name "Microsoft Visual C++ 2013 Redistributable (x64) - 12.0.30501"
     $IgnoreNvidiaDriver = Test-IsIgnoredApplication -Name "NVIDIA Graphics Driver 616.92"
     $IgnoreSteamworks = Test-IsIgnoredApplication -Name "Steamworks Common Redistributables" -SteamId 228980
     $KeepRealApp = -not (Test-IsIgnoredApplication -WingetId "ObsProject.OBSStudio" -Name "OBS Studio")
     $UserExplicitIgnore = Test-IsIgnoredApplication -Name "OEM Bloatware" -MatchedApp ([PSCustomObject]@{ app_id = "oem_bloat"; ignore = $true })
-    return ($IgnoreMsix -and $IgnoreAppInstaller -and $IgnoreVcRedist -and $IgnoreNvidiaDriver -and $IgnoreSteamworks -and $KeepRealApp -and $UserExplicitIgnore)
+    return ($IgnoreMsix -and $IgnoreAppInstaller -and $IgnoreTeams -and $IgnoreOutlook -and $IgnoreWinTerm -and $IgnoreCopilotArp -and $IgnoreVcRedist -and $IgnoreNvidiaDriver -and $IgnoreSteamworks -and $KeepRealApp -and $UserExplicitIgnore)
 }
 
 Assert-Test "Get-NetworkAudit discovers network adapters, sharing mode, and custom firewall rules" {
@@ -233,8 +237,9 @@ Assert-Test "Invoke-Audit.ps1 emits audit-reference.json, profile-computers.json
     $SingleDataDrive = ($DataDriveMatches.Count -le 1)
 
     $HasGenDate = ($YamlContent -match 'generation_date:\s*"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}"')
+    $HasSingleLineUserDir = ($YamlContent -match '(?m)^\s*USER_DIR:\s*"%OS_DRIVE%\\\\Users\\\\[^"\r\n]+"\r?$')
 
-    return ($HasNoNullBytes -and $HasMetadata -and $HasProfileAssoc -and $HasDisks -and $HasLicensing -and $HasOsDisk -and $HasUsers -and $HasSourceComp -and $HasExpandedWinSettings -and $HasNetworkSection -and $HasShellFoldersSection -and $SingleDataDrive -and $HasGenDate)
+    return ($HasNoNullBytes -and $HasMetadata -and $HasProfileAssoc -and $HasDisks -and $HasLicensing -and $HasOsDisk -and $HasUsers -and $HasSourceComp -and $HasExpandedWinSettings -and $HasNetworkSection -and $HasShellFoldersSection -and $SingleDataDrive -and $HasGenDate -and $HasSingleLineUserDir)
 }
 
 Assert-Test "Invoke-Audit.ps1 inherits profile from existing reglaze.yaml and archives with second-level precision generation_date" {

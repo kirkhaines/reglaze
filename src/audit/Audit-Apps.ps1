@@ -18,11 +18,12 @@ function Test-IsIgnoredApplication {
         [string]$WingetId = $null,
         [string]$Name = $null,
         [Nullable[int]]$SteamId = $null,
+        [string]$InstallLocation = $null,
         [PSCustomObject]$MatchedApp = $null
     )
 
-    if ($MatchedApp) {
-        if ($MatchedApp.PSObject.Properties["ignore"] -and [bool]$MatchedApp.ignore) {
+    if ($MatchedApp -and $MatchedApp.PSObject.Properties["ignore"]) {
+        if ([bool]$MatchedApp.ignore) {
             return $true
         }
         return $false
@@ -34,15 +35,23 @@ function Test-IsIgnoredApplication {
 
     if (-not [string]::IsNullOrWhiteSpace($WingetId)) {
         $IsSystemNoise = ($WingetId -match "^MSIX\\") -or
-                         ($WingetId -match "^(Microsoft\.VCRedist|Microsoft\.VCLibs|Microsoft\.UI\.Xaml|Microsoft\.WindowsAppRuntime|Microsoft\.DotNet\.|Microsoft\.CLRTypesSQLServer|Microsoft\.WindowsSDK\.|Microsoft\.AppInstaller$|Microsoft\.Edge$|Microsoft\.OneDrive$|Microsoft\.365Copilot$|Microsoft\.WidgetsPlatformRuntime|Microsoft\.WSL$|Nvidia\.PhysX$|Python\.Launcher$)")
+                         ($WingetId -match "^(Microsoft\.VCRedist|Microsoft\.VCLibs|Microsoft\.UI\.Xaml|Microsoft\.WindowsAppRuntime|Microsoft\.DotNet\.|Microsoft\.CLRTypesSQLServer|Microsoft\.WindowsSDK\.|Microsoft\.AppInstaller$|Microsoft\.Edge$|Microsoft\.EdgeWebView2Runtime$|Microsoft\.OneDrive$|Microsoft\.365Copilot$|Microsoft\.Copilot$|Microsoft\.Teams(\.Classic|\.Free)?$|Microsoft\.Outlook$|Microsoft\.WindowsTerminal(\.Preview)?$|Microsoft\.PowerAutomateDesktop$|Microsoft\.DevHome$|Microsoft\.BingWallpaper$|Microsoft\.QuickAssist$|Microsoft\.WidgetsPlatformRuntime|Microsoft\.WSL$|Nvidia\.PhysX$|Python\.Launcher$)")
         if ($IsSystemNoise) {
             return $true
         }
     }
 
     if (-not [string]::IsNullOrWhiteSpace($Name)) {
-        $IsArpOrSteamNoise = ($Name -match "^(Adobe Genuine Service|Microsoft Windows Application Compatibility Fix Database|vs_CoreEditorFonts|Windows SDK AddOn|Windows Software Development Kit|Microsoft Visual C\+\+ .*Redistributable|Microsoft System CLR Types for SQL Server|Microsoft \.NET (Runtime|Host|SDK|Targeting Pack|AppHost|Standard)|Microsoft (Edge|OneDrive|Update Health Tools)|NVIDIA (Graphics Driver|PhysX|USBC Driver|HD Audio Driver|FrameView SDK|Vulkan|Nsight)|Steamworks Common Redistributables|Proton |Steam Linux Runtime|.*HD Audio Driver.*|.*USB Audio Drivers.*|.*FrameView SDK.*)")
+        $IsArpOrSteamNoise = ($Name -match "^(Adobe Genuine Service|Microsoft Windows Application Compatibility Fix Database|vs_CoreEditorFonts|Windows SDK AddOn|Windows Software Development Kit|Microsoft Visual C\+\+ .*Redistributable|Microsoft System CLR Types for SQL Server|Microsoft \.NET (Runtime|Host|SDK|Targeting Pack|AppHost|Standard)|Microsoft (Edge|OneDrive|Update Health Tools|Teams.*|365 Copilot|Copilot|Dev Home)|Copilot$|Outlook for Windows$|Windows Terminal$|Power Automate for desktop$|Dev Home$|NVIDIA (Graphics Driver|PhysX|USBC Driver|HD Audio Driver|FrameView SDK|Vulkan|Nsight)|Steamworks Common Redistributables|Proton |Steam Linux Runtime|.*HD Audio Driver.*|.*USB Audio Drivers.*|.*FrameView SDK.*)")
         if ($IsArpOrSteamNoise) {
+            return $true
+        }
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($InstallLocation)) {
+        $TrimLoc = $InstallLocation.Trim()
+        if ($TrimLoc -match "^[A-Za-z]:\\Program Files( \(x86\))?\\Microsoft\\(Copilot|Edge|EdgeUpdate|EdgeWebView|OneDrive|Teams)(\\|$)" -or
+            $TrimLoc -match "\\WindowsApps\\Microsoft\.") {
             return $true
         }
     }
@@ -243,7 +252,7 @@ function Get-InstalledApplicationsAudit {
                 }
 
                 # Skip driver-only subcomponents, redistributables, and internal runtime noise unless explicitly cataloged
-                if (Test-IsIgnoredApplication -Name $DisplayName -SteamId $ArpSteamId -MatchedApp $MatchedApp) {
+                if (Test-IsIgnoredApplication -Name $DisplayName -SteamId $ArpSteamId -InstallLocation $Entry.InstallLocation -MatchedApp $MatchedApp) {
                     continue
                 }
 

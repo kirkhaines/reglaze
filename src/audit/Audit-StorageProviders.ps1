@@ -105,7 +105,7 @@ function Get-StorageProvidersAudit {
 
         $IsGoogleDrive = ($Drive.Description -and $Drive.Description -like "*Google Drive*") -or
                          ($VolLabel -and $VolLabel -like "*Google Drive*") -or
-                         (Test-Path -LiteralPath $MyDrivePath)
+                         (Test-Path -LiteralPath $MyDrivePath -ErrorAction SilentlyContinue)
         if ($IsGoogleDrive) {
             $StreamingInfo.cloud_provider  = "google-drive"
             $StreamingInfo.mount_point     = "${DriveLetter}:"
@@ -120,7 +120,7 @@ function Get-StorageProvidersAudit {
     $SyncedDirectories = @()
     $DriveFsDb = Join-Path $env:LOCALAPPDATA "Google\DriveFS\root_preference_sqlite.db"
 
-    if (Test-Path $DriveFsDb) {
+    if (Test-Path $DriveFsDb -ErrorAction SilentlyContinue) {
         try {
             $TempDb = Join-Path $env:TEMP "reglaze_drivefs_roots_$((Get-Random)).db"
             # Copy with FileShare ReadWrite to avoid locking collisions

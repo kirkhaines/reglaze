@@ -61,7 +61,7 @@ function Get-SteamLibraries {
                     $Matches = [regex]::Matches($Content, '"path"\s+"([^"]+)"')
                     foreach ($Match in $Matches) {
                         $ParsedPath = $Match.Groups[1].Value -replace '\\\\', '\' -replace '/', '\'
-                        if (Test-Path -LiteralPath $ParsedPath) {
+                        if (Test-Path -LiteralPath $ParsedPath -ErrorAction SilentlyContinue) {
                             $Libraries.Add($ParsedPath) | Out-Null
                         }
                     }
@@ -82,9 +82,9 @@ function Get-SteamLibraries {
                     (Join-Path $Drv.Root "Games\Steam")
                 )
                 foreach ($Cand in $Candidates) {
-                    if (Test-Path -LiteralPath $Cand) {
+                    if (Test-Path -LiteralPath $Cand -ErrorAction SilentlyContinue) {
                         $AppsSub = Join-Path $Cand "steamapps"
-                        if (Test-Path -LiteralPath $AppsSub) {
+                        if (Test-Path -LiteralPath $AppsSub -ErrorAction SilentlyContinue) {
                             $Libraries.Add($Cand) | Out-Null
                         }
                     }
@@ -96,7 +96,7 @@ function Get-SteamLibraries {
     # 4. Include explicit additional search paths (for testing / custom configurations)
     if ($AdditionalPaths) {
         foreach ($AddPath in $AdditionalPaths) {
-            if ($AddPath -and (Test-Path -LiteralPath $AddPath)) {
+            if ($AddPath -and (Test-Path -LiteralPath $AddPath -ErrorAction SilentlyContinue)) {
                 $Libraries.Add($AddPath) | Out-Null
             }
         }
