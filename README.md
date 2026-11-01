@@ -71,8 +71,8 @@ Modern software engineering treats servers and compute runtimes as disposable in
 | :--- | :--- | :--- |
 | **0. Pre-Flight Audit** | `audit.ps1` | Scans the active PC prior to wiping (requires `-Profile <name>` when no existing `reglaze.yaml` is present). Extracts BitLocker recovery keys, Windows activation/license info, physical disk and partition GUIDs/IDs, active directory junctions, installed WinGet packages, Git remotes, and environment variables. Records the computer-to-profile mapping in `profile-computers.json`, correlates detected software against `data/applications.json`, and emits `audit-reference.json` alongside an initial, scaffolded `reglaze.yaml`. |
 | **1. User Blueprint Review & Validation** | Manual / Config Editor & Compiler | The user inspects and edits `reglaze.yaml` against `audit-reference.json`. The `reglaze` compiler validates declared applications against `data/applications.json`: any directory marked `needs_mapping: true` must be mapped to its recommended target type (`streaming` vs `sync`), or the user must provide an explicit `override` with a rationale. Uncataloged apps and custom folders are declared under `custom:`. |
-| **1b. Pre-Install Data Staging (`migration-plan` & `migrate`)** | `Invoke-PreInstallMigration.ps1` | For existing Windows installs that do not yet use directory junctions, `reglaze migration-plan` inspects the edited `reglaze.yaml` and `audit-reference.json` to emit a draft `migration-manifest.yaml` with measured byte sizes and file counts. After the user reviews/edits the manifest to disable or remove any unneeded directories, `reglaze migrate` creates all target sync/streaming/data directories and transfers files using multi-threaded `robocopy.exe` (`/MT:16 /E /XO`) so the targets are ready before wiping the OS. |
-| **2. Media Generation** | `Compile-Reglaze.ps1` & `New-InstallMedia.ps1` | Compiles `reglaze.yaml` into tool-specific artifacts (`autounattend.xml`, `configuration.dsc.yaml`, `bootstrap.ps1`, `setup-wsl.sh`) and packages them onto bootable installation media (USB or ISO) with required drivers and bootstrap scripts. |
+| **1b. Pre-Install Data Staging (`migration-plan` & `migrate`)** | `Invoke-PreInstallMigration.ps1` | For existing Windows installs that do not yet use directory junctions, `reglaze migration-plan` inspects the edited `reglaze.yaml` and `audit-reference.json` to emit a draft `migration-manifest.yaml` with measured byte sizes and file counts. After the user reviews/edits the manifest to disable or remove any unneeded directories, `reglaze migrate` creates all target sync/streaming/data directories and transfers files using multi-threaded `robocopy.exe` (`/MT:2 /E /XO`) so the targets are ready before wiping the OS. |
+| **2. Media Generation** | `Compile-Reglaze.ps1` & `Build-Media.ps1` | Compiles `reglaze.yaml` into tool-specific artifacts (`autounattend.xml`, `configuration.dsc.yaml`, `bootstrap.ps1`, `setup-wsl.sh`) and packages them onto bootable installation media (USB or ISO) with required drivers and bootstrap scripts. |
 | **3. Unattended Install** | `autounattend.xml` | Boots from media, identifies target OS disk via multi-factor hardware attributes (Serial Number, Bus Type, Model) to protect secondary drives, partitions and applies Windows image, provisions dedicated `LocalAdmin` with temporary setup auto-logon, and creates the primary standard user account (`local_to_msa`). |
 | **4. Machine Provisioning & BitLocker Recovery** | `bootstrap.ps1`, `Set-ReglazeDriveLetters.ps1` & WinGet DSC | Auto-logs into `LocalAdmin`. Reconciles preserved drive letters via a 3-phase atomic swap (clearing unconfigured fixed drives and moving removable media out of reserved letters), installs WHQL storage/chipset drivers, halts with a safe power-down checkpoint (`Stop-Computer`) if required preserved disks were physically disconnected during install so the user can reconnect them, unlocks preserved BitLocker volumes by hardware identity (`SerialNumber` + `PartitionGuid`), sets Google Drive `DefaultMountPoint` policy, provisions packages via WinGet DSC, pre-stages WSL2, and purges auto-logon credentials before rebooting. |
 | **5. User & Application Hydration** | `hydrate.ps1` & `Setup-Wsl.ps1` | Primary standard user signs in interactively (connecting to MSA). Staged human-in-the-loop steps: cloud storage authentication (Google Drive sentinel mount) &rarr; Steam GUI sign-in (instantly detects pre-existing `%DATA_DRIVE%` library) &rarr; manual app install guidance (e.g. OutFox). Establishes directory junctions, executes non-interactive WSL2 root user provisioning with `rclone bisync`, clones `dev_repos`, and runs post-flight health verification. |
@@ -119,7 +119,7 @@ reglaze/
 │   │   │   └── RcloneGenerator.ps1
 │   │   └── Compile-Reglaze.ps1
 │   ├── media/                  # Media creation utilities
-│   │   └── New-InstallMedia.ps1# Injects unattended artifacts into bootable USB/ISO
+│   │   └── Build-Media.ps1     # Native UEFI bootable USB builder with DISM split
 │   └── runtime/                # Scripts packaged onto the deployment media
 │       ├── Install-Junctions.ps1
 │       ├── Test-CloudMount.ps1
@@ -473,12 +473,12 @@ Before wiping an existing installation, `reglaze` runs a non-destructive discove
 
 ---
 
-## 8. Instructions for Testers
+## 8. Usage Instructions
 
 1. **Clone the Repo:** Clone `reglaze` to a secondary machine or run inside a test VM (Hyper-V or Proxmox).
 2. **Execute Pre-Flight Audit (Optional on Existing PC):**
    ```powershell
-   pwsh ./bin/reglaze.ps1 audit -Profile workstation -OutputDir ./audit-output
+   pwsh ./bin/reglaze.ps1 audit -Profile workstation -ConfigDir ./audit-output
    ```
    Inspect `audit-output/audit-reference.json` and review the scaffolded `reglaze.yaml`.
 3. **Review & Edit `reglaze.yaml`:**
@@ -491,21 +491,31 @@ Before wiping an existing installation, `reglaze` runs a non-destructive discove
 4. **Stage Existing User Data Before Wiping (`migration-plan` & `migrate`):**
    * Generate a draft migration manifest with measured directory sizes and file counts:
      ```powershell
-     pwsh ./bin/reglaze.ps1 migration-plan -Config ./audit-output/reglaze.yaml
+     pwsh ./bin/reglaze.ps1 migration-plan -ConfigDir ./audit-output
      ```
    * Review and edit `./audit-output/migration-manifest.yaml` (set `enabled: false` or delete any item you do not wish to retain).
    * Create all required sync/streaming/data target directories and copy existing files using multi-threaded `robocopy.exe`:
      ```powershell
-     pwsh ./bin/reglaze.ps1 migrate -Config ./audit-output/reglaze.yaml
+     pwsh ./bin/reglaze.ps1 migrate -ConfigDir ./audit-output
      ```
-5. **Run the Compiler & Media Generator:**
+5. **Compile Blueprint & Build Bootable USB Media:**
    ```powershell
-   pwsh ./src/compiler/Compile-Reglaze.ps1 -Config ./examples/reglaze.yaml -OutputDir ./dist
-   pwsh ./src/media/New-InstallMedia.ps1 -ArtifactsDir ./dist -TargetDrive "E:"
+   # Compile declarative blueprint into deployment media artifacts
+   pwsh ./bin/reglaze.ps1 compile -ConfigDir ./audit-output -DistDir ./dist
+   # Create vanilla UEFI bootable USB installer (formats USB, splits install.wim via DISM, injects artifacts; prompts for UAC elevation if needed)
+   pwsh ./bin/reglaze.ps1 media -DistDir ./dist -UsbDrive "E:"
    ```
-5. **Inspect Generated Artifacts (`./dist`):**
+6. **Inspect Generated Artifacts (`./dist`) (Optional):**
    * Check `autounattend.xml` against the target disk setup, partition layout, and dual-user (`LocalAdmin` + standard user) provisioning.
    * Review `configuration.dsc.yaml` to ensure all package IDs resolve.
    * Review `bootstrap.ps1` for mount point checks, sync folder verifications, and junction arguments.
    * Review `setup-wsl.sh` and generated `rclone.conf` for WSL2 dev repo synchronization with injected Google Drive API credentials.
-6. **Report Issues:** Submit feedback on catalog validations, broken WinGet packages, drive letter race conditions, BitLocker recovery, or API rate limit handling.
+7. **Deploy & Hydrate:**
+   * Boot target computer from USB installation media.
+   * Windows Setup installs the OS unattended with dedicated `LocalAdmin` and auto-logon.
+   * Phase 4 machine bootstrap reconciles drive letters, unlocks BitLocker volumes, and installs apps via WinGet DSC.
+   * Sign into your standard daily driver account and run hydration:
+     ```powershell
+     pwsh ./bin/reglaze.ps1 hydrate -Config "C:\Reglaze\reglaze.yaml"
+     ```
+8. **Report Issues:** Submit feedback on catalog validations, broken WinGet packages, drive letter race conditions, BitLocker recovery, or API rate limit handling.

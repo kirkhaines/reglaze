@@ -93,7 +93,9 @@ function New-ReglazeBootableUsb {
 
         [switch]$Force = $false,
         [switch]$Simulation = $true,
-        [switch]$Live = $false
+        [switch]$Live = $false,
+        [switch]$Elevate = $false,
+        [switch]$SkipElevation = $false
     )
 
     $IsSimulated = $Simulation -or (-not $Live)
@@ -104,6 +106,72 @@ function New-ReglazeBootableUsb {
     Write-Host "================================================================================" -ForegroundColor Cyan
     Write-Host "       REGLAZE VANILLA WINDOWS 11 UEFI MEDIA CREATION ENGINE                    " -ForegroundColor Cyan
     Write-Host "================================================================================" -ForegroundColor Cyan
+
+    # 0. Pre-Flight Administrator Elevation Check (Required for DISM /Split-Image and disk operations)
+    $IsAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+    if (-not $IsAdmin -and -not $IsSimulated) {
+        $CanPrompt = [Environment]::UserInteractive -and -not [Console]::IsInputRedirected -and -not $SkipElevation
+        $ShouldElevate = $Elevate
+
+        if (-not $Elevate -and $CanPrompt) {
+            Write-Host ""
+            Write-Host "  [?] Bootable USB creation and DISM image splitting require Administrator elevation." -ForegroundColor Yellow
+            $Response = Read-Host "      Prompt for UAC elevation to create installation media? [Y/n]"
+            if (-not $Response -or $Response.Trim().ToLower() -ne 'n') {
+                $ShouldElevate = $true
+            }
+        }
+
+        if ($ShouldElevate) {
+            Write-Host "  [i] Requesting Administrator elevation via UAC..." -ForegroundColor Cyan
+            $RepoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+            $ReglazeCli = Join-Path $RepoRoot "bin\reglaze.ps1"
+
+            $Candidates = @()
+            if ($PSVersionTable.PSEdition -eq 'Core') {
+                $Candidates += "pwsh.exe"
+                $Candidates += "pwsh"
+                $Candidates += "powershell.exe"
+            } else {
+                $Candidates += "powershell.exe"
+                $Candidates += "pwsh.exe"
+            }
+
+            $ArgList = "-NoProfile -ExecutionPolicy Bypass -File `"$ReglazeCli`" media -UsbDrive `"$CleanLetter`" -IsoPath `"$IsoPath`" -DistDir `"$MediaArtifactsDir`"$(if ($Force) { ' -Force' })"
+
+            $ElevatedSuccess = $false
+            $LastError = $null
+            foreach ($Exe in $Candidates) {
+                if (-not (Get-Command $Exe -ErrorAction SilentlyContinue)) { continue }
+                try {
+                    $Proc = Start-Process -FilePath $Exe -ArgumentList $ArgList -Verb RunAs -Wait -PassThru -ErrorAction Stop
+                    if ($Proc.ExitCode -eq 0) {
+                        $ElevatedSuccess = $true
+                        break
+                    } else {
+                        $LastError = "Elevated media process exited with code $($Proc.ExitCode)."
+                    }
+                } catch {
+                    $LastError = $_.Exception.Message
+                }
+            }
+
+            if ($ElevatedSuccess) {
+                Write-Host "  [+] Elevated media creation completed successfully." -ForegroundColor Green
+                return [PSCustomObject]@{
+                    Status       = "Success"
+                    UsbDrive     = $TargetDriveLetter
+                    Format       = "FAT32"
+                    IsSimulated  = $false
+                    Elevated     = $true
+                }
+            } else {
+                throw "Administrator elevation failed or was canceled: $LastError"
+            }
+        } else {
+            throw "Media creation requires Administrator elevation to run DISM. Please relaunch PowerShell as Administrator or pass -Elevate."
+        }
+    }
 
     # 1. Disk & Target Safety Verification
     Write-Host "Verifying target USB drive: $TargetDriveLetter..." -ForegroundColor Yellow
@@ -226,9 +294,18 @@ function New-ReglazeBootableUsb {
                 Write-Host "  install.esd copied directly." -ForegroundColor Green
             } elseif (Test-Path -LiteralPath $SourceWim) {
                 Write-Host "  Running: dism.exe /Split-Image /ImageFile:`"$SourceWim`" /SWMFile:`"$TargetSwm`" /FileSize:3800" -ForegroundColor Cyan
-                & dism.exe /Split-Image /ImageFile:"$SourceWim" /SWMFile:"$TargetSwm" /FileSize:3800
-                if ($LASTEXITCODE -ne 0) {
-                    throw "DISM split operation failed with exit code: $LASTEXITCODE"
+                $DismExit = -1
+                if ($IsAdmin) {
+                    & dism.exe /Split-Image /ImageFile:"$SourceWim" /SWMFile:"$TargetSwm" /FileSize:3800
+                    $DismExit = $LASTEXITCODE
+                } else {
+                    Write-Host "  [i] Requesting UAC elevation for DISM image splitting..." -ForegroundColor Cyan
+                    $DismArgs = "/Split-Image /ImageFile:`"$SourceWim`" /SWMFile:`"$TargetSwm`" /FileSize:3800"
+                    $DismProc = Start-Process -FilePath "dism.exe" -ArgumentList $DismArgs -Verb RunAs -Wait -PassThru
+                    $DismExit = $DismProc.ExitCode
+                }
+                if ($DismExit -ne 0) {
+                    throw "DISM split operation failed with exit code: $DismExit"
                 }
                 Write-Host "  install.wim successfully split into install.swm slices." -ForegroundColor Green
             } else {
@@ -295,7 +372,7 @@ function New-ReglazeBootableUsb {
         UsbDrive          = $TargetDriveLetter
         Format            = "FAT32"
         IsSimulated       = $IsSimulated
-        AutounattendPath  = Join-Path $TargetDriveLetter "autounattend.xml"
-        PayloadPath       = Join-Path $TargetDriveLetter "payload"
+        AutounattendPath  = [System.IO.Path]::Combine("$TargetDriveLetter\", "autounattend.xml")
+        PayloadPath       = [System.IO.Path]::Combine("$TargetDriveLetter\", "payload")
     }
 }

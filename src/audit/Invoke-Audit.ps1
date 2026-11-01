@@ -9,7 +9,8 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$OutputDir = $null,
+    [Alias("Config", "c")]
+    [string]$ConfigDir = $null,
     [Alias("p")]
     [string]$Profile = $null,
     [switch]$Force = $false,
@@ -38,7 +39,7 @@ if (-not (Test-Path (Join-Path $RepoRoot "data\applications"))) {
 Write-ReglazeBanner "PRE-FLIGHT SYSTEM AUDIT"
 
 # 1. Resolve Target Output Directory & Profile Association
-$TargetDir = Resolve-ReglazeTargetDirectory -ExplicitDirectory $OutputDir
+$TargetDir = Resolve-ReglazeTargetDirectory -ExplicitDirectory $ConfigDir
 if (-not (Test-Path $TargetDir)) {
     New-Item -ItemType Directory -Path $TargetDir -Force | Out-Null
 }

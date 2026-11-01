@@ -579,7 +579,7 @@ applications:
     # TEST 8: Full End-to-End Compile Command
     # -------------------------------------------------------------------------
     $E2EMedia = Join-Path $TestDir "media_e2e"
-    $CompileRes = Invoke-ReglazeCompilation -ConfigFile $ValidYamlFile -TargetOutputDir $E2EMedia -AuditReferencePath $null -BypassValidation $false
+    $CompileRes = Invoke-ReglazeCompilation -ConfigFile $ValidYamlFile -DistDir $E2EMedia -AuditReferencePath $null -BypassValidation $false
     Assert-Test -Name "21. End-to-End Compile: generates media tree with autounattend.xml and staged DiskMatch.ps1" `
         -Condition (
             $CompileRes.Status -eq "Success" -and

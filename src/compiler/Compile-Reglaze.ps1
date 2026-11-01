@@ -7,15 +7,17 @@
     installation media directory containing autounattend.xml, WinPE dynamic disk matching,
     and the post-install provisioning payload.
 .EXAMPLE
-    Compile-Reglaze.ps1 -Config "G:\My Drive\Reglaze\reglaze.yaml" -OutputDir "./dist/media"
+    Compile-Reglaze.ps1 -ConfigDir "C:\reglaze-config" -DistDir "C:\reglaze-dist"
 #>
 [CmdletBinding()]
 param(
     [Parameter(Position=0)]
+    [Alias("ConfigDir", "c")]
     [string]$Config = $null,
 
     [Parameter(Position=1)]
-    [string]$OutputDir = $null,
+    [Alias("Dist", "d")]
+    [string]$DistDir = $null,
 
     [string]$AuditFile = $null,
 
@@ -36,8 +38,10 @@ $CommonRoot = Join-Path $RepoRoot "src\common"
 function Invoke-ReglazeCompilation {
     [CmdletBinding()]
     param(
+        [Alias("Config", "c")]
         [string]$ConfigFile = $null,
-        [string]$TargetOutputDir = $null,
+        [Alias("Dist", "d", "TargetDistDir")]
+        [string]$DistDir = $null,
         [string]$AuditReferencePath = $null,
         [bool]$BypassValidation = $false
     )
@@ -53,7 +57,7 @@ function Invoke-ReglazeCompilation {
     Write-ReglazeInfo "Blueprint Source: $BlueprintFile"
 
     # 2. Resolve Target Output Media Directory
-    $MediaDir = if ($TargetOutputDir) { $TargetOutputDir } else { (Join-Path $RepoRoot "dist\media") }
+    $MediaDir = if ($DistDir) { $DistDir } else { (Join-Path $RepoRoot "dist\media") }
     Write-ReglazeInfo "Media Target:     $MediaDir"
 
     # 3. Resolve Audit Reference Data
@@ -171,5 +175,5 @@ function Invoke-ReglazeCompilation {
 }
 
 if ($Config -or $MyInvocation.InvocationName -ne '.') {
-    Invoke-ReglazeCompilation -ConfigFile $Config -TargetOutputDir $OutputDir -AuditReferencePath $AuditFile -BypassValidation:$SkipValidation
+    Invoke-ReglazeCompilation -ConfigFile $Config -DistDir $DistDir -AuditReferencePath $AuditFile -BypassValidation:$SkipValidation
 }

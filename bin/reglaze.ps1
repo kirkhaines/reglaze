@@ -6,9 +6,9 @@
     audit, validate, compile, bootstrap, hydrate, and test.
 .EXAMPLE
     reglaze.ps1 audit
-    reglaze.ps1 audit -OutputDir "C:\reglaze-config"
-    reglaze.ps1 validate -Config "C:\reglaze-config\reglaze.yaml"
-    reglaze.ps1 compile -OutputDir "./dist"
+    reglaze.ps1 audit -ConfigDir "C:\reglaze-config"
+    reglaze.ps1 validate -ConfigDir "C:\reglaze-config"
+    reglaze.ps1 compile -ConfigDir "C:\reglaze-config" -DistDir "C:\reglaze-dist"
 #>
 [CmdletBinding()]
 param (
@@ -19,20 +19,20 @@ param (
     [Parameter(Position=1)]
     [string]$Target = $null,
 
-    [Alias("c")]
-    [string]$Config = $null,
+    [Alias("Config", "c")]
+    [string]$ConfigDir = $null,
+
+    [Alias("Dist", "d")]
+    [string]$DistDir = $null,
 
     [Alias("m")]
     [string]$Manifest = $null,
-
-    [Alias("o")]
-    [string]$OutputDir = $null,
 
     [Alias("p")]
     [string]$Profile = $null,
 
     [Parameter(Mandatory=$false)]
-    [int]$Threads = 16,
+    [int]$Threads = 2,
 
     [Parameter(Mandatory=$false)]
     [string]$UsbDrive = $null,
@@ -58,17 +58,24 @@ $RepoRoot = Split-Path -Parent $PSScriptRoot
 . (Join-Path $RepoRoot "src\common\Logging.ps1")
 . (Join-Path $RepoRoot "src\common\ConfigResolver.ps1")
 
+# Route positional $Target based on command context
+if ($Target) {
+    if (-not $ConfigDir -and -not ($Command -in @("test", "version", "help"))) {
+        $ConfigDir = $Target
+    }
+}
+
 switch ($Command) {
     "audit" {
-        $ResolvedOut = if ($OutputDir) { $OutputDir } elseif ($Target) { $Target } else { $null }
+        $ResolvedConfigDir = if ($ConfigDir) { Resolve-ReglazeTargetDirectory $ConfigDir } else { Resolve-ReglazeTargetDirectory }
         $AuditScript = Join-Path $RepoRoot "src\audit\Invoke-Audit.ps1"
-        & $AuditScript -OutputDir $ResolvedOut -Profile $Profile -Force:$Force -SkipElevation:$SkipElevation -Elevate:$Elevate
+        & $AuditScript -ConfigDir $ResolvedConfigDir -Profile $Profile -Force:$Force -SkipElevation:$SkipElevation -Elevate:$Elevate
     }
 
     "validate" {
-        $ResolvedCfg = if ($Config) { $Config } elseif ($Target) { $Target } else { Resolve-ReglazeConfigFile }
+        $ResolvedCfg = if ($ConfigDir) { Resolve-ReglazeConfigFile $ConfigDir } else { Resolve-ReglazeConfigFile }
         if (-not $ResolvedCfg -or -not (Test-Path $ResolvedCfg)) {
-            Write-ReglazeError "Configuration file not found. Specify via -Config or set `$env:REGLAZE_DIR."
+            Write-ReglazeError "Configuration file not found. Specify via -ConfigDir or set `$env:REGLAZE_DIR."
             exit 1
         }
         Write-ReglazeBanner "BLUEPRINT VALIDATION"
@@ -84,12 +91,12 @@ switch ($Command) {
     }
 
     { $_ -in @("migration-plan", "plan-migration", "migration-manifest") } {
-        $ResolvedCfg = if ($Config) { $Config } elseif ($Target) { $Target } else { Resolve-ReglazeConfigFile }
+        $ResolvedCfg = if ($ConfigDir) { Resolve-ReglazeConfigFile $ConfigDir } else { Resolve-ReglazeConfigFile }
         if (-not $ResolvedCfg -or -not (Test-Path $ResolvedCfg)) {
-            Write-ReglazeError "Configuration file not found. Specify via -Config or set `$env:REGLAZE_DIR."
+            Write-ReglazeError "Configuration file not found. Specify via -ConfigDir or set `$env:REGLAZE_DIR."
             exit 1
         }
-        $ResolvedManifestOut = if ($Manifest) { $Manifest } elseif ($OutputDir) { $OutputDir } else { $null }
+        $ResolvedManifestOut = if ($Manifest) { $Manifest } elseif ($ConfigDir) { Resolve-ReglazeTargetDirectory $ConfigDir } else { $null }
         $MigrationModule = Join-Path $RepoRoot "src\linking\Invoke-PreInstallMigration.ps1"
         if (Test-Path $MigrationModule) {
             . $MigrationModule
@@ -101,19 +108,16 @@ switch ($Command) {
     }
 
     { $_ -in @("migrate", "run-migration", "apply-migration", "stage-data") } {
-        $ResolvedCfg = if ($Config) { $Config } else { $null }
-        $ResolvedManifest = if ($Manifest) { $Manifest } elseif ($Target -and ($Target -like "*.yaml" -or $Target -like "*.yml" -or $Target -like "*.json" -or (Test-Path $Target -PathType Container -ErrorAction SilentlyContinue))) {
-            if ($Target -like "*reglaze.yaml" -and -not $ResolvedCfg) {
-                $ResolvedCfg = $Target
-                $null
-            } else {
-                $Target
-            }
+        $ResolvedCfg = if ($ConfigDir) { Resolve-ReglazeConfigFile $ConfigDir } else { Resolve-ReglazeConfigFile }
+        $ResolvedManifest = if ($Manifest) {
+            $Manifest
+        } elseif ($ConfigDir) {
+            $TargetDir = Resolve-ReglazeTargetDirectory $ConfigDir
+            $CandYaml = Join-Path $TargetDir "migration-manifest.yaml"
+            $CandJson = Join-Path $TargetDir "migration-manifest.json"
+            if (Test-Path $CandYaml) { $CandYaml } elseif (Test-Path $CandJson) { $CandJson } else { $null }
         } else {
             $null
-        }
-        if (-not $ResolvedCfg -and -not $ResolvedManifest) {
-            $ResolvedCfg = Resolve-ReglazeConfigFile
         }
         $MigrationModule = Join-Path $RepoRoot "src\linking\Invoke-PreInstallMigration.ps1"
         if (Test-Path $MigrationModule) {
@@ -129,13 +133,19 @@ switch ($Command) {
     }
 
     "compile" {
-        $ResolvedCfg = if ($Config) { $Config } elseif ($Target) { $Target } else { Resolve-ReglazeConfigFile }
-        $ResolvedOut = if ($OutputDir) { $OutputDir } else { (Join-Path $RepoRoot "dist\media") }
+        $ResolvedCfg = if ($ConfigDir) { Resolve-ReglazeConfigFile $ConfigDir } else { Resolve-ReglazeConfigFile }
+        if (-not $ResolvedCfg -or -not (Test-Path $ResolvedCfg)) {
+            Write-ReglazeError "Configuration file not found. Specify via -ConfigDir or set `$env:REGLAZE_DIR."
+            exit 1
+        }
+        $ResolvedDist = if ($DistDir) { Resolve-ReglazeTargetDirectory $DistDir } else { (Join-Path $RepoRoot "dist\media") }
 
         $CompilerScript = Join-Path $RepoRoot "src\compiler\Compile-Reglaze.ps1"
         if (Test-Path $CompilerScript) {
-            & $CompilerScript -Config $ResolvedCfg -OutputDir $ResolvedOut
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            $global:LASTEXITCODE = 0
+            $CompileRes = & $CompilerScript -Config $ResolvedCfg -DistDir $ResolvedDist
+            if ($null -ne $global:LASTEXITCODE -and $global:LASTEXITCODE -ne 0) { exit $global:LASTEXITCODE }
+            if ($null -ne $CompileRes -and $CompileRes.PSObject.Properties['Status'] -and $CompileRes.Status -ne "Success") { exit 1 }
         } else {
             Write-ReglazeError "Compiler engine not found at: $CompilerScript"
             exit 1
@@ -152,7 +162,7 @@ switch ($Command) {
                 $ResolvedIso = $IsoResult.IsoPath
             }
             . (Join-Path $RepoRoot "src\media\Build-Media.ps1")
-            New-ReglazeBootableUsb -UsbDrive $UsbDrive -IsoPath $ResolvedIso -MediaArtifactsDir $ResolvedOut -Force:$Force -Simulation:$Simulation -Live:(-not $Simulation)
+            New-ReglazeBootableUsb -UsbDrive $UsbDrive -IsoPath $ResolvedIso -MediaArtifactsDir $ResolvedDist -Force:$Force -Simulation:$Simulation -Live:(-not $Simulation) -Elevate:$Elevate -SkipElevation:$SkipElevation
         }
     }
 
@@ -160,7 +170,7 @@ switch ($Command) {
         $IsoScript = Join-Path $RepoRoot "src\media\Get-WindowsIso.ps1"
         if (Test-Path $IsoScript) {
             . $IsoScript
-            $TargetDest = if ($OutputDir) { $OutputDir } else { Join-Path $RepoRoot "downloads" }
+            $TargetDest = if ($DistDir) { Resolve-ReglazeTargetDirectory $DistDir } else { Join-Path $RepoRoot "downloads" }
             Get-Windows11Iso -IsoPath $IsoPath -DestinationDir $TargetDest -OpenBrowser:$OpenBrowser -Simulation:$Simulation -Live:(-not $Simulation)
         } else {
             Write-ReglazeError "ISO discovery engine not found at: $IsoScript"
@@ -169,15 +179,17 @@ switch ($Command) {
     }
 
     "media" {
-        $ResolvedCfg = if ($Config) { $Config } elseif ($Target) { $Target } else { Resolve-ReglazeConfigFile }
-        $ResolvedOut = if ($OutputDir) { $OutputDir } else { (Join-Path $RepoRoot "dist\media") }
+        $ResolvedCfg = if ($ConfigDir) { Resolve-ReglazeConfigFile $ConfigDir } else { Resolve-ReglazeConfigFile }
+        $ResolvedDist = if ($DistDir) { Resolve-ReglazeTargetDirectory $DistDir } else { (Join-Path $RepoRoot "dist\media") }
 
         # Ensure media artifacts are compiled first
-        if (-not (Test-Path (Join-Path $ResolvedOut "autounattend.xml"))) {
+        if (-not (Test-Path (Join-Path $ResolvedDist "autounattend.xml"))) {
             Write-ReglazeInfo "Compiling deployment media artifacts first..."
             $CompilerScript = Join-Path $RepoRoot "src\compiler\Compile-Reglaze.ps1"
-            & $CompilerScript -Config $ResolvedCfg -OutputDir $ResolvedOut
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            $global:LASTEXITCODE = 0
+            $CompileRes = & $CompilerScript -Config $ResolvedCfg -DistDir $ResolvedDist
+            if ($null -ne $global:LASTEXITCODE -and $global:LASTEXITCODE -ne 0) { exit $global:LASTEXITCODE }
+            if ($null -ne $CompileRes -and $CompileRes.PSObject.Properties['Status'] -and $CompileRes.Status -ne "Success") { exit 1 }
         }
 
         # Resolve ISO if not specified
@@ -198,7 +210,7 @@ switch ($Command) {
         $MediaModule = Join-Path $RepoRoot "src\media\Build-Media.ps1"
         if (Test-Path $MediaModule) {
             . $MediaModule
-            New-ReglazeBootableUsb -UsbDrive $TargetUsb -IsoPath $ResolvedIso -MediaArtifactsDir $ResolvedOut -Force:$Force -Simulation:$Simulation -Live:(-not $Simulation)
+            New-ReglazeBootableUsb -UsbDrive $TargetUsb -IsoPath $ResolvedIso -MediaArtifactsDir $ResolvedDist -Force:$Force -Simulation:$Simulation -Live:(-not $Simulation) -Elevate:$Elevate -SkipElevation:$SkipElevation
         } else {
             Write-ReglazeError "Media builder module not found at: $MediaModule"
             exit 1
@@ -206,10 +218,11 @@ switch ($Command) {
     }
 
     "bootstrap" {
-        $ResolvedCfg = if ($Config) { $Config } elseif ($Target) { $Target } else { Resolve-ReglazeConfigFile }
+        $ResolvedCfg = if ($ConfigDir) { Resolve-ReglazeConfigFile $ConfigDir } else { Resolve-ReglazeConfigFile }
+        $ResolvedPayload = if ($DistDir) { Resolve-ReglazeTargetDirectory $DistDir } else { $null }
         $BootstrapScript = Join-Path $RepoRoot "src\runner\Start-MachineBootstrap.ps1"
         if (Test-Path $BootstrapScript) {
-            & $BootstrapScript -PayloadDir $OutputDir -ConfigFile $ResolvedCfg -Simulation:$Simulation -NoReboot:$NoReboot -SkipUpdates:$SkipUpdates -SkipDsc:$SkipDsc
+            & $BootstrapScript -PayloadDir $ResolvedPayload -ConfigFile $ResolvedCfg -Simulation:$Simulation -NoReboot:$NoReboot -SkipUpdates:$SkipUpdates -SkipDsc:$SkipDsc
         } else {
             Write-ReglazeError "Bootstrap runner not found at: $BootstrapScript"
             exit 1
@@ -217,10 +230,11 @@ switch ($Command) {
     }
 
     "hydrate" {
-        $ResolvedCfg = if ($Config) { $Config } elseif ($Target) { $Target } else { Resolve-ReglazeConfigFile }
+        $ResolvedCfg = if ($ConfigDir) { Resolve-ReglazeConfigFile $ConfigDir } else { Resolve-ReglazeConfigFile }
+        $ResolvedPayload = if ($DistDir) { Resolve-ReglazeTargetDirectory $DistDir } else { $null }
         $HydrateScript = Join-Path $RepoRoot "src\runner\Start-UserHydration.ps1"
         if (Test-Path $HydrateScript) {
-            & $HydrateScript -PayloadDir $OutputDir -ConfigFile $ResolvedCfg -Simulation:$Simulation
+            & $HydrateScript -PayloadDir $ResolvedPayload -ConfigFile $ResolvedCfg -Simulation:$Simulation
         } else {
             Write-ReglazeError "Hydration runner not found at: $HydrateScript"
             exit 1
@@ -295,11 +309,19 @@ switch ($Command) {
         Write-Host "    `$env:REGLAZE_CONFIG   Explicit override path for reglaze.yaml"
         Write-Host "    `$env:REGLAZE_PROFILE  Default profile name for 'reglaze audit' when not specified via -Profile"
         Write-Host ""
+        Write-Host "  PARAMETERS:" -ForegroundColor Yellow
+        Write-Host "    -ConfigDir (-Config, -c) Directory containing (or to contain) reglaze.yaml, audit-reference.json, etc."
+        Write-Host "    -DistDir   (-Dist, -d)   Target directory for compiled installation media artifacts (dist/media)"
+        Write-Host "    -UsbDrive                Target USB drive letter for bootable installation media (e.g. E:)"
+        Write-Host "    -Profile   (-p)          Reglaze profile name for pre-flight audit scaffolding (e.g. 'workstation')"
+        Write-Host "    -Threads                 Worker thread count for pre-install migration (defaults to safe 2)"
+        Write-Host ""
         Write-Host "  EXAMPLES:" -ForegroundColor Yellow
-        Write-Host "    pwsh ./bin/reglaze.ps1 audit -Profile `"workstation`" -OutputDir `"C:\reglaze-config`""
-        Write-Host "    pwsh ./bin/reglaze.ps1 validate -Config `"C:\reglaze-config\reglaze.yaml`""
-        Write-Host "    pwsh ./bin/reglaze.ps1 migration-plan -Config `"C:\reglaze-config\reglaze.yaml`""
-        Write-Host "    pwsh ./bin/reglaze.ps1 migrate -Config `"C:\reglaze-config\reglaze.yaml`""
+        Write-Host "    pwsh ./bin/reglaze.ps1 audit -ConfigDir `"C:\reglaze-config`" -Profile `"workstation`""
+        Write-Host "    pwsh ./bin/reglaze.ps1 migration-plan -ConfigDir `"C:\reglaze-config`""
+        Write-Host "    pwsh ./bin/reglaze.ps1 migrate -ConfigDir `"C:\reglaze-config`""
+        Write-Host "    pwsh ./bin/reglaze.ps1 validate -ConfigDir `"C:\reglaze-config`""
+        Write-Host "    pwsh ./bin/reglaze.ps1 compile -ConfigDir `"C:\reglaze-config`" -DistDir `"C:\reglaze-dist`" -UsbDrive `"E:`""
         Write-Host "    pwsh ./bin/reglaze.ps1 test"
         Write-Host ""
     }

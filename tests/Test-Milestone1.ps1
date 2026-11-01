@@ -186,16 +186,16 @@ Assert-Test "Get-NetworkAudit discovers network adapters, sharing mode, and cust
 
 # Test 8: End-to-End Invoke-Audit Execution
 Write-ReglazeStep "Testing End-to-End Audit Run & File Emission..."
-$TestOutputDir = Join-Path $RepoRoot "tests\scratch_audit_output"
-if (Test-Path $TestOutputDir) {
-    Remove-Item -Path $TestOutputDir -Recurse -Force
+$TestConfigDir = Join-Path $RepoRoot "tests\scratch_audit_output"
+if (Test-Path $TestConfigDir) {
+    Remove-Item -Path $TestConfigDir -Recurse -Force
 }
 
 Assert-Test "Invoke-Audit.ps1 requires -Profile when no existing reglaze.yaml is present" {
     $AuditScript = Join-Path $RepoRoot "src\audit\Invoke-Audit.ps1"
     $ThrewMissingProfile = $false
     try {
-        & $AuditScript -OutputDir $TestOutputDir -SkipElevation 2>$null
+        & $AuditScript -ConfigDir $TestConfigDir -SkipElevation 2>$null
     } catch {
         if ($_.Exception.Message -match "Profile") {
             $ThrewMissingProfile = $true
@@ -206,11 +206,11 @@ Assert-Test "Invoke-Audit.ps1 requires -Profile when no existing reglaze.yaml is
 
 Assert-Test "Invoke-Audit.ps1 emits audit-reference.json, profile-computers.json, and scaffolds reglaze.yaml" {
     $AuditScript = Join-Path $RepoRoot "src\audit\Invoke-Audit.ps1"
-    & $AuditScript -OutputDir $TestOutputDir -Profile "workstation" -Force -SkipElevation
+    & $AuditScript -ConfigDir $TestConfigDir -Profile "workstation" -Force -SkipElevation
 
-    $AuditJson = Join-Path $TestOutputDir "audit-reference.json"
-    $ProfileRegJson = Join-Path $TestOutputDir "profile-computers.json"
-    $Blueprint = Join-Path $TestOutputDir "reglaze.yaml"
+    $AuditJson = Join-Path $TestConfigDir "audit-reference.json"
+    $ProfileRegJson = Join-Path $TestConfigDir "profile-computers.json"
+    $Blueprint = Join-Path $TestConfigDir "reglaze.yaml"
 
     if (-not (Test-Path $AuditJson)) { return $false }
     if (-not (Test-Path $ProfileRegJson)) { return $false }
@@ -244,7 +244,7 @@ Assert-Test "Invoke-Audit.ps1 emits audit-reference.json, profile-computers.json
 
 Assert-Test "Invoke-Audit.ps1 inherits profile from existing reglaze.yaml and archives with second-level precision generation_date" {
     $AuditScript = Join-Path $RepoRoot "src\audit\Invoke-Audit.ps1"
-    $Blueprint = Join-Path $TestOutputDir "reglaze.yaml"
+    $Blueprint = Join-Path $TestConfigDir "reglaze.yaml"
     if (-not (Test-Path $Blueprint)) { return $false }
 
     # Put a specific generation_date with second-level precision and profile: "test" into existing file
@@ -252,9 +252,9 @@ Assert-Test "Invoke-Audit.ps1 inherits profile from existing reglaze.yaml and ar
     Set-Content -Path $Blueprint -Value $CustomContent -Encoding UTF8
 
     # Second audit run without -Profile should inherit 'test' and archive existing to reglaze.2025-01-15T14-30-22.yaml
-    & $AuditScript -OutputDir $TestOutputDir -SkipElevation
+    & $AuditScript -ConfigDir $TestConfigDir -SkipElevation
 
-    $ExpectedArchive = Join-Path $TestOutputDir "reglaze.2025-01-15T14-30-22.yaml"
+    $ExpectedArchive = Join-Path $TestConfigDir "reglaze.2025-01-15T14-30-22.yaml"
     $ArchiveExists = Test-Path $ExpectedArchive
     $FreshBlueprintExists = Test-Path $Blueprint
 
@@ -270,8 +270,8 @@ Assert-Test "Invoke-Audit.ps1 inherits profile from existing reglaze.yaml and ar
 
 Assert-Test "Invoke-Audit.ps1 populates unrecognized apps into applications.custom and promotes them (with path_entries) when user applications.json is added" {
     $AuditScript = Join-Path $RepoRoot "src\audit\Invoke-Audit.ps1"
-    $AuditJson = Join-Path $TestOutputDir "audit-reference.json"
-    $Blueprint = Join-Path $TestOutputDir "reglaze.yaml"
+    $AuditJson = Join-Path $TestConfigDir "audit-reference.json"
+    $Blueprint = Join-Path $TestConfigDir "reglaze.yaml"
 
     $AuditData = Get-Content -Raw $AuditJson | ConvertFrom-Json
     $YamlBefore = Get-Content -Raw $Blueprint
@@ -287,7 +287,7 @@ Assert-Test "Invoke-Audit.ps1 populates unrecognized apps into applications.cust
         $EscapedCheck = [regex]::Escape(($TargetDispName -replace '\\', '\\' -replace '"', '\"'))
         if ($YamlBefore -notmatch $EscapedCheck) { return $false }
 
-        # Create user applications.json in $TestOutputDir defining this app with path_entries
+        # Create user applications.json in $TestConfigDir defining this app with path_entries
         $UserAppsJson = @(
             [PSCustomObject]@{
                 app_id       = "user_custom_promoted_app"
@@ -318,17 +318,17 @@ Assert-Test "Invoke-Audit.ps1 populates unrecognized apps into applications.cust
                 )
             }
         )
-        $UserAppsPath = Join-Path $TestOutputDir "applications.json"
+        $UserAppsPath = Join-Path $TestConfigDir "applications.json"
         $UserAppsJson | ConvertTo-Json -Depth 6 | Set-Content -Path $UserAppsPath -Encoding UTF8
 
         # Re-run audit and verify user_custom_promoted_app is now in main applications: list with user_config directory and path_entries
-        & $AuditScript -OutputDir $TestOutputDir -SkipElevation
+        & $AuditScript -ConfigDir $TestConfigDir -SkipElevation
         $YamlAfter = Get-Content -Raw $Blueprint
         $PromotedToMain = ($YamlAfter -match '(?m)^\s{2}user_custom_promoted_app:' -and $YamlAfter -match 'path_entries:')
         return $PromotedToMain
     } else {
         # Fallback if test host had 0 unmatched ARP apps: test Get-ReglazeCatalog user merge directly
-        $UserAppsPath = Join-Path $TestOutputDir "applications.json"
+        $UserAppsPath = Join-Path $TestConfigDir "applications.json"
         @(
             [PSCustomObject]@{
                 app_id       = "user_custom_promoted_app"
@@ -337,14 +337,14 @@ Assert-Test "Invoke-Audit.ps1 populates unrecognized apps into applications.cust
                 directories  = @()
             }
         ) | ConvertTo-Json -Depth 5 | Set-Content -Path $UserAppsPath -Encoding UTF8
-        $Lookup = Get-ReglazeApplicationById -AppId "user_custom_promoted_app" -RepoRoot $RepoRoot -UserConfigDir $TestOutputDir
+        $Lookup = Get-ReglazeApplicationById -AppId "user_custom_promoted_app" -RepoRoot $RepoRoot -UserConfigDir $TestConfigDir
         return ($null -ne $Lookup -and $Lookup._CatalogSource -eq "user" -and $Lookup.path_entries.Count -eq 1)
     }
 }
 
 # Clean up scratch test output
-if (Test-Path $TestOutputDir) {
-    Remove-Item -Path $TestOutputDir -Recurse -Force
+if (Test-Path $TestConfigDir) {
+    Remove-Item -Path $TestConfigDir -Recurse -Force
 }
 
 # Summary

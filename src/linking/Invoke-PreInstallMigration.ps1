@@ -45,6 +45,37 @@ function Format-ReglazeByteSize {
     return ("{0:N2} GB" -f ($Bytes / 1073741824.0))
 }
 
+function Format-RobocopyExitDetails {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory=$true)]
+        [int]$ExitCode
+    )
+
+    $Parts = [System.Collections.Generic.List[string]]::new()
+    if ($ExitCode -eq 0) {
+        $Parts.Add("No files copied; destination already up to date")
+    }
+    if ($ExitCode -band 1) {
+        $Parts.Add("Files copied successfully")
+    }
+    if ($ExitCode -band 2) {
+        $Parts.Add("Extra files exist in destination not in source")
+    }
+    if ($ExitCode -band 4) {
+        $Parts.Add("Mismatched files or attributes detected")
+    }
+    if ($ExitCode -band 8) {
+        $Parts.Add("Some files could not be copied (likely locked by running application)")
+    }
+    if ($ExitCode -band 16) {
+        $Parts.Add("Fatal error (access denied, path invalid, or disk full)")
+    }
+
+    if ($Parts.Count -eq 0) { return "Code $ExitCode" }
+    return ($Parts -join "; ")
+}
+
 function Get-ReglazePathStats {
     [CmdletBinding()]
     param(
@@ -130,6 +161,7 @@ function Escape-ReglazeManifestYamlString {
 function New-ReglazeMigrationPlan {
     [CmdletBinding()]
     param(
+        [Alias("ConfigDir", "Config", "c")]
         [string]$ConfigFile = $null,
         [string]$AuditReferencePath = $null,
         [string]$OutputManifestPath = $null,
@@ -566,8 +598,9 @@ function Invoke-ReglazePreInstallMigration {
     [CmdletBinding()]
     param(
         [string]$ManifestPath = $null,
+        [Alias("ConfigDir", "Config", "c")]
         [string]$ConfigFile = $null,
-        [int]$Threads = 16,
+        [int]$Threads = 2,
         [switch]$Simulation = $false,
         [switch]$Force = $false
     )
@@ -592,7 +625,7 @@ function Invoke-ReglazePreInstallMigration {
     }
 
     if (-not $ResolvedManifest) {
-        $BlueprintFile = if ($ConfigFile) { $ConfigFile } else { Resolve-ReglazeConfigFile }
+        $BlueprintFile = if ($ConfigFile) { Resolve-ReglazeConfigFile $ConfigFile } else { Resolve-ReglazeConfigFile }
         if ($BlueprintFile -and (Test-Path -LiteralPath $BlueprintFile)) {
             $BpDir = if (Test-Path -LiteralPath $BlueprintFile -PathType Container) {
                 $BlueprintFile
@@ -663,6 +696,14 @@ function Invoke-ReglazePreInstallMigration {
     }
 
     Write-ReglazeStep "Staging Application & User Data into Target Directories ($($RawItems.Count) total manifest item(s))..."
+
+    # Check for active applications that commonly hold locks on AppData / user files
+    $LockingProcessNames = @("Steam", "steamservice", "NVIDIA*", "nvcontainer", "chrome", "msedge", "brave", "Code")
+    $RunningLockingProcs = Get-Process -Name $LockingProcessNames -ErrorAction SilentlyContinue
+    if ($RunningLockingProcs) {
+        $UniqueProcNames = @($RunningLockingProcs | Select-Object -ExpandProperty ProcessName -Unique)
+        Write-ReglazeWarning "Active applications detected that may lock files in target directories: $($UniqueProcNames -join ', '). If file lock errors occur, close these applications and re-run migration."
+    }
 
     $CopiedCount = 0
     $SkippedDisabled = 0
@@ -758,12 +799,10 @@ function Invoke-ReglazePreInstallMigration {
                     "/R:2",
                     "/W:1",
                     "/NP",
-                    "/NFL",
-                    "/NDL",
                     "/NJH",
                     "/NJS"
                 )
-                & robocopy.exe @RoboArgs | Out-Null
+                $RoboLines = & robocopy.exe @RoboArgs
                 $RoboExit = $LASTEXITCODE
             } else {
                 Write-ReglazeInfo "Syncing directory [$ItemId] (robocopy /MT:$SafeThreads): $SourcePath -> $TargetPath"
@@ -779,21 +818,33 @@ function Invoke-ReglazePreInstallMigration {
                     "/W:1",
                     "/XJ",
                     "/NP",
-                    "/NFL",
-                    "/NDL",
                     "/NJH",
                     "/NJS"
                 )
-                & robocopy.exe @RoboArgs | Out-Null
+                $RoboLines = & robocopy.exe @RoboArgs
                 $RoboExit = $LASTEXITCODE
             }
 
-            # Robocopy exit codes 0-7 indicate success (0=no change, 1=copied, 2=extra, 3=both, etc.); >=8 indicates failure
+            # Robocopy exit codes: 0-7 indicate success (bit flags: 1=copied, 2=extra files in dest, 4=mismatches); >=8 indicates errors
+            $ExitDesc = Format-RobocopyExitDetails -ExitCode $RoboExit
             if ($RoboExit -lt 8) {
-                Write-ReglazeSuccess "Staged [$ItemId] -> $TargetPath (robocopy code: $RoboExit)"
+                Write-ReglazeSuccess "Staged [$ItemId] -> $TargetPath (code $($RoboExit): $ExitDesc)"
                 $CopiedCount++
             } else {
-                Write-ReglazeError "Robocopy failed for [$ItemId] with exit code $RoboExit (Source: '$SourcePath', Target: '$TargetPath')."
+                Write-ReglazeError "Robocopy failed for [$ItemId] with exit code $($RoboExit): $ExitDesc (Source: '$SourcePath', Target: '$TargetPath')."
+                $ErrorLines = @($RoboLines | Where-Object { $_ -match '(?i)(ERROR\s+\d+|Access is denied|used by another process|cannot find the|failed)' })
+                if ($ErrorLines.Count -gt 0) {
+                    Write-Host "    Failed items / error details:" -ForegroundColor Yellow
+                    foreach ($ErrLine in ($ErrorLines | Select-Object -First 10)) {
+                        Write-Host "      $ErrLine" -ForegroundColor Red
+                    }
+                    if ($ErrorLines.Count -gt 10) {
+                        Write-Host "      ... and $($ErrorLines.Count - 10) more error(s)." -ForegroundColor DarkGray
+                    }
+                }
+                if ($RoboExit -band 8) {
+                    Write-ReglazeWarning "Some files could not be copied because they are locked by running software. Please close related applications and retry 'reglaze migrate'."
+                }
                 $FailedCount++
             }
         } catch {
