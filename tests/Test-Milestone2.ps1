@@ -518,8 +518,13 @@ applications:
         ForEach-Object { $_.component } | Where-Object { $_.name -eq "Microsoft-Windows-Shell-Setup" } |
         ForEach-Object { $_.AutoLogon.Username }
 
-    Assert-Test -Name "16. autounattend.xml: configures AutoLogon for LocalAdmin" `
-        -Condition ($AutoLogonUser -eq "LocalAdmin")
+    $WinPeSetup = $XmlParsed.unattend.settings | Where-Object { $_.pass -eq "windowsPE" } |
+        ForEach-Object { $_.component } | Where-Object { $_.name -eq "Microsoft-Windows-Setup" }
+    $RunSyncPath = $WinPeSetup.RunSynchronous.RunSynchronousCommand.Path
+    $DiskUi = $WinPeSetup.DiskConfiguration.WillShowUI
+
+    Assert-Test -Name "16. autounattend.xml: configures AutoLogon for LocalAdmin and WinPE disk protection command" `
+        -Condition ($AutoLogonUser -eq "LocalAdmin" -and $DiskUi -eq "Always" -and $RunSyncPath -match "protect-disks\.cmd")
 
     # -------------------------------------------------------------------------
     # TEST 6: WinPE Disk Matching & Preserved Safety
@@ -580,10 +585,12 @@ applications:
     # -------------------------------------------------------------------------
     $E2EMedia = Join-Path $TestDir "media_e2e"
     $CompileRes = Invoke-ReglazeCompilation -ConfigFile $ValidYamlFile -DistDir $E2EMedia -AuditReferencePath $null -BypassValidation $false
-    Assert-Test -Name "21. End-to-End Compile: generates media tree with autounattend.xml and staged DiskMatch.ps1" `
+    Assert-Test -Name "21. End-to-End Compile: generates media tree with autounattend.xml and staged DiskMatch tools" `
         -Condition (
             $CompileRes.Status -eq "Success" -and
             (Test-Path (Join-Path $E2EMedia "autounattend.xml")) -and
+            (Test-Path (Join-Path $E2EMedia "Reglaze\DiskMatch.vbs")) -and
+            (Test-Path (Join-Path $E2EMedia "Reglaze\protect-disks.cmd")) -and
             (Test-Path (Join-Path $E2EMedia "Reglaze\DiskMatch.ps1")) -and
             (Test-Path (Join-Path $E2EMedia "payload\bootstrap.ps1"))
         )
@@ -740,6 +747,91 @@ applications:
             -not (Test-Path $DisabledMediaTarget)
         ) `
         -Details "Status: $($StageResult.Status), Copied: $($StageResult.CopiedCount), SkippedDisabled: $($StageResult.SkippedDisabled)"
+
+    # -------------------------------------------------------------------------
+    # TEST 11: WinPE Disk Isolation (DiskMatch.vbs & protect-disks.cmd)
+    # -------------------------------------------------------------------------
+    $VbsScript = Join-Path $RepoRoot "src\compiler\DiskMatch.vbs"
+    $CmdScript = Join-Path $RepoRoot "src\compiler\protect-disks.cmd"
+    $VbsContent = if (Test-Path $VbsScript) { Get-Content -Raw $VbsScript } else { "" }
+    $CmdContent = if (Test-Path $CmdScript) { Get-Content -Raw $CmdScript } else { "" }
+
+    $VbsValid = ($VbsContent -match "Win32_DiskDrive" -and $VbsContent -match "offline disk" -and $VbsContent -match "attribute disk set readonly" -and $VbsContent -match "GetDiskIndexForDriveLetter")
+    $CmdValid = ($CmdContent -match "cscript\.exe" -and $CmdContent -match "DiskMatch\.vbs" -and $CmdContent -match "diskpart\.exe /s")
+
+    Assert-Test -Name "28. WinPE Disk Isolation: DiskMatch.vbs & protect-disks.cmd implement non-PowerShell disk protection" `
+        -Condition ($VbsValid -and $CmdValid) `
+        -Details "VbsValid: $VbsValid, CmdValid: $CmdValid"
+
+    # -------------------------------------------------------------------------
+    # TEST 12: Phase 4 Bootstrap Onlining of Offline Preserved Disks
+    # -------------------------------------------------------------------------
+    . (Join-Path $RepoRoot "src\linking\Set-ReglazeDriveLetters.ps1")
+    $MockPreservedCfg = [PSCustomObject]@{
+        PreservedDisks = @(
+            [PSCustomObject]@{
+                DiskId        = 1
+                SerialNumber  = "OFFLINE_DATA_DISK_001"
+                ExpectedMount = "D:"
+                Label         = "DataDrive"
+            },
+            [PSCustomObject]@{
+                DiskId        = 2
+                SerialNumber  = "OFFLINE_UNMOUNTED_002"
+                ExpectedMount = $null
+                Label         = "UnmountedBackup"
+            }
+        )
+        StreamMountPoint  = "G:"
+        ReferencedLetters = @("C", "D", "G")
+    }
+    $MockDisksForOnline = @(
+        [PSCustomObject]@{
+            DiskNumber   = 0
+            SerialNumber = "OS_DISK_000"
+            BusType      = "NVMe"
+            IsOffline    = $false
+            IsReadOnly   = $false
+            Partitions   = @(
+                [PSCustomObject]@{ DiskNumber = 0; PartitionNumber = 3; DriveLetter = "C"; Label = "Windows"; SizeBytes = 500GB }
+            )
+        },
+        [PSCustomObject]@{
+            DiskNumber   = 1
+            SerialNumber = "OFFLINE_DATA_DISK_001"
+            BusType      = "SATA"
+            IsOffline    = $true
+            IsReadOnly   = $true
+            Partitions   = @(
+                [PSCustomObject]@{ DiskNumber = 1; PartitionNumber = 1; DriveLetter = "D"; Label = "DataDrive"; SizeBytes = 1000GB }
+            )
+        },
+        [PSCustomObject]@{
+            DiskNumber   = 2
+            SerialNumber = "OFFLINE_UNMOUNTED_002"
+            BusType      = "SATA"
+            IsOffline    = $true
+            IsReadOnly   = $true
+            Partitions   = @(
+                [PSCustomObject]@{ DiskNumber = 2; PartitionNumber = 1; DriveLetter = $null; Label = "UnmountedBackup"; SizeBytes = 2000GB }
+            )
+        }
+    )
+    $OnlineTestRes = Invoke-DriveLetterReconciliation -DiskConfig $MockPreservedCfg -MockSystemDisks $MockDisksForOnline -Simulation:$true
+    $Disk1BroughtOnline = ($OnlineTestRes.OnlinedDisks -contains 1)
+    $Disk2RemainsOffline = ($OnlineTestRes.OnlinedDisks -notcontains 2)
+    $SimDisk1 = $OnlineTestRes.SimulatedSystemDisks | Where-Object { $_.DiskNumber -eq 1 } | Select-Object -First 1
+    $SimDisk2 = $OnlineTestRes.SimulatedSystemDisks | Where-Object { $_.DiskNumber -eq 2 } | Select-Object -First 1
+
+    Assert-Test -Name "29. Phase 4 Reconciliation: Onlines configured preserved disks with ExpectedMount and leaves expected_mount:null offline" `
+        -Condition (
+            $Disk1BroughtOnline -and
+            $Disk2RemainsOffline -and
+            ($SimDisk1.IsOffline -eq $false) -and
+            ($SimDisk1.IsReadOnly -eq $false) -and
+            ($SimDisk2.IsOffline -eq $true)
+        ) `
+        -Details "OnlinedDisks: $($OnlineTestRes.OnlinedDisks -join ','), Disk1Offline: $($SimDisk1.IsOffline), Disk2Offline: $($SimDisk2.IsOffline)"
 
 } finally {
     Remove-Item env:LOCAL_ADMIN_PASSWORD -ErrorAction SilentlyContinue

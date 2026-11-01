@@ -95,10 +95,42 @@ function Invoke-DriveLetterReconciliation {
     Write-ReglazeInfo "Reserved drive letters: $(($ReservedLetters | ForEach-Object { "${_}:" }) -join ', ')"
 
     # 2. Discover or Synthesize System Disks
+    $OnlinedDisks = [System.Collections.Generic.List[int]]::new()
     $SystemDisks = @()
     if ($null -ne $MockSystemDisks) {
         # Clone mock disks so in-memory state updates cleanly across Phases A, B, and C
         foreach ($MDisk in $MockSystemDisks) {
+            $MDiskSerial = if ($MDisk.SerialNumber) { $MDisk.SerialNumber.Trim() } else { "" }
+            $MatchedPreserved = $null
+            if ($MDiskSerial) {
+                $MatchedPreserved = $PreservedEntries | Where-Object {
+                    $entrySerial = if ($_.SerialNumber) { $_.SerialNumber.Trim() } else { "" }
+                    $entrySerial -and ($entrySerial -ieq $MDiskSerial -or $MDiskSerial.Contains($entrySerial) -or $entrySerial.Contains($MDiskSerial))
+                } | Select-Object -First 1
+            }
+            if (-not $MatchedPreserved -and $null -ne $MDisk.DiskNumber) {
+                $MatchedPreserved = $PreservedEntries | Where-Object { $_.DiskId -eq $MDisk.DiskNumber } | Select-Object -First 1
+            }
+
+            $MIsOffline = if ($null -ne $MDisk.IsOffline) { [bool]$MDisk.IsOffline } else { $false }
+            $MIsReadOnly = if ($null -ne $MDisk.IsReadOnly) { [bool]$MDisk.IsReadOnly } else { $false }
+
+            if ($MatchedPreserved -and $MatchedPreserved.ExpectedMount) {
+                if ($MIsOffline) {
+                    Write-ReglazeInfo "[Simulation] Bringing preserved disk $($MDisk.DiskNumber) ($($MatchedPreserved.Label)) ONLINE."
+                    $MIsOffline = $false
+                    $MDisk.IsOffline = $false
+                    $OnlinedDisks.Add([int]$MDisk.DiskNumber)
+                }
+                if ($MIsReadOnly) {
+                    Write-ReglazeInfo "[Simulation] Clearing READONLY attribute on preserved disk $($MDisk.DiskNumber) ($($MatchedPreserved.Label))."
+                    $MIsReadOnly = $false
+                    $MDisk.IsReadOnly = $false
+                }
+            } elseif ($MatchedPreserved -and -not $MatchedPreserved.ExpectedMount) {
+                Write-ReglazeInfo "[Simulation] Preserved disk $($MDisk.DiskNumber) ($($MatchedPreserved.Label)) has expected_mount: null (leaving offline)."
+            }
+
             $ClonedParts = @()
             if ($MDisk.Partitions) {
                 foreach ($MPart in $MDisk.Partitions) {
@@ -120,6 +152,8 @@ function Invoke-DriveLetterReconciliation {
                 BusType      = [string]$MDisk.BusType
                 FriendlyName = [string]$MDisk.FriendlyName
                 IsRemovable  = [bool]($MDisk.IsRemovable -or $MDisk.BusType -in @("USB", "SD", "MMC"))
+                IsOffline    = $MIsOffline
+                IsReadOnly   = $MIsReadOnly
                 Partitions   = $ClonedParts
             }
         }
@@ -158,6 +192,32 @@ function Invoke-DriveLetterReconciliation {
                 $MatchPhys.SerialNumber.Trim()
             } else {
                 ""
+            }
+
+            # Online and clear readonly for configured preserved disks with expected_mount
+            $MatchedPreserved = $null
+            if ($Serial) {
+                $MatchedPreserved = $PreservedEntries | Where-Object {
+                    $entrySerial = if ($_.SerialNumber) { $_.SerialNumber.Trim() } else { "" }
+                    $entrySerial -and ($entrySerial -ieq $Serial -or $Serial.Contains($entrySerial) -or $entrySerial.Contains($Serial))
+                } | Select-Object -First 1
+            }
+            if (-not $MatchedPreserved -and $null -ne $RDisk.Number) {
+                $MatchedPreserved = $PreservedEntries | Where-Object { $_.DiskId -eq $RDisk.Number } | Select-Object -First 1
+            }
+
+            if ($MatchedPreserved -and $MatchedPreserved.ExpectedMount) {
+                if ($RDisk.IsOffline) {
+                    Write-ReglazeInfo "Bringing preserved disk $($RDisk.Number) ($($MatchedPreserved.Label)) ONLINE..."
+                    Set-Disk -Number $RDisk.Number -IsOffline $false -ErrorAction SilentlyContinue
+                    $OnlinedDisks.Add([int]$RDisk.Number)
+                }
+                if ($RDisk.IsReadOnly) {
+                    Write-ReglazeInfo "Clearing READONLY attribute on preserved disk $($RDisk.Number) ($($MatchedPreserved.Label))..."
+                    Set-Disk -Number $RDisk.Number -IsReadOnly $false -ErrorAction SilentlyContinue
+                }
+            } elseif ($MatchedPreserved -and -not $MatchedPreserved.ExpectedMount) {
+                Write-ReglazeInfo "Preserved disk $($RDisk.Number) ($($MatchedPreserved.Label)) has expected_mount: null (leaving offline)."
             }
 
             $RawParts = @(Get-Partition -DiskNumber $RDisk.Number -ErrorAction SilentlyContinue | Sort-Object PartitionNumber)
@@ -547,6 +607,7 @@ function Invoke-DriveLetterReconciliation {
         MissingOptionalDisks      = $MissingOptionalDisks
         RequiresReconnectShutdown = $RequiresShutdown
         ReservedLetters           = $ReservedLetters
+        OnlinedDisks              = @($OnlinedDisks)
         SimulatedSystemDisks      = $SystemDisks
     }
 }

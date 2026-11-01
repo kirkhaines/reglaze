@@ -75,7 +75,7 @@ function Build-AutounattendXml {
     </component>
     <component name="Microsoft-Windows-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
       <DiskConfiguration>
-        <WillShowUI>OnError</WillShowUI>
+        <WillShowUI>Always</WillShowUI>
       </DiskConfiguration>
       <ImageInstall>
         <OSImage>
@@ -85,11 +85,7 @@ function Build-AutounattendXml {
               <Value>Windows 11 Pro</Value>
             </MetaData>
           </InstallFrom>
-          <InstallTo>
-            <DiskID>$TargetDiskId</DiskID>
-            <PartitionID>3</PartitionID>
-          </InstallTo>
-          <WillShowUI>OnError</WillShowUI>
+          <WillShowUI>Always</WillShowUI>
         </OSImage>
       </ImageInstall>
       <UserData>
@@ -102,13 +98,8 @@ function Build-AutounattendXml {
       <RunSynchronous>
         <RunSynchronousCommand wcm:action="add" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
           <Order>1</Order>
-          <Description>Dynamic Disk Signature Verification</Description>
-          <Path>powershell.exe -ExecutionPolicy Bypass -Command "&amp; { `$dm = (Get-PSDrive -PSProvider FileSystem | ForEach-Object { (Join-Path `$_.Root 'Reglaze\DiskMatch.ps1'), (Join-Path `$_.Root 'DiskMatch.ps1') } | Where-Object { Test-Path `$_ } | Select-Object -First 1); if (`$dm) { &amp; `$dm -TargetSerialNumber '$TargetSerial' -TargetBusType '$TargetBus' -TargetDiskId $TargetDiskId -PreservedSerialNumbers @($PreservedSerialsParam) -DiskpartOutputPath X:\diskpart.txt } else { Write-Error 'DiskMatch.ps1 not found on any drive' } }"</Path>
-        </RunSynchronousCommand>
-        <RunSynchronousCommand wcm:action="add" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
-          <Order>2</Order>
-          <Description>Execute Dynamic Disk Partitioning</Description>
-          <Path>cmd.exe /c if exist X:\diskpart.txt diskpart.exe /s X:\diskpart.txt</Path>
+          <Description>Isolate and Protect Secondary Disks</Description>
+          <Path>cmd.exe /c for %d in (C D E F G H I J K L M N O P Q R S T U V W X Y Z) do if exist %d:\Reglaze\protect-disks.cmd call %d:\Reglaze\protect-disks.cmd %d</Path>
         </RunSynchronousCommand>
       </RunSynchronous>
     </component>

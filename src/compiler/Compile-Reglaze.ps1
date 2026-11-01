@@ -133,14 +133,16 @@ function Invoke-ReglazeCompilation {
     Build-AutounattendXml -Blueprint $Blueprint -AuditReference $AuditReference -OutputPath $AutounattendPath | Out-Null
     Write-ReglazeSuccess "Generated: $AutounattendPath"
 
-    # 7. Stage WinPE Disk Matching Script
-    Write-ReglazeInfo "Staging WinPE dynamic disk matching engine..."
-    $SourceDiskMatch = Join-Path $CompilerRoot "DiskMatch.ps1"
-    $TargetDiskMatch1 = Join-Path $ReglazeDir "DiskMatch.ps1"
-    $TargetDiskMatch2 = Join-Path $MediaDir "DiskMatch.ps1"
-    Copy-Item -Path $SourceDiskMatch -Destination $TargetDiskMatch1 -Force
-    Copy-Item -Path $SourceDiskMatch -Destination $TargetDiskMatch2 -Force
-    Write-ReglazeSuccess "Staged: $TargetDiskMatch1"
+    # 7. Stage WinPE Disk Matching & Isolation Engine
+    Write-ReglazeInfo "Staging WinPE dynamic disk matching & protection engine..."
+    foreach ($ToolName in @("DiskMatch.vbs", "protect-disks.cmd", "DiskMatch.ps1")) {
+        $SrcTool = Join-Path $CompilerRoot $ToolName
+        if (Test-Path $SrcTool) {
+            Copy-Item -Path $SrcTool -Destination (Join-Path $ReglazeDir $ToolName) -Force
+            Copy-Item -Path $SrcTool -Destination (Join-Path $MediaDir $ToolName) -Force
+        }
+    }
+    Write-ReglazeSuccess "Staged: $ReglazeDir\DiskMatch.vbs and protect-disks.cmd"
 
     # 8. Compile Deployment Payload (WinGet DSC, Disk Config, BitLocker, Junctions, Google Drive Setup, Bootstrap, Hydrate, WSL2)
     Write-ReglazeInfo "Compiling deployment payload artifacts..."

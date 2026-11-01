@@ -321,13 +321,18 @@ function New-ReglazeBootableUsb {
             # Copy autounattend.xml
             Copy-Item -LiteralPath $AutounattendSrc -Destination (Join-Path $TargetDriveLetter "autounattend.xml") -Force
 
-            # Copy DiskMatch.ps1
-            $DiskMatchSrc = Join-Path $MediaArtifactsDir "DiskMatch.ps1"
-            if (Test-Path -LiteralPath $DiskMatchSrc) {
-                Copy-Item -LiteralPath $DiskMatchSrc -Destination (Join-Path $TargetDriveLetter "DiskMatch.ps1") -Force
-                $ReglazeSub = Join-Path $TargetDriveLetter "Reglaze"
-                if (-not (Test-Path -LiteralPath $ReglazeSub)) { New-Item -ItemType Directory -Path $ReglazeSub -Force | Out-Null }
-                Copy-Item -LiteralPath $DiskMatchSrc -Destination (Join-Path $ReglazeSub "DiskMatch.ps1") -Force
+            # Copy DiskMatch tools (DiskMatch.vbs, protect-disks.cmd, DiskMatch.ps1)
+            $ReglazeSub = Join-Path $TargetDriveLetter "Reglaze"
+            if (-not (Test-Path -LiteralPath $ReglazeSub)) { New-Item -ItemType Directory -Path $ReglazeSub -Force | Out-Null }
+            foreach ($ToolName in @("DiskMatch.vbs", "protect-disks.cmd", "DiskMatch.ps1")) {
+                $ToolSrc = Join-Path $MediaArtifactsDir $ToolName
+                if (-not (Test-Path -LiteralPath $ToolSrc)) {
+                    $ToolSrc = Join-Path $MediaArtifactsDir "Reglaze\$ToolName"
+                }
+                if (Test-Path -LiteralPath $ToolSrc) {
+                    Copy-Item -LiteralPath $ToolSrc -Destination (Join-Path $TargetDriveLetter $ToolName) -Force
+                    Copy-Item -LiteralPath $ToolSrc -Destination (Join-Path $ReglazeSub $ToolName) -Force
+                }
             }
 
             # Copy payload/
@@ -337,9 +342,9 @@ function New-ReglazeBootableUsb {
             $ReglazePayload = Join-Path $TargetDriveLetter "Reglaze\payload"
             Copy-Item -Path $PayloadSrc -Destination (Join-Path $TargetDriveLetter "Reglaze") -Recurse -Force
 
-            Write-Host "  Injected autounattend.xml, DiskMatch.ps1, and payload/ into $TargetDriveLetter." -ForegroundColor Green
+            Write-Host "  Injected autounattend.xml, DiskMatch.vbs, protect-disks.cmd, and payload/ into $TargetDriveLetter." -ForegroundColor Green
         } else {
-            Write-Host "  [Simulation] Staged autounattend.xml, DiskMatch.ps1, and payload/ to $TargetDriveLetter." -ForegroundColor DarkCyan
+            Write-Host "  [Simulation] Staged autounattend.xml, DiskMatch.vbs, protect-disks.cmd, and payload/ to $TargetDriveLetter." -ForegroundColor DarkCyan
         }
 
     } finally {
