@@ -19,14 +19,14 @@ param()
 # [HITL-ID]: HITL-M5-01
 # [HITL-TARGET]: USB Media Creation / Format-Volume & DISM Split-Image
 # [HITL-STATUS]: PENDING
-# [HITL-DESCRIPTION]: Formats USB drive as FAT32, splits install.wim via dism /Split-Image, and copies autounattend.xml + payload.
+# [HITL-DESCRIPTION]: Formats USB drive as FAT32, splits install.wim via dism /Split-Image to local cache, and streams via robocopy /J + autounattend.xml + payload.
 # [HITL-TEST-SNIPPET]:
 #   # Safe inspection of connected USB storage devices:
 #   Get-Disk | Where-Object { $_.BusType -eq 'USB' } | Select-Object Number, FriendlyName, BusType, Size, OperationalStatus
 # [HITL-LAST-INPUT]: Read-only query of physical disks on developer host
 # [HITL-LAST-RESULT]: PENDING
-# [HITL-PATTERN]: Format-Volume -DriveLetter $Letter -FileSystem FAT32; dism /Split-Image /ImageFile:... /SWMFile:... /FileSize:3800
-# [HITL-AVOID]: Creating media on non-removable internal NVMe/SATA disks; using Rufus registry bypasses that break feature updates
+# [HITL-PATTERN]: Format-Volume -DriveLetter $Letter -FileSystem FAT32; dism /Split-Image /ImageFile:... /SWMFile:$Cache\install.swm /FileSize:3800; robocopy $Cache $UsbSources install*.swm /J
+# [HITL-AVOID]: Splitting DISM directly across USB bus (causes 100% disk activity bottleneck and FAT thrashing); creating media on internal disks
 # =============================================================================
 
 function Test-ValidUsbDrive {
@@ -275,44 +275,110 @@ function New-ReglazeBootableUsb {
             Write-Host "  [Simulation] Extracted bootmgr, boot/, efi/, support/, and sources/ (excluding install.wim)." -ForegroundColor DarkCyan
         }
 
-        # 8. Split install.wim via DISM
-        Write-Host "Splitting install.wim into standard FAT32-compatible .swm slices via DISM..." -ForegroundColor Yellow
+        # 8. Split install.wim via DISM (Optimized with Local Fast-Storage Caching & Unbuffered I/O)
+        Write-Host "Preparing Windows installation image (install.wim / install.swm)..." -ForegroundColor Yellow
         $SourceWim = "$MountedVolumeLetter\sources\install.wim"
-        $TargetSwm = "$TargetDriveLetter\sources\install.swm"
+        $SourceEsd = "$MountedVolumeLetter\sources\install.esd"
+        $TargetSources = "$TargetDriveLetter\sources"
+
+        $RepoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+        $IsoBaseName = if ($IsoPath) { [System.IO.Path]::GetFileNameWithoutExtension($IsoPath) } else { "windows11" }
+
+        # Resolve fast local storage cache directory for split .swm slices
+        $CandidateCacheDirs = @()
+        if ($IsoPath -and (Test-Path -LiteralPath $IsoPath)) {
+            $CandidateCacheDirs += Join-Path (Split-Path -Parent (Resolve-Path $IsoPath)) "swm_cache\$IsoBaseName"
+        }
+        $CandidateCacheDirs += Join-Path $RepoRoot "downloads\swm_cache\$IsoBaseName"
+        $CandidateCacheDirs += Join-Path $env:TEMP "reglaze_swm_cache\$IsoBaseName"
+
+        $LocalSwmCacheDir = $null
+        foreach ($Candidate in $CandidateCacheDirs) {
+            try {
+                if (-not (Test-Path -LiteralPath $Candidate)) {
+                    New-Item -ItemType Directory -Path $Candidate -Force -ErrorAction Stop | Out-Null
+                }
+                $TestFile = Join-Path $Candidate ".write_test"
+                Set-Content -LiteralPath $TestFile -Value "test" -ErrorAction Stop
+                Remove-Item -LiteralPath $TestFile -Force -ErrorAction SilentlyContinue
+                $LocalSwmCacheDir = $Candidate
+                break
+            } catch {
+                continue
+            }
+        }
+        if (-not $LocalSwmCacheDir) {
+            $LocalSwmCacheDir = Join-Path $RepoRoot "downloads\swm_cache\$IsoBaseName"
+        }
 
         if (-not $IsSimulated) {
-            $TargetSources = "$TargetDriveLetter\sources"
             if (-not (Test-Path -LiteralPath $TargetSources)) {
                 New-Item -ItemType Directory -Path $TargetSources -Force | Out-Null
             }
 
             # If sources\install.esd exists in ESD ISOs, it's already compressed <4GB
-            $SourceEsd = "$MountedVolumeLetter\sources\install.esd"
             if (Test-Path -LiteralPath $SourceEsd) {
-                Write-Host "  Found install.esd in ISO; copying directly..." -ForegroundColor Cyan
-                Copy-Item -LiteralPath $SourceEsd -Destination (Join-Path $TargetSources "install.esd") -Force
+                Write-Host "  Found install.esd in ISO; copying to USB using unbuffered I/O (robocopy /J)..." -ForegroundColor Cyan
+                $SourceEsdDir = Split-Path -Parent $SourceEsd
+                $RoboEsdCmd = "robocopy `"$SourceEsdDir`" `"$TargetSources`" install.esd /J /NP /NDL /NC /NS"
+                cmd.exe /c $RoboEsdCmd | Out-Null
+                if ($LASTEXITCODE -gt 7) {
+                    throw "Robocopy failed to copy install.esd to USB drive (Exit code: $LASTEXITCODE)."
+                }
                 Write-Host "  install.esd copied directly." -ForegroundColor Green
             } elseif (Test-Path -LiteralPath $SourceWim) {
-                Write-Host "  Running: dism.exe /Split-Image /ImageFile:`"$SourceWim`" /SWMFile:`"$TargetSwm`" /FileSize:3800" -ForegroundColor Cyan
-                $DismExit = -1
-                if ($IsAdmin) {
-                    & dism.exe /Split-Image /ImageFile:"$SourceWim" /SWMFile:"$TargetSwm" /FileSize:3800
-                    $DismExit = $LASTEXITCODE
+                $SourceWimLength = (Get-Item -LiteralPath $SourceWim).Length
+                $CachedSlices = Get-ChildItem -LiteralPath $LocalSwmCacheDir -Filter "install*.swm" -ErrorAction SilentlyContinue
+                $CacheValid = $false
+                if ($CachedSlices) {
+                    $TotalCachedSize = ($CachedSlices | Measure-Object -Property Length -Sum).Sum
+                    $PrimarySlice = Join-Path $LocalSwmCacheDir "install.swm"
+                    # Valid if install.swm exists, total size > 3GB, and at least 95% of source WIM size
+                    if ((Test-Path -LiteralPath $PrimarySlice) -and $TotalCachedSize -gt 3GB -and $TotalCachedSize -ge ($SourceWimLength * 0.95)) {
+                        $CacheValid = $true
+                    }
+                }
+
+                if ($CacheValid) {
+                    Write-Host "  Found valid cached split .swm slices in: $LocalSwmCacheDir" -ForegroundColor Green
+                    Write-Host "  Cache contains $($CachedSlices.Count) slices ($([Math]::Round($TotalCachedSize / 1GB, 2)) GB). Skipping DISM split..." -ForegroundColor Green
                 } else {
-                    Write-Host "  [i] Requesting UAC elevation for DISM image splitting..." -ForegroundColor Cyan
-                    $DismArgs = "/Split-Image /ImageFile:`"$SourceWim`" /SWMFile:`"$TargetSwm`" /FileSize:3800"
-                    $DismProc = Start-Process -FilePath "dism.exe" -ArgumentList $DismArgs -Verb RunAs -Wait -PassThru
-                    $DismExit = $DismProc.ExitCode
+                    Write-Host "  Splitting install.wim on fast local storage: $LocalSwmCacheDir\install.swm..." -ForegroundColor Yellow
+                    # Remove any stale/partial slices before splitting
+                    Get-ChildItem -LiteralPath $LocalSwmCacheDir -Filter "install*.swm" -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
+
+                    $LocalSwmTarget = Join-Path $LocalSwmCacheDir "install.swm"
+                    $DismExit = -1
+                    if ($IsAdmin) {
+                        & dism.exe /Split-Image /ImageFile:"$SourceWim" /SWMFile:"$LocalSwmTarget" /FileSize:3800
+                        $DismExit = $LASTEXITCODE
+                    } else {
+                        Write-Host "  [i] Requesting UAC elevation for DISM image splitting..." -ForegroundColor Cyan
+                        $DismArgs = "/Split-Image /ImageFile:`"$SourceWim`" /SWMFile:`"$LocalSwmTarget`" /FileSize:3800"
+                        $DismProc = Start-Process -FilePath "dism.exe" -ArgumentList $DismArgs -Verb RunAs -Wait -PassThru
+                        $DismExit = $DismProc.ExitCode
+                    }
+                    if ($DismExit -ne 0) {
+                        throw "DISM split operation failed with exit code: $DismExit"
+                    }
+                    Write-Host "  DISM split complete on local storage." -ForegroundColor Green
                 }
-                if ($DismExit -ne 0) {
-                    throw "DISM split operation failed with exit code: $DismExit"
+
+                # Stream .swm slices from local fast storage to USB using unbuffered large-block I/O (robocopy /J)
+                Write-Host "  Streaming install*.swm slices to USB drive using unbuffered I/O (robocopy /J)..." -ForegroundColor Cyan
+                $RoboSwmCmd = "robocopy `"$LocalSwmCacheDir`" `"$TargetSources`" install*.swm /J /NP /NDL /NC /NS"
+                cmd.exe /c $RoboSwmCmd | Out-Null
+                if ($LASTEXITCODE -gt 7) {
+                    throw "Robocopy failed to copy install*.swm slices to USB drive (Exit code: $LASTEXITCODE)."
                 }
-                Write-Host "  install.wim successfully split into install.swm slices." -ForegroundColor Green
+                Write-Host "  install*.swm slices successfully copied to USB." -ForegroundColor Green
             } else {
                 throw "Neither install.wim nor install.esd found in source ISO sources\ directory!"
             }
         } else {
-            Write-Host "  [Simulation] Executed: dism.exe /Split-Image /ImageFile:`"$SourceWim`" /SWMFile:`"$TargetSwm`" /FileSize:3800" -ForegroundColor DarkCyan
+            Write-Host "  [Simulation] Local fast storage split & cache target: $LocalSwmCacheDir\install.swm" -ForegroundColor DarkCyan
+            Write-Host "  [Simulation] Executed: dism.exe /Split-Image /ImageFile:`"$SourceWim`" /SWMFile:`"$LocalSwmCacheDir\install.swm`" /FileSize:3800" -ForegroundColor DarkCyan
+            Write-Host "  [Simulation] Streamed install*.swm to $TargetSources via unbuffered I/O (robocopy /J)." -ForegroundColor DarkCyan
         }
 
         # 9. Inject Reglaze Artifacts

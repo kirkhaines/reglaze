@@ -11,8 +11,9 @@ bin/*.exe
 audit-output/
 tests/temp_*/
 
-# Downloads (Windows ISOs)
+# Downloads (Windows ISOs and split SWM cache)
 downloads/
+swm_cache/
 
 # Secrets and environment configs
 .env
