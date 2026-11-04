@@ -237,9 +237,19 @@ For Each objDisk In colDisks
         WScript.Echo " [>] Disk " & dIndex & ": " & dModel & " -> TARGET OS DISK (Keep Online & Writable)"
     Else
         WScript.Echo " [x] Disk " & dIndex & ": " & dModel & " -> SECONDARY DISK (Setting OFFLINE & READONLY)"
+        WScript.Echo " [i]     PNPDeviceID: " & dPnp & " InterfaceType: " & dInterface & " MediaType: " & dMedia
         outFile.WriteLine "select disk " & dIndex
+        Dim isNvme
+        isNvme = False
+        If InStr(dPnp, "NVME") > 0 Or InStr(dInterface, "NVME") > 0 Or InStr(dInterface, "PCIE") > 0 Or InStr(UCase(dModel), "NVME") > 0 Then
+            isNvme = True
+        End If
+        If isNvme Then
+            WScript.Echo " [i]     Skipping READONLY attribute for NVMe disk (not supported by stornvme)"
+        Else
+            outFile.WriteLine "attribute disk set readonly"
+        End If
         outFile.WriteLine "offline disk"
-        outFile.WriteLine "attribute disk set readonly"
         protectedCount = protectedCount + 1
     End If
 Next
@@ -253,4 +263,3 @@ WScript.Echo "[+] Disks to offline & protect: " & protectedCount
 WScript.Echo "================================================================"
 
 WScript.Quit 0
-

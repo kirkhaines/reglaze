@@ -74,9 +74,6 @@ function Build-AutounattendXml {
       <UserLocale>en-US</UserLocale>
     </component>
     <component name="Microsoft-Windows-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
-      <DiskConfiguration>
-        <WillShowUI>Always</WillShowUI>
-      </DiskConfiguration>
       <ImageInstall>
         <OSImage>
           <InstallFrom>
@@ -98,8 +95,8 @@ function Build-AutounattendXml {
       <RunSynchronous>
         <RunSynchronousCommand wcm:action="add" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
           <Order>1</Order>
-          <Description>Isolate and Protect Secondary Disks</Description>
-          <Path>cmd.exe /c for %d in (C D E F G H I J K L M N O P Q R S T U V W X Y Z) do if exist %d:\Reglaze\protect-disks.cmd call %d:\Reglaze\protect-disks.cmd %d</Path>
+          <Description>Prepare and Partition Target OS Disk</Description>
+          <Path>cmd.exe /c for %d in (C D E F G H I J K L M N O P Q R S T U V W X Y Z) do if exist %d:\Reglaze\prepare-target-disk.cmd call %d:\Reglaze\prepare-target-disk.cmd %d</Path>
         </RunSynchronousCommand>
       </RunSynchronous>
     </component>

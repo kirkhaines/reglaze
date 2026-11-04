@@ -521,10 +521,10 @@ applications:
     $WinPeSetup = $XmlParsed.unattend.settings | Where-Object { $_.pass -eq "windowsPE" } |
         ForEach-Object { $_.component } | Where-Object { $_.name -eq "Microsoft-Windows-Setup" }
     $RunSyncPath = $WinPeSetup.RunSynchronous.RunSynchronousCommand.Path
-    $DiskUi = $WinPeSetup.DiskConfiguration.WillShowUI
+    $ImageUi = $WinPeSetup.ImageInstall.OSImage.WillShowUI
 
-    Assert-Test -Name "16. autounattend.xml: configures AutoLogon for LocalAdmin and WinPE disk protection command" `
-        -Condition ($AutoLogonUser -eq "LocalAdmin" -and $DiskUi -eq "Always" -and $RunSyncPath -match "protect-disks\.cmd")
+    Assert-Test -Name "16. autounattend.xml: configures AutoLogon for LocalAdmin and WinPE target preparation command" `
+        -Condition ($AutoLogonUser -eq "LocalAdmin" -and $ImageUi -eq "Always" -and $RunSyncPath -match "prepare-target-disk\.cmd")
 
     # -------------------------------------------------------------------------
     # TEST 6: WinPE Disk Matching & Preserved Safety
@@ -592,6 +592,8 @@ applications:
             (Test-Path (Join-Path $E2EMedia "Reglaze\DiskMatch.vbs")) -and
             (Test-Path (Join-Path $E2EMedia "Reglaze\protect-disks.cmd")) -and
             (Test-Path (Join-Path $E2EMedia "Reglaze\DiskMatch.ps1")) -and
+            (Test-Path (Join-Path $E2EMedia "Reglaze\prepare-target-disk.cmd")) -and
+            (Test-Path (Join-Path $E2EMedia "Reglaze\prepare-target-disk.vbs")) -and
             (Test-Path (Join-Path $E2EMedia "payload\bootstrap.ps1"))
         )
 
@@ -762,6 +764,25 @@ applications:
     Assert-Test -Name "28. WinPE Disk Isolation: DiskMatch.vbs & protect-disks.cmd implement non-PowerShell disk protection" `
         -Condition ($VbsValid -and $CmdValid) `
         -Details "VbsValid: $VbsValid, CmdValid: $CmdValid"
+
+    # -------------------------------------------------------------------------
+    # TEST 11b: WinPE Target Disk Preparation (prepare-target-disk.cmd & vbs)
+    # -------------------------------------------------------------------------
+    $PrepCmd = Join-Path $RepoRoot "src\compiler\prepare-target-disk.cmd"
+    $PrepVbs = Join-Path $RepoRoot "src\compiler\prepare-target-disk.vbs"
+    $PrepCmdContent = if (Test-Path $PrepCmd) { Get-Content -Raw $PrepCmd } else { "" }
+    $PrepVbsContent = if (Test-Path $PrepVbs) { Get-Content -Raw $PrepVbs } else { "" }
+
+    $PrepValid = ($PrepCmdContent -match "prepare-target-disk\.vbs" -and
+                  $PrepCmdContent -match "diskpart\.exe /s" -and
+                  $PrepCmdContent -match "Are you sure you want to clean and partition" -and
+                  $PrepVbsContent -match "Win32_DiskDrive" -and
+                  $PrepVbsContent -match "create partition efi size=100" -and
+                  $PrepVbsContent -match "de94bba4-06d1-4d40-a16a-bfd50179d6ac")
+
+    Assert-Test -Name "28b. WinPE Target Preparation: prepare-target-disk.cmd & prepare-target-disk.vbs implement interactive UEFI/GPT partition layout" `
+        -Condition $PrepValid `
+        -Details "PrepValid: $PrepValid"
 
     # -------------------------------------------------------------------------
     # TEST 12: Phase 4 Bootstrap Onlining of Offline Preserved Disks

@@ -133,16 +133,16 @@ function Invoke-ReglazeCompilation {
     Build-AutounattendXml -Blueprint $Blueprint -AuditReference $AuditReference -OutputPath $AutounattendPath | Out-Null
     Write-ReglazeSuccess "Generated: $AutounattendPath"
 
-    # 7. Stage WinPE Disk Matching & Isolation Engine
-    Write-ReglazeInfo "Staging WinPE dynamic disk matching & protection engine..."
-    foreach ($ToolName in @("DiskMatch.vbs", "protect-disks.cmd", "DiskMatch.ps1")) {
+    # 7. Stage WinPE Dynamic Disk Matching & Preparation Engine
+    Write-ReglazeInfo "Staging WinPE dynamic disk matching & target preparation engine..."
+    foreach ($ToolName in @("DiskMatch.vbs", "protect-disks.cmd", "DiskMatch.ps1", "prepare-target-disk.cmd", "prepare-target-disk.vbs")) {
         $SrcTool = Join-Path $CompilerRoot $ToolName
         if (Test-Path $SrcTool) {
             Copy-Item -Path $SrcTool -Destination (Join-Path $ReglazeDir $ToolName) -Force
             Copy-Item -Path $SrcTool -Destination (Join-Path $MediaDir $ToolName) -Force
         }
     }
-    Write-ReglazeSuccess "Staged: $ReglazeDir\DiskMatch.vbs and protect-disks.cmd"
+    Write-ReglazeSuccess "Staged: $ReglazeDir\prepare-target-disk.cmd, prepare-target-disk.vbs, DiskMatch.vbs, and protect-disks.cmd"
 
     # 8. Compile Deployment Payload (WinGet DSC, Disk Config, BitLocker, Junctions, Google Drive Setup, Bootstrap, Hydrate, WSL2)
     Write-ReglazeInfo "Compiling deployment payload artifacts..."
