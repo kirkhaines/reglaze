@@ -55,7 +55,7 @@ function Build-AutounattendXml {
     $ProductKey = "VK7JG-NPHTM-C97JM-9MPGT-3V66T"
     if ($AuditReference -and $AuditReference.system_and_licensing.installed_product_key) {
         $AuditKey = $AuditReference.system_and_licensing.installed_product_key
-        if ($AuditKey -match '^[A-Z0-9]{5}-[A-Z0-9]{5}-[A-Z0-9]{5}-[A-Z0-9]{5}-[A-Z0-9]{5}$') {
+        if ($AuditKey -match '^[A-Z0-9]{5}-[A-Z0-9]{5}-[A-Z0-9]{5}-[A-Z0-9]{5}-[A-Z0-9]{5}$' -and $AuditKey -notmatch 'X{5}') {
             $ProductKey = $AuditKey
         }
     }
@@ -94,8 +94,8 @@ function Build-AutounattendXml {
       </UserData>
       <RunSynchronous>
         <RunSynchronousCommand wcm:action="add" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
-          <Order>1</Order>
           <Description>Prepare and Partition Target OS Disk</Description>
+          <Order>1</Order>
           <Path>cmd.exe /c for %d in (C D E F G H I J K L M N O P Q R S T U V W X Y Z) do if exist %d:\Reglaze\prepare-target-disk.cmd call %d:\Reglaze\prepare-target-disk.cmd %d</Path>
         </RunSynchronousCommand>
       </RunSynchronous>
@@ -118,18 +118,18 @@ function Build-AutounattendXml {
     </component>
     <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
       <AutoLogon>
+        <Enabled>true</Enabled>
+        <LogonCount>1</LogonCount>
         <Password>
           <Value>$AdminPassword</Value>
           <PlainText>true</PlainText>
         </Password>
-        <Enabled>true</Enabled>
-        <LogonCount>1</LogonCount>
         <Username>$AdminUser</Username>
       </AutoLogon>
       <OOBE>
         <HideEULAPage>true</HideEULAPage>
         <HideLocalAccountScreen>true</HideLocalAccountScreen>
-        <HideOEMRegistrationScreens>true</HideOEMRegistrationScreens>
+        <HideOEMRegistrationScreen>true</HideOEMRegistrationScreen>
         <HideOnlineAccountScreens>true</HideOnlineAccountScreens>
         <HideWirelessSetupInOOBE>true</HideWirelessSetupInOOBE>
         <NetworkLocation>Work</NetworkLocation>
@@ -142,32 +142,22 @@ function Build-AutounattendXml {
         </AdministratorPassword>
         <LocalAccounts>
           <LocalAccount wcm:action="add" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
-            <Password>
-              <Value>$AdminPassword</Value>
-              <PlainText>true</PlainText>
-            </Password>
             <Description>Reglaze Automated Provisioning Administrator</Description>
             <DisplayName>$AdminUser</DisplayName>
             <Group>Administrators</Group>
             <Name>$AdminUser</Name>
-          </LocalAccount>
-          <LocalAccount wcm:action="add" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
             <Password>
-              <Value></Value>
+              <Value>$AdminPassword</Value>
               <PlainText>true</PlainText>
             </Password>
-            <Description>Reglaze Standard Daily Driver</Description>
-            <DisplayName>$PrimaryUser</DisplayName>
-            <Group>$PrimaryGroup</Group>
-            <Name>$PrimaryUser</Name>
           </LocalAccount>
         </LocalAccounts>
       </UserAccounts>
       <FirstLogonCommands>
         <SynchronousCommand wcm:action="add" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
-          <Order>1</Order>
-          <Description>Launch Reglaze Machine Bootstrap</Description>
           <CommandLine>powershell.exe -ExecutionPolicy Bypass -NoExit -Command "&amp; { if (-not (Test-Path C:\Reglaze\payload\bootstrap.ps1)) { `$src = (Get-PSDrive -PSProvider FileSystem | ForEach-Object { (Join-Path `$_.Root 'Reglaze\payload'), (Join-Path `$_.Root 'payload') } | Where-Object { Test-Path (Join-Path `$_ 'bootstrap.ps1') } | Select-Object -First 1); if (`$src) { New-Item -ItemType Directory -Path C:\Reglaze -Force | Out-Null; Copy-Item -Path `$src -Destination C:\Reglaze\payload -Recurse -Force } }; if (Test-Path C:\Reglaze\payload\bootstrap.ps1) { &amp; C:\Reglaze\payload\bootstrap.ps1 } else { Write-Error 'Reglaze bootstrap payload not found.' } }"</CommandLine>
+          <Description>Launch Reglaze Machine Bootstrap</Description>
+          <Order>1</Order>
         </SynchronousCommand>
       </FirstLogonCommands>
     </component>

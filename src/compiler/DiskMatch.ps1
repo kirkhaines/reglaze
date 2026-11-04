@@ -110,7 +110,7 @@ function Invoke-DiskMatching {
 select disk $TargetIndex
 clean
 convert gpt
-create partition efi size=100
+create partition efi size=260
 format quick fs=fat32 label="System"
 create partition msr size=16
 create partition primary

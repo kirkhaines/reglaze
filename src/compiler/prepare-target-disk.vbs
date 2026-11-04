@@ -336,10 +336,11 @@ outFile.WriteLine "rem =========================================================
 outFile.WriteLine "select disk " & targetDiskIndex
 outFile.WriteLine "clean"
 outFile.WriteLine "convert gpt"
-outFile.WriteLine "create partition efi size=100"
+outFile.WriteLine "create partition efi size=260"
 outFile.WriteLine "format quick fs=fat32 label=""System"""
 outFile.WriteLine "create partition msr size=16"
-outFile.WriteLine "create partition primary shrink minimum=1000"
+outFile.WriteLine "create partition primary"
+outFile.WriteLine "shrink minimum=1000"
 outFile.WriteLine "format quick fs=ntfs label=""Windows"""
 outFile.WriteLine "create partition primary"
 outFile.WriteLine "format quick fs=ntfs label=""Recovery"""

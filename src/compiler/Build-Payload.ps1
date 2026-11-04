@@ -700,6 +700,8 @@ function Build-ReglazePayload {
     $UpdatesDrivers = if ($Blueprint.system.updates -and $null -ne $Blueprint.system.updates.drivers) { [bool]$Blueprint.system.updates.drivers } else { $true }
     $UpdatesWindows = if ($Blueprint.system.updates -and $null -ne $Blueprint.system.updates.windows_updates) { [bool]$Blueprint.system.updates.windows_updates } else { $true }
     $LocalAdminUser = if ($Blueprint.system.users.local_admin.username) { $Blueprint.system.users.local_admin.username } else { "LocalAdmin" }
+    $PrimaryIsAdmin = if ($Blueprint.system -and $Blueprint.system.users -and $Blueprint.system.users.primary_user -and $null -ne $Blueprint.system.users.primary_user.is_admin) { [bool]$Blueprint.system.users.primary_user.is_admin } else { $false }
+    $PrimaryGroup = if ($PrimaryIsAdmin) { "Administrators" } else { "Users" }
 
     $BootstrapScript = @"
 <#
@@ -950,6 +952,18 @@ if (Test-Path `$WinSettingsFile) {
         Write-Host "   Windows preferences applied successfully." -ForegroundColor Green
     } catch {
         Write-Warning "   Could not apply Windows preferences: `$(`$_.Exception.Message)"
+    }
+}
+
+# Ensure Primary Daily Driver Account Exists
+Write-Host "Ensuring primary user account '$PrimaryUser' exists..." -ForegroundColor Yellow
+if (-not (Get-LocalUser -Name "$PrimaryUser" -ErrorAction SilentlyContinue)) {
+    try {
+        New-LocalUser -Name "$PrimaryUser" -NoPassword -Description "Reglaze Standard Daily Driver" -FullName "$PrimaryUser" | Out-Null
+        Add-LocalGroupMember -Group "$PrimaryGroup" -Member "$PrimaryUser" -ErrorAction SilentlyContinue
+        Write-Host "   Created primary user '$PrimaryUser' (Group: $PrimaryGroup)." -ForegroundColor Green
+    } catch {
+        Write-Warning "   Could not create primary user '$PrimaryUser': `$(`$_.Exception.Message)"
     }
 }
 

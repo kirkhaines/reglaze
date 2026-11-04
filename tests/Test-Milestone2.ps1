@@ -777,7 +777,7 @@ applications:
                   $PrepCmdContent -match "diskpart\.exe /s" -and
                   $PrepCmdContent -match "Are you sure you want to clean and partition" -and
                   $PrepVbsContent -match "Win32_DiskDrive" -and
-                  $PrepVbsContent -match "create partition efi size=100" -and
+                  $PrepVbsContent -match "create partition efi size=260" -and
                   $PrepVbsContent -match "de94bba4-06d1-4d40-a16a-bfd50179d6ac")
 
     Assert-Test -Name "28b. WinPE Target Preparation: prepare-target-disk.cmd & prepare-target-disk.vbs implement interactive UEFI/GPT partition layout" `
