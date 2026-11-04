@@ -207,7 +207,10 @@ function New-ReglazeBootableUsb {
 
     Write-Host "Verifying deployment media artifacts: $MediaArtifactsDir..." -ForegroundColor Yellow
     $AutounattendSrc = Join-Path $MediaArtifactsDir "autounattend.xml"
-    $PayloadSrc = Join-Path $MediaArtifactsDir "payload"
+    $PayloadSrc = Join-Path $MediaArtifactsDir "Reglaze\payload"
+    if (-not (Test-Path -LiteralPath $PayloadSrc)) {
+        $PayloadSrc = Join-Path $MediaArtifactsDir "payload"
+    }
 
     if (-not $IsSimulated) {
         if (-not (Test-Path -LiteralPath $AutounattendSrc)) {
@@ -387,28 +390,38 @@ function New-ReglazeBootableUsb {
             # Copy autounattend.xml
             Copy-Item -LiteralPath $AutounattendSrc -Destination (Join-Path $TargetDriveLetter "autounattend.xml") -Force
 
-            # Copy DiskMatch tools (DiskMatch.vbs, protect-disks.cmd, DiskMatch.ps1)
+            # Copy WinPE & preparation tools exclusively to \Reglaze\
             $ReglazeSub = Join-Path $TargetDriveLetter "Reglaze"
             if (-not (Test-Path -LiteralPath $ReglazeSub)) { New-Item -ItemType Directory -Path $ReglazeSub -Force | Out-Null }
             foreach ($ToolName in @("DiskMatch.vbs", "protect-disks.cmd", "DiskMatch.ps1", "prepare-target-disk.cmd", "prepare-target-disk.vbs")) {
-                $ToolSrc = Join-Path $MediaArtifactsDir $ToolName
+                $ToolSrc = Join-Path $MediaArtifactsDir "Reglaze\$ToolName"
                 if (-not (Test-Path -LiteralPath $ToolSrc)) {
-                    $ToolSrc = Join-Path $MediaArtifactsDir "Reglaze\$ToolName"
+                    $ToolSrc = Join-Path $MediaArtifactsDir $ToolName
                 }
                 if (Test-Path -LiteralPath $ToolSrc) {
-                    Copy-Item -LiteralPath $ToolSrc -Destination (Join-Path $TargetDriveLetter $ToolName) -Force
+                    # Copy only to Reglaze directory
                     Copy-Item -LiteralPath $ToolSrc -Destination (Join-Path $ReglazeSub $ToolName) -Force
                 }
             }
 
-            # Copy payload/
-            $TargetPayload = Join-Path $TargetDriveLetter "payload"
-            Copy-Item -Path $PayloadSrc -Destination $TargetDriveLetter -Recurse -Force
-            # Also copy to Reglaze/payload for dual-discovery
-            $ReglazePayload = Join-Path $TargetDriveLetter "Reglaze\payload"
-            Copy-Item -Path $PayloadSrc -Destination (Join-Path $TargetDriveLetter "Reglaze") -Recurse -Force
+            # Copy payload exclusively into Reglaze\payload
+            $ReglazePayload = Join-Path $ReglazeSub "payload"
+            if (-not (Test-Path -LiteralPath $ReglazePayload)) { New-Item -ItemType Directory -Path $ReglazePayload -Force | Out-Null }
+            Copy-Item -Path (Join-Path $PayloadSrc "*") -Destination $ReglazePayload -Recurse -Force
 
-            Write-Host "  Injected autounattend.xml, prepare-target-disk tools, DiskMatch tools, and payload/ into $TargetDriveLetter." -ForegroundColor Green
+            # Clean up any legacy root duplicate files / directories
+            foreach ($LegacyRootFile in @("prepare-target-disk.cmd", "prepare-target-disk.vbs", "DiskMatch.vbs", "protect-disks.cmd", "DiskMatch.ps1")) {
+                $LegacyPath = Join-Path $TargetDriveLetter $LegacyRootFile
+                if (Test-Path -LiteralPath $LegacyPath) {
+                    Remove-Item -LiteralPath $LegacyPath -Force -ErrorAction SilentlyContinue
+                }
+            }
+            $LegacyPayload = Join-Path $TargetDriveLetter "payload"
+            if (Test-Path -LiteralPath $LegacyPayload) {
+                Remove-Item -LiteralPath $LegacyPayload -Recurse -Force -ErrorAction SilentlyContinue
+            }
+
+            Write-Host "  Injected autounattend.xml and organized Reglaze tools & payload under $ReglazeSub." -ForegroundColor Green
         } else {
             Write-Host "  [Simulation] Staged autounattend.xml, prepare-target-disk tools, DiskMatch tools, and payload/ to $TargetDriveLetter." -ForegroundColor DarkCyan
         }
@@ -435,7 +448,7 @@ function New-ReglazeBootableUsb {
     Write-Host "  UEFI Bootloader:  $TargetDriveLetter\EFI\BOOT\BOOTX64.EFI" -ForegroundColor Cyan
     Write-Host "  Unattended Setup: $TargetDriveLetter\autounattend.xml" -ForegroundColor Cyan
     Write-Host "  OS Images:        $TargetDriveLetter\sources\install.swm" -ForegroundColor Cyan
-    Write-Host "  Post-Inst Payload:$TargetDriveLetter\payload\" -ForegroundColor Cyan
+    Write-Host "  Post-Inst Payload:$TargetDriveLetter\Reglaze\payload\" -ForegroundColor Cyan
     Write-Host ""
 
     return [PSCustomObject]@{
@@ -444,6 +457,6 @@ function New-ReglazeBootableUsb {
         Format            = "FAT32"
         IsSimulated       = $IsSimulated
         AutounattendPath  = [System.IO.Path]::Combine("$TargetDriveLetter\", "autounattend.xml")
-        PayloadPath       = [System.IO.Path]::Combine("$TargetDriveLetter\", "payload")
+        PayloadPath       = [System.IO.Path]::Combine("$TargetDriveLetter\", "Reglaze\payload")
     }
 }

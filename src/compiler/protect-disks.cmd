@@ -34,7 +34,12 @@ if "%MEDIA_DRIVE%"=="" (
 )
 
 set "VBS_SCRIPT=%MEDIA_DRIVE%\Reglaze\DiskMatch.vbs"
-set "CONFIG_FILE=%MEDIA_DRIVE%\payload\disk-config.json"
+set "CONFIG_FILE=%MEDIA_DRIVE%\Reglaze\payload\disk-config.json"
+if not exist "%CONFIG_FILE%" (
+    if exist "%MEDIA_DRIVE%\payload\disk-config.json" (
+        set "CONFIG_FILE=%MEDIA_DRIVE%\payload\disk-config.json"
+    )
+)
 set "OFFLINE_SCRIPT=X:\offline-disks.txt"
 
 if not exist "%VBS_SCRIPT%" (

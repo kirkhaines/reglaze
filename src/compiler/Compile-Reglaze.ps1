@@ -122,7 +122,7 @@ function Invoke-ReglazeCompilation {
     if (-not (Test-Path $ReglazeDir)) {
         New-Item -ItemType Directory -Path $ReglazeDir -Force | Out-Null
     }
-    $PayloadDir = Join-Path $MediaDir "payload"
+    $PayloadDir = Join-Path $ReglazeDir "payload"
     if (-not (Test-Path $PayloadDir)) {
         New-Item -ItemType Directory -Path $PayloadDir -Force | Out-Null
     }
@@ -139,7 +139,6 @@ function Invoke-ReglazeCompilation {
         $SrcTool = Join-Path $CompilerRoot $ToolName
         if (Test-Path $SrcTool) {
             Copy-Item -Path $SrcTool -Destination (Join-Path $ReglazeDir $ToolName) -Force
-            Copy-Item -Path $SrcTool -Destination (Join-Path $MediaDir $ToolName) -Force
         }
     }
     Write-ReglazeSuccess "Staged: $ReglazeDir\prepare-target-disk.cmd, prepare-target-disk.vbs, DiskMatch.vbs, and protect-disks.cmd"

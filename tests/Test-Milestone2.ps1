@@ -594,7 +594,7 @@ applications:
             (Test-Path (Join-Path $E2EMedia "Reglaze\DiskMatch.ps1")) -and
             (Test-Path (Join-Path $E2EMedia "Reglaze\prepare-target-disk.cmd")) -and
             (Test-Path (Join-Path $E2EMedia "Reglaze\prepare-target-disk.vbs")) -and
-            (Test-Path (Join-Path $E2EMedia "payload\bootstrap.ps1"))
+            (Test-Path (Join-Path $E2EMedia "Reglaze\payload\bootstrap.ps1"))
         )
 
     # -------------------------------------------------------------------------

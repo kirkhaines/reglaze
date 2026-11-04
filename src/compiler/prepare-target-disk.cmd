@@ -47,7 +47,12 @@ exit /b 1
 echo [i] Reglaze installation media located on: %MEDIA_DRIVE%
 
 set "VBS_SCRIPT=%MEDIA_DRIVE%\Reglaze\prepare-target-disk.vbs"
-set "CONFIG_FILE=%MEDIA_DRIVE%\payload\disk-config.json"
+set "CONFIG_FILE=%MEDIA_DRIVE%\Reglaze\payload\disk-config.json"
+if not exist "%CONFIG_FILE%" (
+    if exist "%MEDIA_DRIVE%\payload\disk-config.json" (
+        set "CONFIG_FILE=%MEDIA_DRIVE%\payload\disk-config.json"
+    )
+)
 set "PREPARE_SCRIPT=X:\prepare-disk.txt"
 
 if exist "%VBS_SCRIPT%" goto :vbs_found

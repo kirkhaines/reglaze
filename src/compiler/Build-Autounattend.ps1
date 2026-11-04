@@ -167,7 +167,7 @@ function Build-AutounattendXml {
         <SynchronousCommand wcm:action="add" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
           <Order>1</Order>
           <Description>Launch Reglaze Machine Bootstrap</Description>
-          <CommandLine>powershell.exe -ExecutionPolicy Bypass -NoExit -Command "&amp; { if (-not (Test-Path C:\Reglaze\payload\bootstrap.ps1)) { `$src = (Get-PSDrive -PSProvider FileSystem | ForEach-Object { Join-Path `$_.Root 'payload' } | Where-Object { Test-Path (Join-Path `$_ 'bootstrap.ps1') } | Select-Object -First 1); if (`$src) { New-Item -ItemType Directory -Path C:\Reglaze -Force | Out-Null; Copy-Item -Path `$src -Destination C:\Reglaze\payload -Recurse -Force } }; if (Test-Path C:\Reglaze\payload\bootstrap.ps1) { &amp; C:\Reglaze\payload\bootstrap.ps1 } else { Write-Error 'Reglaze bootstrap payload not found.' } }"</CommandLine>
+          <CommandLine>powershell.exe -ExecutionPolicy Bypass -NoExit -Command "&amp; { if (-not (Test-Path C:\Reglaze\payload\bootstrap.ps1)) { `$src = (Get-PSDrive -PSProvider FileSystem | ForEach-Object { (Join-Path `$_.Root 'Reglaze\payload'), (Join-Path `$_.Root 'payload') } | Where-Object { Test-Path (Join-Path `$_ 'bootstrap.ps1') } | Select-Object -First 1); if (`$src) { New-Item -ItemType Directory -Path C:\Reglaze -Force | Out-Null; Copy-Item -Path `$src -Destination C:\Reglaze\payload -Recurse -Force } }; if (Test-Path C:\Reglaze\payload\bootstrap.ps1) { &amp; C:\Reglaze\payload\bootstrap.ps1 } else { Write-Error 'Reglaze bootstrap payload not found.' } }"</CommandLine>
         </SynchronousCommand>
       </FirstLogonCommands>
     </component>
