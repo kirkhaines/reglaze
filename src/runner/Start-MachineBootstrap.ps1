@@ -60,6 +60,51 @@ if ($IsSimulated) {
     Write-ReglazeWarning "Running in SIMULATION mode. No system files, drivers, or registry credentials will be modified."
 } else {
     Write-ReglazeWarning "Running in LIVE PROVISIONING mode against the active Windows system."
+    $ReglazeRoot = "C:\Reglaze"
+    if (-not (Test-Path $ReglazeRoot)) {
+        New-Item -ItemType Directory -Path $ReglazeRoot -Force | Out-Null
+    }
+    try {
+        & icacls.exe $ReglazeRoot /grant "*S-1-5-32-545:(OI)(CI)M" /T /C /Q 2>&1 | Out-Null
+    } catch {}
+    try {
+        Start-Transcript -Path "C:\Reglaze\bootstrap.log" -Append -Force | Out-Null
+    } catch {}
+}
+
+function Initialize-ReglazePSWindowsUpdate {
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope Process -Force -ErrorAction SilentlyContinue
+    Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force -ForceBootstrap -Scope CurrentUser -ErrorAction SilentlyContinue | Out-Null
+    Set-PSRepository -Name 'PSGallery' -InstallationPolicy Trusted -ErrorAction SilentlyContinue
+    if (-not (Get-Module -Name PSWindowsUpdate -ListAvailable -ErrorAction SilentlyContinue)) {
+        Install-Module -Name PSWindowsUpdate -Force -SkipPublisherCheck -AcceptLicense -Confirm:$false -Scope CurrentUser -ErrorAction Stop
+    }
+    $ModCandidates = @(Get-Module -Name PSWindowsUpdate -ListAvailable -ErrorAction SilentlyContinue)
+    foreach ($Mod in $ModCandidates) {
+        if ($Mod.ModuleBase -and (Test-Path -LiteralPath $Mod.ModuleBase)) {
+            $ModFiles = @(Get-ChildItem -Path $Mod.ModuleBase -Recurse -File -ErrorAction SilentlyContinue)
+            foreach ($Mf in $ModFiles) {
+                try { Unblock-File -LiteralPath $Mf.FullName -ErrorAction SilentlyContinue } catch {}
+                if ($Mf.Extension -in @('.psm1', '.ps1xml', '.dll', '.ps1')) {
+                    try {
+                        $Sig = Get-AuthenticodeSignature -FilePath $Mf.FullName -ErrorAction SilentlyContinue
+                        if ($Sig -and $Sig.SignerCertificate) {
+                            foreach ($StoreScope in @('CurrentUser', 'LocalMachine')) {
+                                try {
+                                    $Store = New-Object System.Security.Cryptography.X509Certificates.X509Store("TrustedPublisher", $StoreScope)
+                                    $Store.Open([System.Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
+                                    $Store.Add($Sig.SignerCertificate)
+                                    $Store.Close()
+                                } catch {}
+                            }
+                        }
+                    } catch {}
+                }
+            }
+        }
+    }
+    Import-Module -Name PSWindowsUpdate -Force -DisableNameChecking -Global -ErrorAction Stop
 }
 
 # Resolve Payload Directory
@@ -117,6 +162,51 @@ if ($BitLockerKeyFile -and (Test-Path -LiteralPath $BitLockerKeyFile)) {
 }
 
 # =============================================================================
+# Step 1b: Standalone UEFI Bootloader Provisioning on Target OS Disk
+# =============================================================================
+Write-ReglazeStep "Step 1b/9: Ensuring Standalone UEFI Bootloader on Target OS Disk..."
+if (-not $IsSimulated) {
+    try {
+        $OsPart = Get-Partition -DriveLetter C -ErrorAction SilentlyContinue
+        if ($OsPart) {
+            $EfiPart = Get-Partition -DiskNumber $OsPart.DiskNumber -ErrorAction SilentlyContinue |
+                Where-Object { $_.GptType -eq '{c12a7328-f81f-11d2-ba4b-00a0c93ec93b}' -or $_.IsSystem } |
+                Select-Object -First 1
+            if ($EfiPart) {
+                $TempEfiLetter = $null
+                $TargetEfiDrive = $null
+                if ($EfiPart.DriveLetter) {
+                    $TargetEfiDrive = "$($EfiPart.DriveLetter):"
+                } else {
+                    foreach ($CandLetter in @('S', 'T', 'U', 'V', 'W', 'R', 'Q', 'P')) {
+                        if (-not (Get-PSDrive -Name $CandLetter -ErrorAction SilentlyContinue)) {
+                            $TempEfiLetter = $CandLetter
+                            break
+                        }
+                    }
+                    if ($TempEfiLetter) {
+                        Set-Partition -DiskNumber $EfiPart.DiskNumber -PartitionNumber $EfiPart.PartitionNumber -NewDriveLetter $TempEfiLetter -ErrorAction Stop
+                        $TargetEfiDrive = "${TempEfiLetter}:"
+                    }
+                }
+                if ($TargetEfiDrive) {
+                    Write-ReglazeInfo "Executing: bcdboot C:\Windows /s $TargetEfiDrive /f UEFI"
+                    & bcdboot.exe C:\Windows /s $TargetEfiDrive /f UEFI
+                    if ($TempEfiLetter) {
+                        Remove-PartitionAccessPath -DiskNumber $EfiPart.DiskNumber -PartitionNumber $EfiPart.PartitionNumber -AccessPath "${TempEfiLetter}:\" -ErrorAction SilentlyContinue
+                    }
+                    Write-ReglazeSuccess "Standalone UEFI bootloader provisioned on target disk $($OsPart.DiskNumber)."
+                }
+            }
+        }
+    } catch {
+        Write-ReglazeWarning "Could not provision standalone UEFI bootloader: $($_.Exception.Message)"
+    }
+} else {
+    Write-ReglazeInfo "[SIMULATION] Would mount target disk 260 MB EFI System Partition and run 'bcdboot C:\Windows /s S: /f UEFI'."
+}
+
+# =============================================================================
 # [HITL-ID]: HITL-M3-04
 # [HITL-TARGET]: PSWindowsUpdate / Automated WHQL Device Driver & Cumulative Updates
 # [HITL-STATUS]: VERIFIED
@@ -132,24 +222,7 @@ if ($BitLockerKeyFile -and (Test-Path -LiteralPath $BitLockerKeyFile)) {
 Write-ReglazeStep "Step 2/9: Servicing WHQL Hardware Device Drivers..."
 if (-not $SkipUpdates -and -not $IsSimulated) {
     try {
-        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-        Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force -ForceBootstrap -Scope CurrentUser -ErrorAction SilentlyContinue | Out-Null
-        Set-PSRepository -Name 'PSGallery' -InstallationPolicy Trusted -ErrorAction SilentlyContinue
-        Install-Module -Name PSWindowsUpdate -Force -Scope CurrentUser -ErrorAction Stop
-
-        # Bypass untrusted publisher prompts for format/type definitions and unblock module files
-        Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope Process -Force -ErrorAction SilentlyContinue
-        $ModulePaths = @(
-            (Join-Path $env:ProgramFiles "WindowsPowerShell\Modules\PSWindowsUpdate"),
-            (Join-Path $env:USERPROFILE "Documents\WindowsPowerShell\Modules\PSWindowsUpdate")
-        )
-        foreach ($ModPath in $ModulePaths) {
-            if (Test-Path -LiteralPath $ModPath) {
-                Get-ChildItem -Path $ModPath -Recurse -ErrorAction SilentlyContinue | Unblock-File -ErrorAction SilentlyContinue
-            }
-        }
-        Import-Module -Name PSWindowsUpdate -Force -DisableNameChecking -ErrorAction SilentlyContinue
-
+        Initialize-ReglazePSWindowsUpdate
         Write-ReglazeInfo "Scanning and installing WHQL drivers (GPU, Audio, Chipset, Storage)..."
         Get-WindowsUpdate -Category "Drivers" -Install -AcceptAll -IgnoreReboot -ErrorAction SilentlyContinue
         Write-ReglazeSuccess "WHQL driver servicing completed."
@@ -186,6 +259,7 @@ if ($DiskConfigFile -and (Test-Path -LiteralPath $DiskConfigFile)) {
             Set-ItemProperty -Path $WinlogonKey -Name "AutoAdminLogon" -Value "1" -ErrorAction SilentlyContinue
             Remove-ItemProperty -Path $WinlogonKey -Name "AutoLogonCount" -ErrorAction SilentlyContinue
             Write-ReglazeInfo "Shutting down workstation in 5 seconds so required preserved disks can be reconnected..."
+            try { Stop-Transcript | Out-Null } catch {}
             Start-Sleep -Seconds 5
             Stop-Computer -Force
             return
@@ -201,6 +275,7 @@ if ($DiskConfigFile -and (Test-Path -LiteralPath $DiskConfigFile)) {
 Write-ReglazeStep "Step 3/9: Installing Windows Security & Cumulative Quality Patches..."
 if (-not $SkipUpdates -and -not $IsSimulated) {
     try {
+        Initialize-ReglazePSWindowsUpdate
         Write-ReglazeInfo "Installing latest Windows cumulative updates..."
         Get-WindowsUpdate -NotCategory "Drivers" -Install -AcceptAll -IgnoreReboot -ErrorAction SilentlyContinue
         Write-ReglazeSuccess "Windows quality and security update pass completed."
@@ -247,10 +322,89 @@ $DscManifest = if ($ResolvedPayload) { Join-Path $ResolvedPayload "configuration
 
 if ($DscManifest -and (Test-Path -LiteralPath $DscManifest)) {
     if (-not $SkipDsc -and -not $IsSimulated) {
+        try {
+            Add-AppxPackage -RegisterByFamilyName -MainPackage Microsoft.DesktopAppInstaller_8wekyb3d8bbwe -ErrorAction SilentlyContinue
+        } catch {}
+        if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
+            $wingetExe = (Get-ChildItem -Path "$env:ProgramFiles\WindowsApps\Microsoft.DesktopAppInstaller_*_x64__8wekyb3d8bbwe\winget.exe" -ErrorAction SilentlyContinue |
+                          Sort-Object LastWriteTime -Descending |
+                          Select-Object -First 1).FullName
+            if ($wingetExe) {
+                $env:Path += ";$(Split-Path $wingetExe -Parent);$env:LOCALAPPDATA\Microsoft\WindowsApps"
+                Write-ReglazeInfo "Resolved winget.exe at: $wingetExe"
+            }
+        }
+        if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
+            Write-ReglazeInfo "WinGet CLI not yet available; installing/repairing Microsoft.DesktopAppInstaller..."
+            try {
+                Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force -ForceBootstrap -Scope CurrentUser -ErrorAction SilentlyContinue | Out-Null
+                Set-PSRepository -Name 'PSGallery' -InstallationPolicy Trusted -ErrorAction SilentlyContinue
+                Install-Module -Name Microsoft.WinGet.Client -Force -SkipPublisherCheck -AcceptLicense -Confirm:$false -Scope CurrentUser -ErrorAction Stop
+                Import-Module -Name Microsoft.WinGet.Client -Force -ErrorAction SilentlyContinue
+                Repair-WinGetPackageManager -AllUsers -Force -Latest -ErrorAction Stop
+            } catch {
+                try {
+                    $WgTempDir = "C:\Reglaze\temp"
+                    if (-not (Test-Path $WgTempDir)) { New-Item -ItemType Directory -Path $WgTempDir -Force | Out-Null }
+                    $BundlePath = Join-Path $WgTempDir "Microsoft.DesktopAppInstaller_8wekyb3d8bbwe.msixbundle"
+                    Invoke-WebRequest -Uri "https://aka.ms/getwinget" -OutFile $BundlePath -UseBasicParsing -ErrorAction Stop
+                    Add-AppxPackage -Path $BundlePath -ErrorAction SilentlyContinue
+                } catch {}
+            }
+            $wingetExe = (Get-ChildItem -Path "$env:ProgramFiles\WindowsApps\Microsoft.DesktopAppInstaller_*_x64__8wekyb3d8bbwe\winget.exe" -ErrorAction SilentlyContinue |
+                          Sort-Object LastWriteTime -Descending |
+                          Select-Object -First 1).FullName
+            if ($wingetExe) {
+                $env:Path += ";$(Split-Path $wingetExe -Parent);$env:LOCALAPPDATA\Microsoft\WindowsApps"
+            }
+        }
+        foreach ($WsDir in @("$env:LOCALAPPDATA\Packages\Microsoft.DesktopAppInstaller_8wekyb3d8bbwe\LocalState", "$env:LOCALAPPDATA\Microsoft\WinGet\Settings")) {
+            try {
+                if (-not (Test-Path $WsDir)) { New-Item -ItemType Directory -Path $WsDir -Force | Out-Null }
+                '{"installBehavior":{"preferences":{"scope":"machine"}}}' | Set-Content -Path (Join-Path $WsDir "settings.json") -Encoding UTF8 -Force
+            } catch {}
+        }
         Write-ReglazeInfo "Pre-enabling WinGet configuration agreements and experimental subsystem..."
+        & winget configure enable 2>&1 | Out-Null
         & winget configure --enable --accept-configuration-agreements 2>&1 | Out-Null
-        Write-ReglazeInfo "Executing: winget configure --file `"$DscManifest`" --accept-configuration-agreements --disable-interactivity"
-        & winget configure --file $DscManifest --accept-configuration-agreements --disable-interactivity
+
+        $DscText = Get-Content -Raw -LiteralPath $DscManifest -ErrorAction SilentlyContinue
+        if ($DscText) {
+            $PkgMatches = [regex]::Matches($DscText, 'id:\s*"([^"]+)"\s*\r?\n\s*source:\s*(\S+)')
+            foreach ($Match in $PkgMatches) {
+                $PkgId = $Match.Groups[1].Value
+                $PkgSource = $Match.Groups[2].Value
+                if ($PkgSource -eq "winget") {
+                    for ($Attempt = 1; $Attempt -le 2; $Attempt++) {
+                        if ($Attempt -gt 1) {
+                            Write-ReglazeWarning "Retrying package installation for $PkgId (Attempt $Attempt of 2)..."
+                            Start-Sleep -Seconds 5
+                        }
+                        Write-ReglazeInfo "Installing machine-wide package: $PkgId (--scope machine, attempt $Attempt/2)..."
+                        & winget install --id $PkgId --source $PkgSource --scope machine --silent --accept-package-agreements --accept-source-agreements --disable-interactivity
+                        if ($LASTEXITCODE -eq 0 -or $LASTEXITCODE -eq -1978335189) {
+                            break
+                        }
+                        & winget install --id $PkgId --source $PkgSource --silent --accept-package-agreements --accept-source-agreements --disable-interactivity
+                        if ($LASTEXITCODE -eq 0 -or $LASTEXITCODE -eq -1978335189) {
+                            break
+                        }
+                    }
+                }
+            }
+        }
+
+        for ($DscAttempt = 1; $DscAttempt -le 2; $DscAttempt++) {
+            if ($DscAttempt -gt 1) {
+                Write-ReglazeWarning "Retrying WinGet DSC configuration pass (Attempt $DscAttempt of 2)..."
+                Start-Sleep -Seconds 5
+            }
+            Write-ReglazeInfo "Executing: winget configure --file `"$DscManifest`" --accept-configuration-agreements --disable-interactivity (Attempt $DscAttempt/2)"
+            & winget configure --file $DscManifest --accept-configuration-agreements --disable-interactivity
+            if ($LASTEXITCODE -eq 0) {
+                break
+            }
+        }
         Write-ReglazeSuccess "WinGet DSC machine application deployment complete."
     } else {
         Write-ReglazeInfo "WinGet DSC pass bypassed (SkipDsc: $SkipDsc, Simulation: $IsSimulated)."
@@ -402,6 +556,9 @@ Write-Host ""
 # [HITL-PATTERN]: Guarded by $CanReboot = $AllowReboot -and $Live -and (-not $NoReboot)
 # [HITL-AVOID]: Executing Restart-Computer outside dedicated test VM
 # =============================================================================
+if (-not $IsSimulated) {
+    try { Stop-Transcript | Out-Null } catch {}
+}
 if ($CanReboot) {
     Write-ReglazeInfo "Rebooting workstation into standard user session in 5 seconds..."
     Start-Sleep -Seconds 5

@@ -193,6 +193,7 @@ function Build-WinGetDSCManifest {
             $YamlLines.Add("      directives:")
             $YamlLines.Add("        description: Install $($Pkg.AppName)")
             $YamlLines.Add("        allowPrerelease: true")
+            $YamlLines.Add("        securityContext: elevated")
             $YamlLines.Add("      settings:")
             $YamlLines.Add("        id: `"$($Pkg.PackageId)`"")
             $YamlLines.Add("        source: $($Pkg.Source)")

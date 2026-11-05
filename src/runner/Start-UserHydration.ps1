@@ -59,6 +59,23 @@ if ($IsSimulated) {
     Write-ReglazeWarning "No user registry keys, processes, junctions, or WSL files will be modified."
 } else {
     Write-ReglazeInfo "RUNNING IN LIVE USER MODE."
+    try {
+        $TranscriptFile = "C:\Reglaze\hydrate.log"
+        $TranscriptDir = Split-Path -Parent $TranscriptFile
+        if (-not (Test-Path $TranscriptDir)) { New-Item -ItemType Directory -Path $TranscriptDir -Force | Out-Null }
+        Start-Transcript -Path $TranscriptFile -Append -Force | Out-Null
+    } catch {
+        try {
+            $FallbackLog = Join-Path $env:LOCALAPPDATA "Reglaze\hydrate.log"
+            $FallbackDir = Split-Path -Parent $FallbackLog
+            if (-not (Test-Path $FallbackDir)) { New-Item -ItemType Directory -Path $FallbackDir -Force | Out-Null }
+            Start-Transcript -Path $FallbackLog -Append -Force | Out-Null
+        } catch {}
+    }
+    if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
+        Add-AppxPackage -RegisterByFamilyName -MainPackage Microsoft.DesktopAppInstaller_8wekyb3d8bbwe -ErrorAction SilentlyContinue
+        $env:Path += ";$env:LOCALAPPDATA\Microsoft\WindowsApps"
+    }
 }
 
 # =============================================================================
@@ -212,9 +229,13 @@ if ($GDriveSetup -and $GDriveSetup.StreamVerifyFolder) {
 
 if (-not $HydrateState.cloud_mount_verified) {
     if ($GDriveSetup -and $GDriveSetup.RenderedInstructions) {
-        Write-ReglazeInfo "Google Drive Setup & Sync Migration Instructions (Profile: $($GDriveSetup.Profile)):"
+        Write-ReglazeInfo "Google Drive Setup and Sync Migration Instructions (Profile: $($GDriveSetup.Profile)):"
+        Write-Host "  [WHAT TO DO / WHAT NOT TO DO DURING GOOGLE DRIVE SETUP]" -ForegroundColor Yellow
         foreach ($InstLine in $GDriveSetup.RenderedInstructions) {
-            Write-Host "  • $InstLine" -ForegroundColor Cyan
+            Write-Host "  * $InstLine" -ForegroundColor Cyan
+        }
+        if (-not ($GDriveSetup.SyncDirectories -and $GDriveSetup.SyncDirectories.Count -gt 0)) {
+            Write-Host "  IMPORTANT: DO NOT create or add any folders under 'Folders from your computer' in Google Drive Preferences." -ForegroundColor Yellow
         }
     }
 
@@ -359,6 +380,9 @@ if (-not $HydrateState.steam_library_connected) {
                     Write-ReglazeInfo "Steam Game '$GameName' (ID: $SteamId): Not in any library. Simulated fresh install into default library."
                 } elseif ($InstallResult.Status -eq "Triggered") {
                     Write-ReglazeSuccess "Steam Game '$GameName' (ID: $SteamId): Triggered fresh installation into default library."
+                    if (-not $IsSimulated -and -not $NonInteractive) {
+                        Read-Host "Press [Enter] after confirming the install prompt in Steam to queue the next game"
+                    }
                 } else {
                     Write-ReglazeWarning "Steam Game '$GameName' (ID: $SteamId): $($InstallResult.Message)"
                 }
@@ -616,6 +640,10 @@ Write-Host "  All user-level preferences, cloud mounts, junctions, WSL2 environm
 Write-Host "  developer repositories have been successfully initialized." -ForegroundColor Green
 Write-Host "  Your disposable Windows workstation is fully hydrated and ready for production!" -ForegroundColor Cyan
 Write-Host ""
+
+if (-not $IsSimulated) {
+    try { Stop-Transcript | Out-Null } catch {}
+}
 
 return [PSCustomObject]@{
     Status    = if ($HydrateState.completed) { "Completed" } else { "Incomplete" }

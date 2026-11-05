@@ -104,7 +104,7 @@ echo ================================================================
 echo   WARNING: ALL DATA ON THE TARGET DISK WILL BE PERMANENTLY ERASED!
 echo ================================================================
 echo   The disk will be wiped, converted to GPT, and formatted with:
-echo     1. EFI System Partition   [100 MB, FAT32, "System"]
+echo     1. EFI System Partition   [260 MB, FAT32, "System"]
 echo     2. Microsoft Reserved     [16 MB, MSR]
 echo     3. Windows OS Partition   [NTFS, "Windows"]
 echo     4. Windows Recovery       [1000 MB, NTFS, "Recovery"]

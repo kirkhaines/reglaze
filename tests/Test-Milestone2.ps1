@@ -573,8 +573,17 @@ applications:
         )
 
     $GDrivePayload = Get-Content -Raw (Join-Path $PayloadOut "google-drive-setup.json") | ConvertFrom-Json
-    Assert-Test -Name "19b. Payload: renders Google Drive setup template payload with target mount and source computer" `
-        -Condition ($GDrivePayload.StreamMountPoint -eq "E:" -and $GDrivePayload.SourceComputerName -eq "TESTPC" -and $GDrivePayload.MigrationMode -eq "copy" -and ($GDrivePayload.RenderedInstructions -join ' ') -notmatch '\{\{')
+    $GDriveGuideRaw = Get-Content -Raw (Join-Path $PayloadOut "google-drive-guide.md")
+    Assert-Test -Name "19b. Payload: renders Google Drive setup template payload with target mount, source computer, and DO/DO NOT sync instructions" `
+        -Condition (
+            $GDrivePayload.StreamMountPoint -eq "E:" -and
+            $GDrivePayload.SourceComputerName -eq "TESTPC" -and
+            $GDrivePayload.MigrationMode -eq "copy" -and
+            ($GDrivePayload.RenderedInstructions -join ' ') -notmatch '\{\{' -and
+            ($GDrivePayload.RenderedInstructions -join ' ') -match 'DO NOT select' -and
+            ($GDrivePayload.RenderedInstructions -join ' ') -match 'DO NOT create or add any Sync folders' -and
+            $GDriveGuideRaw -notmatch '\{\{'
+        )
 
     $WslScriptContent = Get-Content -Raw (Join-Path $PayloadOut "setup-wsl.sh")
     Assert-Test -Name "20. WSL Provisioner: defaults to primary Windows username ('developer')" `
@@ -853,6 +862,57 @@ applications:
             ($SimDisk2.IsOffline -eq $true)
         ) `
         -Details "OnlinedDisks: $($OnlineTestRes.OnlinedDisks -join ','), Disk1Offline: $($SimDisk1.IsOffline), Disk2Offline: $($SimDisk2.IsOffline)"
+
+    # -------------------------------------------------------------------------
+    # TEST 13: Generated bootstrap.ps1 & hydrate.ps1 AST & Bare-Metal Bug Fixes
+    # -------------------------------------------------------------------------
+    $GenBootstrapPath = Join-Path $PayloadOut "bootstrap.ps1"
+    $GenHydratePath   = Join-Path $PayloadOut "hydrate.ps1"
+    $GenBootstrapRaw  = Get-Content -Raw -LiteralPath $GenBootstrapPath
+    $GenHydrateRaw    = Get-Content -Raw -LiteralPath $GenHydratePath
+
+    $BsTokens = $null; $BsErrors = $null
+    [void][System.Management.Automation.Language.Parser]::ParseInput($GenBootstrapRaw, [ref]$BsTokens, [ref]$BsErrors)
+    $HyTokens = $null; $HyErrors = $null
+    [void][System.Management.Automation.Language.Parser]::ParseInput($GenHydrateRaw, [ref]$HyTokens, [ref]$HyErrors)
+
+    $AstClean = ($BsErrors.Count -eq 0 -and $HyErrors.Count -eq 0)
+    $AsciiClean = ($GenBootstrapRaw -notmatch '[^\x00-\x7F]' -and $GenHydrateRaw -notmatch '[^\x00-\x7F]')
+    $BootstrapChecks = (
+        $GenBootstrapRaw -match 'if \(\$true\)' -and
+        $GenBootstrapRaw -notmatch 'if \(true\)' -and
+        $GenBootstrapRaw -match 'Start-Transcript -Path \$TranscriptFile' -and
+        $GenBootstrapRaw -match 'C:\\Reglaze\\bootstrap\.log' -and
+        $GenBootstrapRaw -match 'Initialize-PSWindowsUpdate' -and
+        $GenBootstrapRaw -match '-SkipPublisherCheck' -and
+        $GenBootstrapRaw -match 'TrustedPublisher' -and
+        $GenBootstrapRaw -match 'Import-Module -Name PSWindowsUpdate -Force -DisableNameChecking -Global' -and
+        $GenBootstrapRaw -match 'bcdboot\.exe C:\\Windows /s' -and
+        $GenBootstrapRaw -match 'Microsoft\.DesktopAppInstaller_\*_x64__8wekyb3d8bbwe\\winget\.exe' -and
+        $GenBootstrapRaw -match 'Repair-WinGetPackageManager' -and
+        $GenBootstrapRaw -match 'https://aka\.ms/getwinget' -and
+        $GenBootstrapRaw -match 'winget configure enable' -and
+        $GenBootstrapRaw -match '--scope machine' -and
+        $GenBootstrapRaw -match 'Retrying package installation for' -and
+        $GenBootstrapRaw -notmatch 'UserShellFolders' -and
+        $GenBootstrapRaw -match '-ExecutionPolicy Bypass -NoExit -File'
+    )
+    $HydrateChecks = (
+        $GenHydrateRaw -match 'Start-Transcript -Path \$TranscriptFile' -and
+        $GenHydrateRaw -match 'C:\\Reglaze\\hydrate\.log' -and
+        $GenHydrateRaw -match 'Add-AppxPackage -RegisterByFamilyName -MainPackage Microsoft\.DesktopAppInstaller_8wekyb3d8bbwe' -and
+        $GenHydrateRaw -match 'WHAT TO DO / WHAT NOT TO DO DURING GOOGLE DRIVE SETUP' -and
+        $GenHydrateRaw -match '\$\{Target\}:' -and
+        $GenHydrateRaw -match '\$\{Link\}:' -and
+        $GenHydrateRaw -match 'UserShellFolders' -and
+        $GenHydrateRaw -match '\$UninstalledGames' -and
+        $GenHydrateRaw -match 'Press \[Enter\] after confirming the install prompt in Steam'
+    )
+
+    Assert-Test -Name "30. Payload Scripts: bootstrap.ps1 & hydrate.ps1 pass PowerShell AST validation with 0 errors and include all bare-metal fixes" `
+        -Condition ($AstClean -and $AsciiClean -and $BootstrapChecks -and $HydrateChecks) `
+        -Details "BsErrors=$($BsErrors.Count), HyErrors=$($HyErrors.Count), AsciiClean=$AsciiClean, BootstrapChecks=$BootstrapChecks, HydrateChecks=$HydrateChecks"
+
 
 } finally {
     Remove-Item env:LOCAL_ADMIN_PASSWORD -ErrorAction SilentlyContinue

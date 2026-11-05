@@ -131,7 +131,7 @@ function Invoke-WindowsSettingsApplication {
                                 $ScriptArgs["ClassicContextMenu"] = [bool]$Settings.explorer.classic_context_menu
                             }
                         }
-                        if ($Settings.user_shell_folders) {
+                        if ($Settings.user_shell_folders -and $Phase -ne "Phase4" -and $env:USERNAME -notmatch '^LocalAdmin$') {
                             $ScriptArgs["UserShellFolders"] = $Settings.user_shell_folders
                         }
                     } elseif ($Item.Name -eq "TaskbarSystemTray" -and $Settings) {

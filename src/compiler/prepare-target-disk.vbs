@@ -11,7 +11,7 @@
 '   5. Output a detailed human-readable summary of the detected disk, its properties,
 '      and all existing partitions/volumes for operator review.
 '   6. Generate a standard Microsoft UEFI/GPT 4-partition DiskPart script
-'      (100MB EFI FAT32 "System", 16MB MSR, Primary NTFS "Windows", 1000MB NTFS "Recovery").
+'      (260MB EFI FAT32 "System", 16MB MSR, Primary NTFS "Windows", 1000MB NTFS "Recovery").
 ' =============================================================================
 
 Option Explicit

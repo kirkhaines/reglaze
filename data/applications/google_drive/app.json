@@ -13,9 +13,10 @@
                     "post_install_script":  null,
                     "instructions":  [
                                          "Sign in to Google Drive for Desktop in your browser using your Google Account ({{PRIMARY_EMAIL}}).",
-                                         "Confirm that the Google Drive streaming virtual drive is mounted at {{STREAM_MOUNT}} ({{STREAM_VERIFY_FOLDER}}).",
-                                         "Open Google Drive Preferences -> 'Folders from your computer' -> click 'Add folder', select 'Sync with Google Drive', and add each local sync directory: {{SYNC_DIRS_SUMMARY}}.",
-                                         "In Google Drive under Computers (or via '{{STREAM_MOUNT}}\\Other computers\\{{SOURCE_COMPUTER_NAME}}'), {{MIGRATION_MODE}} the contents of each synced folder from the previous computer '{{SOURCE_COMPUTER_NAME}}' (profile '{{PROFILE_NAME}}') into the newly created computer's folders and wait for initial sync to finish."
+                                         "DO NOT select 'Desktop', 'Documents', or 'Pictures' if Google Drive's onboarding wizard prompts to back up or sync default Windows folders on this computer (leave all unchecked and skip).",
+                                         "DO configure Google Drive ('My Drive' syncing options) to 'Stream files' (NOT 'Mirror files') and confirm the virtual drive is mounted at {{STREAM_MOUNT}} ({{STREAM_VERIFY_FOLDER}}).",
+                                         "{{SYNC_SETUP_INSTRUCTION}}",
+                                         "{{SYNC_MIGRATION_INSTRUCTION}}"
                                      ]
                 },
     "directories":  [

@@ -8,19 +8,19 @@ During Phase 4 (`bootstrap.ps1`), `reglaze` automatically installs `Google.Googl
 
 ## Step-by-Step Setup & Synced Folder Migration
 
-### 1. Authenticate Google Drive for Desktop
+### 1. Authenticate Google Drive & Onboarding Rules (What To Do vs. What Not To Do)
 - Sign in to Google Drive for Desktop when prompted using **`{{PRIMARY_EMAIL}}`**.
+- **DO NOT** select `Desktop`, `Documents`, or `Pictures` if Google Drive's initial setup wizard asks to back up or sync default Windows folders on this computer (uncheck all suggested folders and skip).
+- **DO** configure **Google Drive (`My Drive` syncing options)** to **Stream files** (NOT *Mirror files*).
 - Verify that **`{{STREAM_VERIFY_FOLDER}}`** is mounted and accessible in File Explorer.
 
 ### 2. Configure Local Synced Directories ("Folders from your computer")
-Open **Google Drive Preferences** (click the Google Drive tray icon &rarr; Gear icon &rarr; **Preferences**) and under **Folders from your computer**, click **Add folder** and select **Sync with Google Drive** for each of the following pre-created local directories:
+- {{SYNC_SETUP_INSTRUCTION}}
 
 {{SYNC_DIRECTORIES_LIST}}
 
 ### 3. Populate Synced Directories from Previous Profile Computer (`{{SOURCE_COMPUTER_NAME}}`)
-Because Google Drive associates synced computer folders with a specific OS installation instance under **Computers**, your previous installation for profile **`{{PROFILE_NAME}}`** appears under **`{{SOURCE_COMPUTER_NAME}}`**.
-
-- **Migration Mode**: `{{MIGRATION_MODE}}` (default: `copy` — leaves the previous computer's folders intact as a backup snapshot).
+- {{SYNC_MIGRATION_INSTRUCTION}}
+- **Migration Mode**: `{{MIGRATION_MODE}}` (default: `copy` - leaves the previous computer's folders intact as a backup snapshot).
 - **Source Location**: `https://drive.google.com/drive/computers` (under **`{{SOURCE_COMPUTER_NAME}}`**) or locally via **`{{STREAM_MOUNT}}\Other computers\{{SOURCE_COMPUTER_NAME}}\<CloudFolder>`**.
-- For each synced folder above, `{{MIGRATION_MODE}}` the contents from **`{{SOURCE_COMPUTER_NAME}}`** into the corresponding folder of **`{{TARGET_COMPUTER_NAME}}`** (or allow `reglaze hydrate` to copy them from `{{STREAM_MOUNT}}\Other computers\{{SOURCE_COMPUTER_NAME}}` once mounted) and wait for Google Drive to report **Up to date** before proceeding to directory junction creation.
 

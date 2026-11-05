@@ -81,6 +81,14 @@ if ($UserShellFolders) {
     foreach ($Key in $FolderMap.Keys) {
         if ($UserShellFolders.PSObject.Properties[$Key] -and -not [string]::IsNullOrWhiteSpace($UserShellFolders.$Key)) {
             $TargetFolder = $UserShellFolders.$Key
+            # Safety guard: never pre-create C:\Users\<user> for an uninitialized user profile from another account (e.g. LocalAdmin)
+            if ($TargetFolder -match '^[A-Za-z]:\\Users\\([^\\]+)' -and $env:USERPROFILE -and -not $TargetFolder.StartsWith($env:USERPROFILE, [System.StringComparison]::OrdinalIgnoreCase)) {
+                $TargetProfileRoot = Join-Path (Split-Path -Parent $env:USERPROFILE) $Matches[1]
+                if (-not (Test-Path -LiteralPath (Join-Path $TargetProfileRoot "NTUSER.DAT"))) {
+                    Write-Warning "  [!] Skipping User Shell Folder '$Key' -> '$TargetFolder' because user profile '$TargetProfileRoot' has not been initialized yet."
+                    continue
+                }
+            }
             if (-not (Test-Path -LiteralPath $TargetFolder)) {
                 New-Item -ItemType Directory -Path $TargetFolder -Force -ErrorAction SilentlyContinue | Out-Null
             }

@@ -159,9 +159,9 @@ function Invoke-ReglazeCompilation {
     Write-Host ""
     Write-ReglazeBanner "COMPILATION SUCCESSFUL"
     Write-Host "  Artifacts ready for deployment media:" -ForegroundColor Cyan
-    Write-Host "    • Root:     $MediaDir" -ForegroundColor White
-    Write-Host "    • Answer:   $AutounattendPath" -ForegroundColor White
-    Write-Host "    • Payload:  $PayloadDir" -ForegroundColor White
+    Write-Host "    * Root:     $MediaDir" -ForegroundColor White
+    Write-Host "    * Answer:   $AutounattendPath" -ForegroundColor White
+    Write-Host "    * Payload:  $PayloadDir" -ForegroundColor White
     Write-Host ""
 
     return [PSCustomObject]@{
