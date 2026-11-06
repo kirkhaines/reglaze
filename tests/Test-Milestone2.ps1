@@ -611,7 +611,7 @@ applications:
     # TEST 8: Full End-to-End Compile Command
     # -------------------------------------------------------------------------
     $E2EMedia = Join-Path $TestDir "media_e2e"
-    $CompileRes = Invoke-ReglazeCompilation -ConfigFile $ValidYamlFile -DistDir $E2EMedia -AuditReferencePath $null -BypassValidation $false
+    $CompileRes = Invoke-ReglazeCompilation -ConfigFile $ValidYamlFile -DistDir $E2EMedia -AuditReferencePath $null -BypassValidation:$false
     Assert-Test -Name "21. End-to-End Compile: generates media tree with autounattend.xml and staged DiskMatch tools" `
         -Condition (
             $CompileRes.Status -eq "Success" -and
@@ -639,6 +639,74 @@ applications:
     Assert-Test -Name "23. Media Builder: creates vanilla UEFI bootable USB payload with FAT32 & DISM split simulation" `
         -Condition ($MediaSimRes.Status -eq "Success" -and $MediaSimRes.Format -eq "FAT32" -and $MediaSimRes.IsSimulated -eq $true) `
         -Details "Status: $($MediaSimRes.Status), Format: $($MediaSimRes.Format)"
+
+    # -------------------------------------------------------------------------
+    # TEST 10b: Windows Install Media Plausibility Validation
+    # -------------------------------------------------------------------------
+    $MockValidMediaDir = Join-Path $TestDir "mock_valid_media"
+    New-Item -ItemType Directory -Path (Join-Path $MockValidMediaDir "sources") -Force | Out-Null
+    New-Item -ItemType Directory -Path (Join-Path $MockValidMediaDir "efi\boot") -Force | Out-Null
+    Set-Content -LiteralPath (Join-Path $MockValidMediaDir "bootmgr") -Value "mock-bootmgr"
+    Set-Content -LiteralPath (Join-Path $MockValidMediaDir "efi\boot\bootx64.efi") -Value "mock-efi"
+    $BootWimPath = Join-Path $MockValidMediaDir "sources\boot.wim"
+    $BootWimStream = [System.IO.File]::Create($BootWimPath); $BootWimStream.SetLength(400MB); $BootWimStream.Close()
+    $InstallSwm1 = Join-Path $MockValidMediaDir "sources\install.swm"
+    $InstallSwm2 = Join-Path $MockValidMediaDir "sources\install2.swm"
+    $Swm1Stream = [System.IO.File]::Create($InstallSwm1); $Swm1Stream.SetLength(2GB); $Swm1Stream.Close()
+    $Swm2Stream = [System.IO.File]::Create($InstallSwm2); $Swm2Stream.SetLength(1800MB); $Swm2Stream.Close()
+
+    $PlausibleValid = Test-WindowsInstallMedia -Path $MockValidMediaDir
+
+    $MockInvalidMediaDir = Join-Path $TestDir "mock_invalid_media"
+    New-Item -ItemType Directory -Path $MockInvalidMediaDir -Force | Out-Null
+    $PlausibleEmpty = Test-WindowsInstallMedia -Path $MockInvalidMediaDir
+
+    $MockSmallMediaDir = Join-Path $TestDir "mock_small_media"
+    New-Item -ItemType Directory -Path (Join-Path $MockSmallMediaDir "sources") -Force | Out-Null
+    Set-Content -LiteralPath (Join-Path $MockSmallMediaDir "bootmgr") -Value "mock-bootmgr"
+    $SmallBootWim = Join-Path $MockSmallMediaDir "sources\boot.wim"
+    $SmallBootStream = [System.IO.File]::Create($SmallBootWim); $SmallBootStream.SetLength(50MB); $SmallBootStream.Close()
+    $SmallWim = Join-Path $MockSmallMediaDir "sources\install.wim"
+    $SmallWimStream = [System.IO.File]::Create($SmallWim); $SmallWimStream.SetLength(10MB); $SmallWimStream.Close()
+    $PlausibleSmall = Test-WindowsInstallMedia -Path $MockSmallMediaDir
+
+    Assert-Test -Name "23b. Windows Installer Plausibility Check: Test-WindowsInstallMedia validates bootmgr, sources, boot.wim, and OS images >= 1GB" `
+        -Condition (
+            $PlausibleValid.IsValid -eq $true -and
+            ($PlausibleValid.ImageType -like "*swm*") -and
+            $PlausibleValid.ImageSizeGB -ge 3.5 -and
+            $PlausibleEmpty.IsValid -eq $false -and
+            $PlausibleEmpty.Issues.Count -ge 3 -and
+            $PlausibleSmall.IsValid -eq $false -and
+            ($PlausibleSmall.Issues -match "1\.0 GB")
+        ) `
+        -Details "Valid: $($PlausibleValid.IsValid) ($($PlausibleValid.ImageType)), Empty: $($PlausibleEmpty.IsValid) (Issues: $($PlausibleEmpty.Issues.Count)), Small: $($PlausibleSmall.IsValid)"
+
+    # -------------------------------------------------------------------------
+    # TEST 10c: Fast Media Update (-RetainWindowsFiles)
+    # -------------------------------------------------------------------------
+    $MediaRetainRes = New-ReglazeBootableUsb -UsbDrive "E:" -MediaArtifactsDir $E2EMedia -RetainWindowsFiles -Simulation:$true
+    Assert-Test -Name "23c. Fast Media Update (-RetainWindowsFiles): preserves Windows setup files and refreshes Reglaze artifacts in seconds" `
+        -Condition (
+            $MediaRetainRes.Status -eq "Success" -and
+            $MediaRetainRes.Format -eq "Retained" -and
+            $MediaRetainRes.RetainWindowsFiles -eq $true -and
+            $MediaRetainRes.IsSimulated -eq $true
+        ) `
+        -Details "Status: $($MediaRetainRes.Status), Format: $($MediaRetainRes.Format), RetainWindowsFiles: $($MediaRetainRes.RetainWindowsFiles)"
+
+    # -------------------------------------------------------------------------
+    # TEST 10d: Compiler Fast Update Integration
+    # -------------------------------------------------------------------------
+    $CompilerFastRes = Invoke-ReglazeCompilation -ConfigFile $ValidYamlFile -DistDir $E2EMedia -UsbDrive "E:" -RetainWindowsFiles -Simulation:$true -BypassValidation:$true
+    Assert-Test -Name "23d. Compiler Fast Update Integration: Compile-Reglaze.ps1 chains -UsbDrive and -RetainWindowsFiles for single-command rapid iteration" `
+        -Condition (
+            $CompilerFastRes.Status -eq "Success" -and
+            $null -ne $CompilerFastRes.UsbMediaResult -and
+            $CompilerFastRes.UsbMediaResult.RetainWindowsFiles -eq $true -and
+            $CompilerFastRes.UsbMediaResult.Format -eq "Retained"
+        ) `
+        -Details "Status: $($CompilerFastRes.Status), UsbFormat: $($CompilerFastRes.UsbMediaResult.Format)"
 
     # -------------------------------------------------------------------------
     # TEST 11: Safety Constraint - Target USB Rejects System Drive

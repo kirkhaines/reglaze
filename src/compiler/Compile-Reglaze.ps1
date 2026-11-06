@@ -21,7 +21,21 @@ param(
 
     [string]$AuditFile = $null,
 
-    [switch]$SkipValidation = $false
+    [switch]$SkipValidation = $false,
+
+    [Parameter(Mandatory=$false)]
+    [string]$UsbDrive = $null,
+
+    [Alias("UpdateOnly", "KeepWindowsFiles", "QuickUpdate", "RetainInstaller")]
+    [switch]$RetainWindowsFiles = $false,
+
+    [Parameter(Mandatory=$false)]
+    [string]$IsoPath = $null,
+
+    [switch]$Force = $false,
+    [switch]$Simulation = $false,
+    [switch]$Elevate = $false,
+    [switch]$SkipElevation = $false
 )
 
 $CompilerRoot = $PSScriptRoot
@@ -43,7 +57,14 @@ function Invoke-ReglazeCompilation {
         [Alias("Dist", "d", "TargetDistDir")]
         [string]$DistDir = $null,
         [string]$AuditReferencePath = $null,
-        [bool]$BypassValidation = $false
+        [switch]$BypassValidation = $false,
+        [string]$UsbDrive = $null,
+        [switch]$RetainWindowsFiles = $false,
+        [string]$IsoPath = $null,
+        [switch]$Force = $false,
+        [switch]$Simulation = $false,
+        [switch]$Elevate = $false,
+        [switch]$SkipElevation = $false
     )
 
     Write-ReglazeBanner "REGLAZE COMPILER & ARTIFACT GENERATOR"
@@ -164,6 +185,25 @@ function Invoke-ReglazeCompilation {
     Write-Host "    * Payload:  $PayloadDir" -ForegroundColor White
     Write-Host ""
 
+    $UsbMediaResult = $null
+    if ($UsbDrive) {
+        Write-Host ""
+        if ($RetainWindowsFiles) {
+            Write-ReglazeInfo "Proceeding directly to updating Reglaze files on $UsbDrive (-RetainWindowsFiles)..."
+            $ResolvedIso = $null
+        } else {
+            Write-ReglazeInfo "Proceeding directly to bootable USB media creation on $UsbDrive..."
+            $ResolvedIso = $IsoPath
+            if (-not $ResolvedIso) {
+                . (Join-Path $RepoRoot "src\media\Get-WindowsIso.ps1")
+                $IsoResult = Get-Windows11Iso -DestinationDir (Join-Path $RepoRoot "downloads") -Simulation:$Simulation -Live:(-not $Simulation)
+                $ResolvedIso = $IsoResult.IsoPath
+            }
+        }
+        . (Join-Path $RepoRoot "src\media\Build-Media.ps1")
+        $UsbMediaResult = New-ReglazeBootableUsb -UsbDrive $UsbDrive -IsoPath $ResolvedIso -MediaArtifactsDir $MediaDir -Force:$Force -RetainWindowsFiles:$RetainWindowsFiles -Simulation:$Simulation -Live:(-not $Simulation) -Elevate:$Elevate -SkipElevation:$SkipElevation
+    }
+
     return [PSCustomObject]@{
         Status            = "Success"
         MediaDir          = $MediaDir
@@ -172,9 +212,10 @@ function Invoke-ReglazeCompilation {
         DscPath           = $PayloadResult.DscPath
         JunctionCount     = $PayloadResult.JunctionCount
         BitLockerKeyCount = $PayloadResult.BitLockerKeyCount
+        UsbMediaResult    = $UsbMediaResult
     }
 }
 
 if ($Config -or $MyInvocation.InvocationName -ne '.') {
-    Invoke-ReglazeCompilation -ConfigFile $Config -DistDir $DistDir -AuditReferencePath $AuditFile -BypassValidation:$SkipValidation
+    Invoke-ReglazeCompilation -ConfigFile $Config -DistDir $DistDir -AuditReferencePath $AuditFile -BypassValidation:$SkipValidation -UsbDrive $UsbDrive -RetainWindowsFiles:$RetainWindowsFiles -IsoPath $IsoPath -Force:$Force -Simulation:$Simulation -Elevate:$Elevate -SkipElevation:$SkipElevation
 }

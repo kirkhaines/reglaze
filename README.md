@@ -502,8 +502,16 @@ Before wiping an existing installation, `reglaze` runs a non-destructive discove
    ```powershell
    # Compile declarative blueprint into deployment media artifacts
    pwsh ./bin/reglaze.ps1 compile -ConfigDir ./audit-output -DistDir ./dist
-   # Create vanilla UEFI bootable USB installer (formats USB, splits install.wim via DISM, injects artifacts; prompts for UAC elevation if needed)
+
+   # Create fresh vanilla UEFI bootable USB installer (formats USB, splits install.wim via DISM, injects artifacts; prompts for UAC elevation if needed)
    pwsh ./bin/reglaze.ps1 media -DistDir ./dist -UsbDrive "E:"
+
+   # RAPID ITERATION (seconds instead of minutes):
+   # Once the base Windows installer files are on the USB drive, use -RetainWindowsFiles (alias: -UpdateOnly)
+   # to refresh only autounattend.xml and the \Reglaze tools & payload directory without reformatting or re-copying the ISO:
+   pwsh ./bin/reglaze.ps1 compile -ConfigDir ./audit-output -UsbDrive "E:" -RetainWindowsFiles
+   # Or via media command:
+   pwsh ./bin/reglaze.ps1 media -UsbDrive "E:" -UpdateOnly
    ```
 6. **Inspect Generated Artifacts (`./dist`) (Optional):**
    * Check `autounattend.xml` against the target disk setup, partition layout, and dual-user (`LocalAdmin` + standard user) provisioning.

@@ -49,7 +49,10 @@ param (
     [switch]$Simulation = $false,
     [switch]$NoReboot = $false,
     [switch]$SkipUpdates = $false,
-    [switch]$SkipDsc = $false
+    [switch]$SkipDsc = $false,
+
+    [Alias("UpdateOnly", "KeepWindowsFiles", "QuickUpdate", "RetainInstaller")]
+    [switch]$RetainWindowsFiles = $false
 )
 
 $RepoRoot = Split-Path -Parent $PSScriptRoot
@@ -154,15 +157,20 @@ switch ($Command) {
         # If -UsbDrive specified during compile, chain into USB media creation
         if ($UsbDrive) {
             Write-Host ""
-            Write-ReglazeInfo "Proceeding directly to bootable USB media creation on $UsbDrive..."
-            $ResolvedIso = $IsoPath
-            if (-not $ResolvedIso) {
-                . (Join-Path $RepoRoot "src\media\Get-WindowsIso.ps1")
-                $IsoResult = Get-Windows11Iso -DestinationDir (Join-Path $RepoRoot "downloads") -OpenBrowser:$OpenBrowser -Simulation:$Simulation -Live:(-not $Simulation)
-                $ResolvedIso = $IsoResult.IsoPath
+            if ($RetainWindowsFiles) {
+                Write-ReglazeInfo "Proceeding directly to updating Reglaze files on $UsbDrive (-RetainWindowsFiles)..."
+                $ResolvedIso = $null
+            } else {
+                Write-ReglazeInfo "Proceeding directly to bootable USB media creation on $UsbDrive..."
+                $ResolvedIso = $IsoPath
+                if (-not $ResolvedIso) {
+                    . (Join-Path $RepoRoot "src\media\Get-WindowsIso.ps1")
+                    $IsoResult = Get-Windows11Iso -DestinationDir (Join-Path $RepoRoot "downloads") -OpenBrowser:$OpenBrowser -Simulation:$Simulation -Live:(-not $Simulation)
+                    $ResolvedIso = $IsoResult.IsoPath
+                }
             }
             . (Join-Path $RepoRoot "src\media\Build-Media.ps1")
-            New-ReglazeBootableUsb -UsbDrive $UsbDrive -IsoPath $ResolvedIso -MediaArtifactsDir $ResolvedDist -Force:$Force -Simulation:$Simulation -Live:(-not $Simulation) -Elevate:$Elevate -SkipElevation:$SkipElevation
+            New-ReglazeBootableUsb -UsbDrive $UsbDrive -IsoPath $ResolvedIso -MediaArtifactsDir $ResolvedDist -Force:$Force -RetainWindowsFiles:$RetainWindowsFiles -Simulation:$Simulation -Live:(-not $Simulation) -Elevate:$Elevate -SkipElevation:$SkipElevation
         }
     }
 
@@ -192,13 +200,15 @@ switch ($Command) {
             if ($null -ne $CompileRes -and $CompileRes.PSObject.Properties['Status'] -and $CompileRes.Status -ne "Success") { exit 1 }
         }
 
-        # Resolve ISO if not specified
+        # Resolve ISO if not specified and not retaining Windows files
         $ResolvedIso = $IsoPath
-        if (-not $ResolvedIso) {
-            $IsoModule = Join-Path $RepoRoot "src\media\Get-WindowsIso.ps1"
-            . $IsoModule
-            $IsoResult = Get-Windows11Iso -DestinationDir (Join-Path $RepoRoot "downloads") -OpenBrowser:$OpenBrowser -Simulation:$Simulation -Live:(-not $Simulation)
-            $ResolvedIso = $IsoResult.IsoPath
+        if (-not $RetainWindowsFiles) {
+            if (-not $ResolvedIso) {
+                $IsoModule = Join-Path $RepoRoot "src\media\Get-WindowsIso.ps1"
+                . $IsoModule
+                $IsoResult = Get-Windows11Iso -DestinationDir (Join-Path $RepoRoot "downloads") -OpenBrowser:$OpenBrowser -Simulation:$Simulation -Live:(-not $Simulation)
+                $ResolvedIso = $IsoResult.IsoPath
+            }
         }
 
         if (-not $UsbDrive -and -not $Simulation) {
@@ -210,7 +220,7 @@ switch ($Command) {
         $MediaModule = Join-Path $RepoRoot "src\media\Build-Media.ps1"
         if (Test-Path $MediaModule) {
             . $MediaModule
-            New-ReglazeBootableUsb -UsbDrive $TargetUsb -IsoPath $ResolvedIso -MediaArtifactsDir $ResolvedDist -Force:$Force -Simulation:$Simulation -Live:(-not $Simulation) -Elevate:$Elevate -SkipElevation:$SkipElevation
+            New-ReglazeBootableUsb -UsbDrive $TargetUsb -IsoPath $ResolvedIso -MediaArtifactsDir $ResolvedDist -Force:$Force -RetainWindowsFiles:$RetainWindowsFiles -Simulation:$Simulation -Live:(-not $Simulation) -Elevate:$Elevate -SkipElevation:$SkipElevation
         } else {
             Write-ReglazeError "Media builder module not found at: $MediaModule"
             exit 1
@@ -313,6 +323,8 @@ switch ($Command) {
         Write-Host "    -ConfigDir (-Config, -c) Directory containing (or to contain) reglaze.yaml, audit-reference.json, etc."
         Write-Host "    -DistDir   (-Dist, -d)   Target directory for compiled installation media artifacts (dist/media)"
         Write-Host "    -UsbDrive                Target USB drive letter for bootable installation media (e.g. E:)"
+        Write-Host "    -RetainWindowsFiles      Preserves existing Windows install files on USB and only refreshes Reglaze files"
+        Write-Host "                             (Aliases: -UpdateOnly, -KeepWindowsFiles, -QuickUpdate, -RetainInstaller)"
         Write-Host "    -Profile   (-p)          Reglaze profile name for pre-flight audit scaffolding (e.g. 'workstation')"
         Write-Host "    -Threads                 Worker thread count for pre-install migration (defaults to safe 2)"
         Write-Host ""
@@ -322,6 +334,8 @@ switch ($Command) {
         Write-Host "    pwsh ./bin/reglaze.ps1 migrate -ConfigDir `"C:\reglaze-config`""
         Write-Host "    pwsh ./bin/reglaze.ps1 validate -ConfigDir `"C:\reglaze-config`""
         Write-Host "    pwsh ./bin/reglaze.ps1 compile -ConfigDir `"C:\reglaze-config`" -DistDir `"C:\reglaze-dist`" -UsbDrive `"E:`""
+        Write-Host "    pwsh ./bin/reglaze.ps1 compile -UsbDrive `"E:`" -RetainWindowsFiles"
+        Write-Host "    pwsh ./bin/reglaze.ps1 media -UsbDrive `"E:`" -UpdateOnly"
         Write-Host "    pwsh ./bin/reglaze.ps1 test"
         Write-Host ""
     }
