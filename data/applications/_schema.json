@@ -29,6 +29,7 @@
           "id": { "type": "string" },
           "description": { "type": "string" },
           "default_path": { "type": "string" },
+          "item_type": { "enum": ["directory", "file"], "default": "directory" },
           "category": { "enum": ["config", "configs", "saves", "songs", "catalog", "library"] },
           "needs_mapping": { "type": "boolean" },
           "safe_for_stream": { "type": "boolean" },

@@ -381,6 +381,7 @@
                                 "id":  "gitconfig",
                                 "description":  "Global user git configuration and credentials",
                                 "default_path":  "%USERPROFILE%\\.gitconfig",
+                                "item_type":  "file",
                                 "category":  "configs",
                                 "needs_mapping":  true,
                                 "safe_for_stream":  true,

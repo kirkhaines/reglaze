@@ -44,6 +44,9 @@ function New-ReglazeDirectoryJunction {
         [ValidateSet("backup", "replace", "fail")]
         [string]$CollisionAction = "backup",
 
+        [ValidateSet("directory", "file")]
+        [string]$ItemType = "directory",
+
         [string]$Description = ""
     )
 
@@ -135,10 +138,19 @@ function New-ReglazeDirectoryJunction {
         }
     }
 
-    # 2. Ensure Target directory exists
-    if (-not (Test-Path -LiteralPath $Target)) {
-        if ($PSCmdlet.ShouldProcess($Target, "Create target directory")) {
-            New-Item -ItemType Directory -Path $Target -Force | Out-Null
+    # 2. Ensure Target directory exists (if directory) or parent directory exists (if file)
+    if ($ItemType -eq "file") {
+        $TargetParent = Split-Path -Parent $Target
+        if ($TargetParent -and -not (Test-Path -LiteralPath $TargetParent)) {
+            if ($PSCmdlet.ShouldProcess($TargetParent, "Create target parent directory")) {
+                New-Item -ItemType Directory -Path $TargetParent -Force | Out-Null
+            }
+        }
+    } else {
+        if (-not (Test-Path -LiteralPath $Target)) {
+            if ($PSCmdlet.ShouldProcess($Target, "Create target directory")) {
+                New-Item -ItemType Directory -Path $Target -Force | Out-Null
+            }
         }
     }
 
@@ -150,19 +162,23 @@ function New-ReglazeDirectoryJunction {
         }
     }
 
-    # 4. Create the NTFS Directory Junction
-    if ($PSCmdlet.ShouldProcess($Link, "Create NTFS Junction to $Target")) {
+    # 4. Create the NTFS Directory Junction or File Symbolic Link
+    if ($PSCmdlet.ShouldProcess($Link, "Create NTFS Link to $Target")) {
         try {
-            $MklinkOutput = & cmd.exe /c "mklink /J `"$Link`" `"$Target`" 2>&1"
+            if ($ItemType -eq "file") {
+                $MklinkOutput = & cmd.exe /c "mklink `"$Link`" `"$Target`" 2>&1"
+            } else {
+                $MklinkOutput = & cmd.exe /c "mklink /J `"$Link`" `"$Target`" 2>&1"
+            }
             if ($LASTEXITCODE -eq 0 -and (Test-Path -LiteralPath $Link)) {
                 $VerifyInfo = Get-ReparsePointInfo -Path $Link
-                if ($VerifyInfo.IsJunction) {
+                if ($VerifyInfo.IsReparsePoint) {
                     $Result.Status = if ($Result.Action -eq "None") { "Created" } else { "CreatedWithMigration" }
                     $Result.Success = $true
-                    $Result.Message = "Junction created successfully."
+                    $Result.Message = if ($ItemType -eq "file") { "File symbolic link created successfully." } else { "Junction created successfully." }
                 } else {
                     $Result.Status = "Failed"
-                    $Result.Message = "mklink command executed but path is not recognized as a junction: $MklinkOutput"
+                    $Result.Message = "mklink command executed but path is not recognized as a link: $MklinkOutput"
                 }
             } else {
                 $Result.Status = "Failed"
@@ -170,7 +186,7 @@ function New-ReglazeDirectoryJunction {
             }
         } catch {
             $Result.Status = "Failed"
-            $Result.Message = "Exception creating junction: $($_.Exception.Message)"
+            $Result.Message = "Exception creating link: $($_.Exception.Message)"
         }
     }
 

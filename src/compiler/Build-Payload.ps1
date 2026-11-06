@@ -489,6 +489,7 @@ function Build-ReglazePayload {
                         # Defer cloud-backed (%STREAM%, %SYNC_*%) and Steam/Manual app junctions to Phase 5 (hydrate.ps1)
                         $Scope = if ($RequiresElevation -and -not $DependsOnPhase5) { "machine" } else { "user" }
                         $StorageType = if ($Dir.recommended_storage) { $Dir.recommended_storage } else { "streaming" }
+                        $ItemType = if ($Dir.item_type) { [string]$Dir.item_type } else { "directory" }
 
                         $JunctionsList.Add([PSCustomObject]@{
                             AppId             = $AppId
@@ -497,6 +498,7 @@ function Build-ReglazePayload {
                             Link              = $ResolvedLink
                             Target            = $ResolvedTarget
                             Scope             = $Scope
+                            ItemType          = $ItemType
                             RequiresElevation = $RequiresElevation
                             StorageType       = $StorageType
                             SafeForStream     = [bool]$Dir.safe_for_stream
@@ -519,6 +521,7 @@ function Build-ReglazePayload {
                     $DependsOnPhase5 = & $TestIsCloudOrPhase5Target $CustDir.target $ResolvedTarget $null
                     $Scope = if ($RequiresElevation -and -not $DependsOnPhase5) { "machine" } else { "user" }
                     $StorageType = if ($CustDir.storage_type) { $CustDir.storage_type } else { "streaming" }
+                    $CustItemType = if ($CustDir.item_type) { [string]$CustDir.item_type } else { "directory" }
 
                     $JunctionsList.Add([PSCustomObject]@{
                         AppId             = "custom"
@@ -527,6 +530,7 @@ function Build-ReglazePayload {
                         Link              = $ResolvedLink
                         Target            = $ResolvedTarget
                         Scope             = $Scope
+                        ItemType          = $CustItemType
                         RequiresElevation = $RequiresElevation
                         StorageType       = $StorageType
                         SafeForStream     = $true
@@ -755,6 +759,13 @@ if (-not (Test-Path `$ReglazeRoot)) {
 # Grant Modify permissions on C:\Reglaze to BUILTIN\Users (S-1-5-32-545) so standard user hydration can write logs and checkpoints
 try {
     & icacls.exe `$ReglazeRoot /grant "*S-1-5-32-545:(OI)(CI)M" /T /C /Q 2>&1 | Out-Null
+} catch {}
+
+# Enable Developer Mode for unprivileged symbolic links
+try {
+    `$DevRegPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\AppModelUnlock"
+    if (-not (Test-Path `$DevRegPath)) { New-Item -Path `$DevRegPath -Force | Out-Null }
+    Set-ItemProperty -Path `$DevRegPath -Name "AllowDevelopmentWithoutDevLicense" -Value 1 -Type DWord -Force
 } catch {}
 `$TranscriptFile = "C:\Reglaze\bootstrap.log"
 try {
@@ -1133,23 +1144,42 @@ if (Test-Path `$JunctionsManifest) {
         if (`$Junc.Scope -eq "machine") {
             `$Link = `$Junc.Link
             `$Target = `$Junc.Target
-            Write-Host " - Junction: `$Link -> `$Target"
-            if (-not (Test-Path `$Target)) {
-                New-Item -ItemType Directory -Path `$Target -Force | Out-Null
+            `$IsFile = (`$Junc.ItemType -eq "file")
+            Write-Host " - Link: `$Link -> `$Target"
+            if (`$IsFile) {
+                `$TargetFile = if (Test-Path -LiteralPath `$Target -PathType Container) {
+                    Join-Path `$Target (Split-Path `$Link -Leaf)
+                } elseif (`$Target.EndsWith((Split-Path `$Link -Leaf), [System.StringComparison]::OrdinalIgnoreCase)) {
+                    `$Target
+                } else {
+                    Join-Path `$Target (Split-Path `$Link -Leaf)
+                }
+                `$TargetParent = Split-Path -Parent `$TargetFile
+                if (`$TargetParent -and -not (Test-Path -LiteralPath `$TargetParent)) {
+                    New-Item -ItemType Directory -Path `$TargetParent -Force | Out-Null
+                }
+            } else {
+                if (-not (Test-Path -LiteralPath `$Target)) {
+                    New-Item -ItemType Directory -Path `$Target -Force | Out-Null
+                }
             }
             if (Test-Path `$Link) {
                 `$Item = Get-Item `$Link -Force
                 if (-not (`$Item.Attributes -band [System.IO.FileAttributes]::ReparsePoint)) {
                     `$BackupPath = "`$Link.bak_`$(Get-Date -Format 'yyyyMMdd_HHmmss')"
                     Move-Item -Path `$Link -Destination `$BackupPath -Force
-                    Write-Host "   Collision detected: Backed up existing directory to `$BackupPath." -ForegroundColor Yellow
+                    Write-Host "   Collision detected: Backed up existing to `$BackupPath." -ForegroundColor Yellow
                 } else {
                     Remove-Item -Path `$Link -Force
                 }
             }
             `$ParentDir = Split-Path -Parent `$Link
             if (-not (Test-Path `$ParentDir)) { New-Item -ItemType Directory -Path `$ParentDir -Force | Out-Null }
-            cmd.exe /c mklink /J "`$Link" "`$Target" | Out-Null
+            if (`$IsFile) {
+                cmd.exe /c mklink "`$Link" "`$TargetFile" | Out-Null
+            } else {
+                cmd.exe /c mklink /J "`$Link" "`$Target" | Out-Null
+            }
         }
     }
 }
@@ -1588,15 +1618,35 @@ if (`$State.CompletedSteps -notcontains "user_junctions") {
         foreach (`$Junc in `$UserJuncs) {
             `$Link = `$Junc.Link
             `$Target = `$Junc.Target
-            Write-Host " - [`$(`$Junc.AppId)] `$Link -> `$Target"
+            `$IsFile = (`$Junc.ItemType -eq "file")
+            Write-Host " - [`$(`$Junc.AppId)] `$Link -> `$Target (type: `$(if (`$IsFile) { 'file' } else { 'directory' }))"
 
-            # Ensure cloud target directory exists
-            if (-not (Test-Path `$Target)) {
-                try {
-                    New-Item -ItemType Directory -Path `$Target -Force | Out-Null
-                    Write-Host "   Created target folder: `$Target" -ForegroundColor DarkGray
-                } catch {
-                    Write-Warning "   Could not create target `${Target}: `$(`$_.Exception.Message)"
+            if (`$IsFile) {
+                # Resolve target file path (if Target is a folder, append link's leaf filename)
+                `$TargetFile = if (Test-Path -LiteralPath `$Target -PathType Container) {
+                    Join-Path `$Target (Split-Path `$Link -Leaf)
+                } elseif (`$Target.EndsWith((Split-Path `$Link -Leaf), [System.StringComparison]::OrdinalIgnoreCase)) {
+                    `$Target
+                } elseif (Test-Path -LiteralPath (Join-Path `$Target (Split-Path `$Link -Leaf))) {
+                    Join-Path `$Target (Split-Path `$Link -Leaf)
+                } else {
+                    Join-Path `$Target (Split-Path `$Link -Leaf)
+                }
+                `$TargetParent = Split-Path -Parent `$TargetFile
+                if (`$TargetParent -and -not (Test-Path -LiteralPath `$TargetParent)) {
+                    try {
+                        New-Item -ItemType Directory -Path `$TargetParent -Force | Out-Null
+                    } catch {}
+                }
+            } else {
+                # Ensure cloud target directory exists
+                if (-not (Test-Path `$Target)) {
+                    try {
+                        New-Item -ItemType Directory -Path `$Target -Force | Out-Null
+                        Write-Host "   Created target folder: `$Target" -ForegroundColor DarkGray
+                    } catch {
+                        Write-Warning "   Could not create target `${Target}: `$(`$_.Exception.Message)"
+                    }
                 }
             }
 
@@ -1606,20 +1656,39 @@ if (`$State.CompletedSteps -notcontains "user_junctions") {
                 if (-not (`$Item.Attributes -band [System.IO.FileAttributes]::ReparsePoint)) {
                     `$BackupPath = "`$Link.bak_`$(Get-Date -Format 'yyyyMMdd_HHmmss')"
                     try {
-                        [System.IO.Directory]::Move(`$Link, `$BackupPath)
-                        Write-Host "   Collision: Backed up existing directory to `$BackupPath." -ForegroundColor Yellow
+                        if (`$Item -is [System.IO.DirectoryInfo]) {
+                            [System.IO.Directory]::Move(`$Link, `$BackupPath)
+                        } else {
+                            [System.IO.File]::Move(`$Link, `$BackupPath)
+                        }
+                        Write-Host "   Collision: Backed up existing file/directory to `$BackupPath." -ForegroundColor Yellow
                     } catch {
-                        Write-Warning "   Could not backup existing folder `${Link}: `$(`$_.Exception.Message)"
+                        Write-Warning "   Could not backup existing `${Link}: `$(`$_.Exception.Message)"
                     }
                 } else {
-                    [System.IO.Directory]::Delete(`$Link)
+                    if ((Get-Item `$Link -Force) -is [System.IO.DirectoryInfo]) {
+                        [System.IO.Directory]::Delete(`$Link)
+                    } else {
+                        [System.IO.File]::Delete(`$Link)
+                    }
                 }
             }
 
-            # Create Junction
+            # Create Link
             `$ParentDir = Split-Path -Parent `$Link
             if (-not (Test-Path `$ParentDir)) { New-Item -ItemType Directory -Path `$ParentDir -Force | Out-Null }
-            cmd.exe /c mklink /J "`$Link" "`$Target" | Out-Null
+
+            if (`$IsFile) {
+                # Create file symbolic link
+                `$MkOut = & cmd.exe /c "mklink `"`$Link`" `"`$TargetFile`" 2>&1"
+                if (`$LASTEXITCODE -ne 0 -or -not (Test-Path `$Link)) {
+                    Write-Warning "   Failed to create file symbolic link: `$MkOut"
+                } else {
+                    Write-Host "   [+] Created file symbolic link: `$Link -> `$TargetFile" -ForegroundColor Green
+                }
+            } else {
+                cmd.exe /c mklink /J "`$Link" "`$Target" | Out-Null
+            }
         }
         Write-Host "[SUCCESS] All user directory junctions created successfully!" -ForegroundColor Green
     }

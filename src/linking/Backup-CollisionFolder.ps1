@@ -34,7 +34,11 @@ function Backup-DirectoryCollision {
 
     if ($PSCmdlet.ShouldProcess($SourcePath, "Rename collision directory to $BackupPath")) {
         try {
-            [System.IO.Directory]::Move($SourcePath, $BackupPath)
+            if ((Get-Item -LiteralPath $SourcePath) -is [System.IO.DirectoryInfo]) {
+                [System.IO.Directory]::Move($SourcePath, $BackupPath)
+            } else {
+                [System.IO.File]::Move($SourcePath, $BackupPath)
+            }
         } catch {
             Move-Item -LiteralPath $SourcePath -Destination $BackupPath -Force
         }

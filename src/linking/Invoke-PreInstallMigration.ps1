@@ -372,6 +372,7 @@ function New-ReglazeMigrationPlan {
                 $Stats = Get-ReglazePathStats -Path $ResolvedSource
                 $AlreadyLinked = ($Stats.IsJunction -and $Stats.JunctionTarget -and $Stats.JunctionTarget.TrimEnd('\').Equals($ResolvedTarget.TrimEnd('\'), [System.StringComparison]::OrdinalIgnoreCase))
                 $StatusStr = if ($AlreadyLinked) { "already_junction" } elseif ($Stats.Exists) { "ready" } else { "pending_source_host" }
+                $ItemType = if ($CatalogDir -and $CatalogDir.item_type) { [string]$CatalogDir.item_type } elseif ($Stats.ItemType) { $Stats.ItemType } else { "directory" }
 
                 $MigrationItems.Add([PSCustomObject]@{
                     Id          = "$AppId.$DirId"
@@ -380,7 +381,7 @@ function New-ReglazeMigrationPlan {
                     Description = $Desc
                     Enabled     = (-not $AlreadyLinked)
                     StorageType = $StorageType
-                    ItemType    = $Stats.ItemType
+                    ItemType    = $ItemType
                     Source      = $ResolvedSource
                     Target      = $ResolvedTarget
                     Status      = $StatusStr
@@ -429,6 +430,7 @@ function New-ReglazeMigrationPlan {
             $Stats = Get-ReglazePathStats -Path $ResolvedSource
             $AlreadyLinked = ($Stats.IsJunction -and $Stats.JunctionTarget -and $Stats.JunctionTarget.TrimEnd('\').Equals($ResolvedTarget.TrimEnd('\'), [System.StringComparison]::OrdinalIgnoreCase))
             $StatusStr = if ($AlreadyLinked) { "already_junction" } elseif ($Stats.Exists) { "ready" } else { "pending_source_host" }
+            $CustItemType = if ($CDir.item_type) { [string]$CDir.item_type } elseif ($Stats.ItemType) { $Stats.ItemType } else { "directory" }
 
             $MigrationItems.Add([PSCustomObject]@{
                 Id          = "custom.$CustAppSlug.$CDirSlug"
@@ -437,7 +439,7 @@ function New-ReglazeMigrationPlan {
                 Description = $CDirName
                 Enabled     = (-not $AlreadyLinked)
                 StorageType = $StorageType
-                ItemType    = $Stats.ItemType
+                ItemType    = $CustItemType
                 Source      = $ResolvedSource
                 Target      = $ResolvedTarget
                 Status      = $StatusStr
