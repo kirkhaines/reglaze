@@ -30,7 +30,16 @@ function Build-AutounattendXml {
     $AdminPassEnv = if ($Blueprint.system.users.local_admin.password_env) { $Blueprint.system.users.local_admin.password_env } else { "LOCAL_ADMIN_PASSWORD" }
     $AdminPassword = [System.Environment]::GetEnvironmentVariable($AdminPassEnv)
     if ([string]::IsNullOrWhiteSpace($AdminPassword)) {
-        throw "Local administrator password environment variable '$AdminPassEnv' is not set or is empty. Please set it before compiling autounattend.xml."
+        throw @"
+Local administrator password environment variable '$AdminPassEnv' is not set or is empty. Please set it before compiling autounattend.xml.
+
+Set it in your terminal session before compiling:
+  PowerShell:
+    `$env:$AdminPassEnv = "<your-password>"
+
+  Command Prompt (cmd.exe):
+    set $AdminPassEnv=<your-password>
+"@
     }
 
     $PrimaryUser = if ($Blueprint.system.users.primary_user.username) { $Blueprint.system.users.primary_user.username } else { "User" }

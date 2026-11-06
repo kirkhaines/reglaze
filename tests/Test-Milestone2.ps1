@@ -526,6 +526,24 @@ applications:
     Assert-Test -Name "16. autounattend.xml: configures AutoLogon for LocalAdmin and WinPE target preparation command" `
         -Condition ($AutoLogonUser -eq "LocalAdmin" -and $ImageUi -eq "Always" -and $RunSyncPath -match "prepare-target-disk\.cmd")
 
+    # Test missing password environment variable error with PowerShell and cmd snippets
+    $MissingPassThrew = $false
+    $MissingPassMsg = ""
+    try {
+        $PrevPass = $env:LOCAL_ADMIN_PASSWORD
+        Remove-Item env:LOCAL_ADMIN_PASSWORD -ErrorAction SilentlyContinue
+        Build-AutounattendXml -Blueprint $ValResult.Blueprint -AuditReference $AuditMock -OutputPath (Join-Path $TestDir "autounattend_fail.xml") | Out-Null
+    } catch {
+        $MissingPassThrew = $true
+        $MissingPassMsg = $_.Exception.Message
+    } finally {
+        $env:LOCAL_ADMIN_PASSWORD = $PrevPass
+    }
+
+    Assert-Test -Name "16b. autounattend.xml: missing password environment variable error includes PowerShell and cmd snippets" `
+        -Condition ($MissingPassThrew -and ($MissingPassMsg -match '\$env:LOCAL_ADMIN_PASSWORD\s*=') -and ($MissingPassMsg -match 'set\s+LOCAL_ADMIN_PASSWORD=')) `
+        -Details "Threw: $MissingPassThrew, Msg: $MissingPassMsg"
+
     # -------------------------------------------------------------------------
     # TEST 6: WinPE Disk Matching & Preserved Safety
     # -------------------------------------------------------------------------
