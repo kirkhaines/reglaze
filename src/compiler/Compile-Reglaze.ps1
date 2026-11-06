@@ -188,7 +188,20 @@ function Invoke-ReglazeCompilation {
     $UsbMediaResult = $null
     if ($UsbDrive) {
         Write-Host ""
-        if ($RetainWindowsFiles) {
+        . (Join-Path $RepoRoot "src\media\Build-Media.ps1")
+
+        $IsExplicitRetain = $PSBoundParameters.ContainsKey('RetainWindowsFiles')
+        $ShouldRetain = $RetainWindowsFiles
+        if (-not $IsExplicitRetain) {
+            $QuickCheck = Test-WindowsInstallMedia -Path $UsbDrive
+            if ($QuickCheck.IsValid) {
+                Write-ReglazeInfo "Detected valid Windows installer on $UsbDrive. Defaulting to fast update (-RetainWindowsFiles)."
+                Write-ReglazeInfo "$($QuickCheck.Message)"
+                $ShouldRetain = $true
+            }
+        }
+
+        if ($ShouldRetain) {
             Write-ReglazeInfo "Proceeding directly to updating Reglaze files on $UsbDrive (-RetainWindowsFiles)..."
             $ResolvedIso = $null
         } else {
@@ -200,8 +213,7 @@ function Invoke-ReglazeCompilation {
                 $ResolvedIso = $IsoResult.IsoPath
             }
         }
-        . (Join-Path $RepoRoot "src\media\Build-Media.ps1")
-        $UsbMediaResult = New-ReglazeBootableUsb -UsbDrive $UsbDrive -IsoPath $ResolvedIso -MediaArtifactsDir $MediaDir -Force:$Force -RetainWindowsFiles:$RetainWindowsFiles -Simulation:$Simulation -Live:(-not $Simulation) -Elevate:$Elevate -SkipElevation:$SkipElevation
+        $UsbMediaResult = New-ReglazeBootableUsb -UsbDrive $UsbDrive -IsoPath $ResolvedIso -MediaArtifactsDir $MediaDir -Force:$Force -RetainWindowsFiles:$ShouldRetain -Simulation:$Simulation -Live:(-not $Simulation) -Elevate:$Elevate -SkipElevation:$SkipElevation
     }
 
     return [PSCustomObject]@{

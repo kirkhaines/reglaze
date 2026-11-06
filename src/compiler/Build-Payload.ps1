@@ -255,6 +255,15 @@ function Build-ReglazePayload {
         }
     }
 
+    if ($Blueprint.storage -and $Blueprint.storage.user_shell_folders) {
+        $USFObj = $Blueprint.storage.user_shell_folders
+        $USFProps = if ($USFObj -is [System.Collections.IDictionary]) { $USFObj.Keys } else { $USFObj.PSObject.Properties.Name }
+        foreach ($UProp in $USFProps) {
+            $UVal = if ($USFObj -is [System.Collections.IDictionary]) { $USFObj[$UProp] } else { $USFObj.$UProp }
+            if ($UVal) { & $AddReferencedDrive $UVal }
+        }
+    }
+
     if ($Blueprint.dev_repos -and $Blueprint.dev_repos.root) {
         & $AddReferencedDrive $Blueprint.dev_repos.root
     }

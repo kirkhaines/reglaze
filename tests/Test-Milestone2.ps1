@@ -670,7 +670,18 @@ applications:
     $SmallWimStream = [System.IO.File]::Create($SmallWim); $SmallWimStream.SetLength(10MB); $SmallWimStream.Close()
     $PlausibleSmall = Test-WindowsInstallMedia -Path $MockSmallMediaDir
 
-    Assert-Test -Name "23b. Windows Installer Plausibility Check: Test-WindowsInstallMedia validates bootmgr, sources, boot.wim, and OS images >= 1GB" `
+    # Test missing final slice (install2.swm - the last standard Windows file copied to media)
+    $MockMissingLastSliceDir = Join-Path $TestDir "mock_missing_last_slice"
+    New-Item -ItemType Directory -Path (Join-Path $MockMissingLastSliceDir "sources") -Force | Out-Null
+    Set-Content -LiteralPath (Join-Path $MockMissingLastSliceDir "bootmgr") -Value "mock-bootmgr"
+    $CutBootWim = Join-Path $MockMissingLastSliceDir "sources\boot.wim"
+    $CutBootStream = [System.IO.File]::Create($CutBootWim); $CutBootStream.SetLength(400MB); $CutBootStream.Close()
+    $CutSwm1 = Join-Path $MockMissingLastSliceDir "sources\install.swm"
+    $CutSwm1Stream = [System.IO.File]::Create($CutSwm1); $CutSwm1Stream.SetLength(3800MB); $CutSwm1Stream.Close()
+    # Note: install2.swm was omitted to simulate interrupted copy!
+    $PlausibleMissingLast = Test-WindowsInstallMedia -Path $MockMissingLastSliceDir
+
+    Assert-Test -Name "23b. Windows Installer Plausibility Check: Test-WindowsInstallMedia validates bootmgr, sources, boot.wim, and OS images >= 1GB including last slice (install2.swm)" `
         -Condition (
             $PlausibleValid.IsValid -eq $true -and
             ($PlausibleValid.ImageType -like "*swm*") -and
@@ -678,9 +689,11 @@ applications:
             $PlausibleEmpty.IsValid -eq $false -and
             $PlausibleEmpty.Issues.Count -ge 3 -and
             $PlausibleSmall.IsValid -eq $false -and
-            ($PlausibleSmall.Issues -match "1\.0 GB")
+            ($PlausibleSmall.Issues -match "1\.0 GB") -and
+            $PlausibleMissingLast.IsValid -eq $false -and
+            ($PlausibleMissingLast.Issues -match "install2\.swm")
         ) `
-        -Details "Valid: $($PlausibleValid.IsValid) ($($PlausibleValid.ImageType)), Empty: $($PlausibleEmpty.IsValid) (Issues: $($PlausibleEmpty.Issues.Count)), Small: $($PlausibleSmall.IsValid)"
+        -Details "Valid: $($PlausibleValid.IsValid) ($($PlausibleValid.ImageType)), Empty: $($PlausibleEmpty.IsValid) (Issues: $($PlausibleEmpty.Issues.Count)), Small: $($PlausibleSmall.IsValid), MissingLast: $($PlausibleMissingLast.IsValid)"
 
     # -------------------------------------------------------------------------
     # TEST 10c: Fast Media Update (-RetainWindowsFiles)

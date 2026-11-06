@@ -63,8 +63,14 @@ $RepoRoot = Split-Path -Parent $PSScriptRoot
 
 # Route positional $Target based on command context
 if ($Target) {
-    if (-not $ConfigDir -and -not ($Command -in @("test", "version", "help"))) {
-        $ConfigDir = $Target
+    if (-not $ConfigDir) {
+        if ($Command -eq "test") {
+            if ($Target -match '\.(yaml|yml|json)$' -or (Test-Path -LiteralPath $Target -PathType Leaf) -or (Test-Path -LiteralPath (Join-Path $Target "reglaze.yaml"))) {
+                $ConfigDir = $Target
+            }
+        } elseif (-not ($Command -in @("version", "help"))) {
+            $ConfigDir = $Target
+        }
     }
 }
 
@@ -157,7 +163,19 @@ switch ($Command) {
         # If -UsbDrive specified during compile, chain into USB media creation
         if ($UsbDrive) {
             Write-Host ""
-            if ($RetainWindowsFiles) {
+            . (Join-Path $RepoRoot "src\media\Build-Media.ps1")
+            $IsExplicitRetain = $PSBoundParameters.ContainsKey('RetainWindowsFiles')
+            $ShouldRetain = $RetainWindowsFiles
+            if (-not $IsExplicitRetain) {
+                $QuickCheck = Test-WindowsInstallMedia -Path $UsbDrive
+                if ($QuickCheck.IsValid) {
+                    Write-ReglazeInfo "Detected valid Windows installer on $UsbDrive. Defaulting to fast update (-RetainWindowsFiles)."
+                    Write-ReglazeInfo "$($QuickCheck.Message)"
+                    $ShouldRetain = $true
+                }
+            }
+
+            if ($ShouldRetain) {
                 Write-ReglazeInfo "Proceeding directly to updating Reglaze files on $UsbDrive (-RetainWindowsFiles)..."
                 $ResolvedIso = $null
             } else {
@@ -169,8 +187,7 @@ switch ($Command) {
                     $ResolvedIso = $IsoResult.IsoPath
                 }
             }
-            . (Join-Path $RepoRoot "src\media\Build-Media.ps1")
-            New-ReglazeBootableUsb -UsbDrive $UsbDrive -IsoPath $ResolvedIso -MediaArtifactsDir $ResolvedDist -Force:$Force -RetainWindowsFiles:$RetainWindowsFiles -Simulation:$Simulation -Live:(-not $Simulation) -Elevate:$Elevate -SkipElevation:$SkipElevation
+            New-ReglazeBootableUsb -UsbDrive $UsbDrive -IsoPath $ResolvedIso -MediaArtifactsDir $ResolvedDist -Force:$Force -RetainWindowsFiles:$ShouldRetain -Simulation:$Simulation -Live:(-not $Simulation) -Elevate:$Elevate -SkipElevation:$SkipElevation
         }
     }
 
@@ -200,9 +217,27 @@ switch ($Command) {
             if ($null -ne $CompileRes -and $CompileRes.PSObject.Properties['Status'] -and $CompileRes.Status -ne "Success") { exit 1 }
         }
 
+        if (-not $UsbDrive -and -not $Simulation) {
+            Write-ReglazeError "Missing required -UsbDrive parameter (e.g. -UsbDrive E:)."
+            exit 1
+        }
+        $TargetUsb = if ($UsbDrive) { $UsbDrive } else { "E:" }
+
+        . (Join-Path $RepoRoot "src\media\Build-Media.ps1")
+        $IsExplicitRetain = $PSBoundParameters.ContainsKey('RetainWindowsFiles')
+        $ShouldRetain = $RetainWindowsFiles
+        if (-not $IsExplicitRetain) {
+            $QuickCheck = Test-WindowsInstallMedia -Path $TargetUsb
+            if ($QuickCheck.IsValid) {
+                Write-ReglazeInfo "Detected valid Windows installer on $TargetUsb. Defaulting to fast update (-RetainWindowsFiles)."
+                Write-ReglazeInfo "$($QuickCheck.Message)"
+                $ShouldRetain = $true
+            }
+        }
+
         # Resolve ISO if not specified and not retaining Windows files
         $ResolvedIso = $IsoPath
-        if (-not $RetainWindowsFiles) {
+        if (-not $ShouldRetain) {
             if (-not $ResolvedIso) {
                 $IsoModule = Join-Path $RepoRoot "src\media\Get-WindowsIso.ps1"
                 . $IsoModule
@@ -211,16 +246,10 @@ switch ($Command) {
             }
         }
 
-        if (-not $UsbDrive -and -not $Simulation) {
-            Write-ReglazeError "Missing required -UsbDrive parameter (e.g. -UsbDrive E:)."
-            exit 1
-        }
-        $TargetUsb = if ($UsbDrive) { $UsbDrive } else { "E:" }
-
         $MediaModule = Join-Path $RepoRoot "src\media\Build-Media.ps1"
         if (Test-Path $MediaModule) {
             . $MediaModule
-            New-ReglazeBootableUsb -UsbDrive $TargetUsb -IsoPath $ResolvedIso -MediaArtifactsDir $ResolvedDist -Force:$Force -RetainWindowsFiles:$RetainWindowsFiles -Simulation:$Simulation -Live:(-not $Simulation) -Elevate:$Elevate -SkipElevation:$SkipElevation
+            New-ReglazeBootableUsb -UsbDrive $TargetUsb -IsoPath $ResolvedIso -MediaArtifactsDir $ResolvedDist -Force:$Force -RetainWindowsFiles:$ShouldRetain -Simulation:$Simulation -Live:(-not $Simulation) -Elevate:$Elevate -SkipElevation:$SkipElevation
         } else {
             Write-ReglazeError "Media builder module not found at: $MediaModule"
             exit 1
@@ -252,6 +281,19 @@ switch ($Command) {
     }
 
     "test" {
+        $ResolvedCfg = if ($ConfigDir) { Resolve-ReglazeConfigFile $ConfigDir } else { $null }
+        if ($ResolvedCfg -and (Test-Path -LiteralPath $ResolvedCfg)) {
+            Write-ReglazeBanner "BLUEPRINT VALIDATION"
+            Write-ReglazeInfo "Validating blueprint: $ResolvedCfg"
+            $Validator = Join-Path $RepoRoot "src\compiler\Test-ReglazeValidation.ps1"
+            if (Test-Path $Validator) {
+                & $Validator -ConfigFile $ResolvedCfg
+            } else {
+                Write-ReglazeSuccess "Blueprint syntax check passed: $ResolvedCfg"
+            }
+            break
+        }
+
         Write-ReglazeBanner "DIAGNOSTIC TEST SUITE"
         $M1Script = Join-Path $RepoRoot "tests\Test-Milestone1.ps1"
         $M2Script = Join-Path $RepoRoot "tests\Test-Milestone2.ps1"

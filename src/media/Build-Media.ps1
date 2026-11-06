@@ -126,24 +126,45 @@ function Test-WindowsInstallMedia {
     }
 
     # 4. Check for Windows installation image (install.wim, install.esd, or install*.swm)
+    # Note: On standard FAT32 UEFI media, install.wim is split into slices.
+    # 'install2.swm' is the last standard Windows file copied during media creation.
     $InstallWim = Join-Path $SourcesDir "install.wim"
     $InstallEsd = Join-Path $SourcesDir "install.esd"
+    $InstallSwm1 = Join-Path $SourcesDir "install.swm"
+    $InstallSwm2 = Join-Path $SourcesDir "install2.swm"
     $InstallSwms = if (Test-Path -LiteralPath $SourcesDir) {
-        @(Get-ChildItem -LiteralPath $SourcesDir -Filter "install*.swm" -ErrorAction SilentlyContinue)
+        @(Get-ChildItem -LiteralPath $SourcesDir -Filter "install*.swm" -ErrorAction SilentlyContinue | Sort-Object Name)
     } else { @() }
 
     $TotalImageBytes = 0
     $FoundImageType = $null
 
-    if (Test-Path -LiteralPath $InstallWim) {
-        $FoundImageType = "install.wim"
-        $TotalImageBytes = (Get-Item -LiteralPath $InstallWim).Length
+    if ($InstallSwms.Count -gt 0) {
+        $FoundImageType = "install*.swm ($($InstallSwms.Count) slice(s))"
+        $TotalImageBytes = ($InstallSwms | Measure-Object -Property Length -Sum).Sum
+
+        # Verify primary slice 1 exists
+        if (-not (Test-Path -LiteralPath $InstallSwm1)) {
+            $Issues.Add("Missing primary split image slice 'sources\install.swm'")
+        }
+
+        # On FAT32 Windows 10/11 install media, install.wim (>4GB) is split into multiple slices.
+        # install2.swm is the last standard Windows file copied to the media.
+        if (-not (Test-Path -LiteralPath $InstallSwm2)) {
+            $Issues.Add("Missing 'sources\install2.swm' (the last standard Windows image slice copied during media creation; split WIM requires at least 2 slices)")
+        } else {
+            # Verify the final slice was not truncated (has a plausible non-empty size >= 50MB)
+            $LastSlice = $InstallSwms[-1]
+            if ($LastSlice.Length -lt 50MB) {
+                $Issues.Add("Last split slice '$($LastSlice.Name)' is unexpectedly small ($([Math]::Round($LastSlice.Length / 1MB, 1)) MB; media creation copy may have been interrupted)")
+            }
+        }
     } elseif (Test-Path -LiteralPath $InstallEsd) {
         $FoundImageType = "install.esd"
         $TotalImageBytes = (Get-Item -LiteralPath $InstallEsd).Length
-    } elseif ($InstallSwms.Count -gt 0) {
-        $FoundImageType = "install*.swm ($($InstallSwms.Count) slice(s))"
-        $TotalImageBytes = ($InstallSwms | Measure-Object -Property Length -Sum).Sum
+    } elseif (Test-Path -LiteralPath $InstallWim) {
+        $FoundImageType = "install.wim"
+        $TotalImageBytes = (Get-Item -LiteralPath $InstallWim).Length
     } else {
         $Issues.Add("Missing Windows OS installation image (neither 'install.wim', 'install.esd', nor 'install*.swm' found in 'sources\')")
     }
@@ -193,6 +214,18 @@ function New-ReglazeBootableUsb {
 
     $CleanLetter = ($UsbDrive -replace '[:\\/]', '').ToUpper()
     $TargetDriveLetter = "${CleanLetter}:"
+
+    # Auto-detect existing Windows install media: default to -RetainWindowsFiles if quick tests pass
+    $ExplicitRetain = $PSBoundParameters.ContainsKey('RetainWindowsFiles')
+    if (-not $ExplicitRetain) {
+        $MediaProbePath = if (Test-Path -LiteralPath $UsbDrive) { $UsbDrive } else { $TargetDriveLetter }
+        $QuickCheck = Test-WindowsInstallMedia -Path $MediaProbePath
+        if ($QuickCheck.IsValid) {
+            Write-Host "Detected valid Windows installer on $TargetDriveLetter. Defaulting to fast update (-RetainWindowsFiles)." -ForegroundColor Green
+            Write-Host "  [+] $($QuickCheck.Message)" -ForegroundColor Green
+            $RetainWindowsFiles = $true
+        }
+    }
 
     Write-Host "================================================================================" -ForegroundColor Cyan
     Write-Host "       REGLAZE VANILLA WINDOWS 11 UEFI MEDIA CREATION ENGINE                    " -ForegroundColor Cyan
