@@ -1,10 +1,11 @@
-{
+﻿{
     "$schema":  "../_schema.json",
     "app_id":  "silhouette_studio",
     "name":  "Silhouette Studio",
     "website":  "https://www.silhouetteamerica.com/software",
     "install":  {
                     "method":  "winget",
+                    "scope":  "machine",
                     "winget_id":  "Silhouette.SilhouetteStudio",
                     "steam_id":  null,
                     "download_url":  null,

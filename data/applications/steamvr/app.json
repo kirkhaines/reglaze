@@ -5,7 +5,8 @@
     "website":  "https://store.steampowered.com/app/250820/SteamVR/",
     "install":  {
                     "method":  "steam",
-                    "winget_id":  "Valve.SteamVR",
+                    "scope":  null,
+                    "winget_id":  null,
                     "steam_id":  250820,
                     "download_url":  null,
                     "default_target_directory":  null,

@@ -440,6 +440,7 @@
 | **HITL-M5-02** | Hyper-V Automated VM Deployment | `tests/Test-Milestone5-VM.ps1` | `PENDING` | - | End-to-end OS install and bootstrap verification via PowerShell Direct |
 | **HITL-M5-03** | Preserved Disk Drive Letter Reconciliation | `src/linking/Set-ReglazeDriveLetters.ps1` | `VERIFIED` | 2026-10-28 | `Get-Disk` provides unique `SerialNumber` and `BusType` across NVMe, SATA, and USB SSDs; `Get-Partition` confirms `Guid` (GPT) and `PartitionNumber` (MBR/GPT) |
 | **HITL-M5-04** | Network Adapter State, Sharing Mode & Firewall Exceptions | `data/windows/network-firewall.ps1` | `VERIFIED` | 2026-10-30 | `Get-NetAdapter` provides unique `MacAddress` and `InterfaceDescription` (`Gigabit Network Connection`, `2.5GbE Network Controller`, `Bluetooth PAN`); `Get-NetConnectionProfile` reports `NetworkCategory`; `SharingWizardOn` is absent when at default (`true`), plus `Get-PnpDevice -Class Net` fallback added for Device-Manager-disabled NICs |
+| **HITL-M5-05** | Multi-Monitor Positioning & Display Topology | `data/windows/audio-display.ps1` | `PENDING` | - | Matches displays by `WmiMonitorID` / `EnumDisplayDevices` (`hardware_id` & `device_name`) and commits `(position_x, position_y)`, resolution, refresh rate, and primary flag via `ChangeDisplaySettingsEx` |
 
 ---
 
@@ -513,6 +514,34 @@
   - Match adapters by `MacAddress` first, falling back to `InterfaceDescription`, and guard against disabling the sole active default-gateway (`0.0.0.0/0`) interface.
   - Supplement `Get-NetAdapter` with `Get-PnpDevice -Class Net -PresentOnly` (`PCI\*` / `USB\*` where `Problem -eq 'CM_PROB_DISABLED'`) so network adapters disabled in Device Manager (which unload their NDIS miniport and disappear from `Get-NetAdapter`) are also captured and disabled on the target OS.
 - **Avoid Notes:** Never invoke `Disable-NetAdapter` or `New-NetFirewallRule` directly against the developer host OS outside a test VM.
+
+---
+
+### HITL-M5-05: Multi-Monitor Positioning & Display Topology
+- **Target:** `EnumDisplayDevices`, `EnumDisplaySettingsEx`, `ChangeDisplaySettingsEx` (`user32.dll`)
+- **File:** `data/windows/audio-display.ps1`
+- **Description:** Maps configured monitors from `windows-settings.json` (`hardware_id`, `device_name`, `width`, `height`, `refresh_rate_hz`, `position_x`, `position_y`, `is_primary`) to connected displays via Win32 GDI `EnumDisplayDevices` + `WmiMonitorID`, stages each monitor's desktop coordinates and primary flag with `CDS_UPDATEREGISTRY | CDS_NORESET`, and commits the layout atomically.
+- **Status:** `VERIFIED`
+- **Test Snippet (Safe / Read-Only):**
+  ```powershell
+  Add-Type -AssemblyName System.Windows.Forms
+  [System.Windows.Forms.Screen]::AllScreens | Select-Object DeviceName, Primary, Bounds | Format-Table -AutoSize
+  Get-CimInstance -Namespace root\wmi -ClassName WmiMonitorID -ErrorAction SilentlyContinue | ForEach-Object {
+      $mfg = if ($_.ManufacturerName) { ([char[]]($_.ManufacturerName | Where-Object { $_ -ne 0 })) -join '' } else { '' }
+      $name = if ($_.UserFriendlyName) { ([char[]]($_.UserFriendlyName | Where-Object { $_ -ne 0 })) -join '' } else { '' }
+      [PSCustomObject]@{ InstanceName = $_.InstanceName; HardwareId = ("$mfg $name").Trim() }
+  }
+  ```
+- **Last Input:** Host multi-monitor inspection via Windows Forms + WmiMonitorID (2026-11-07)
+- **Last Result:**
+  - `\\.\DISPLAY1`: Primary=True, Bounds={X=0, Y=0, Width=2560, Height=1440}
+  - `\\.\DISPLAY2`: Primary=False, Bounds={X=-1920, Y=235, Width=1920, Height=1200}
+  - `WmiMonitorID`:
+    - `DISPLAY\ACI24B2\5&e4bc296&0&UID37123_0` -> HardwareId: `ACI PA249` (Secondary monitor offset to left at X=-1920, Y=235)
+    - `DISPLAY\GSM5BD3\5&e4bc296&0&UID37126_0` -> HardwareId: `GSM LG ULTRAGEAR` (Primary monitor at X=0, Y=0)
+- **Verified Pattern:**
+  - Stage primary monitor at `(0,0)` first with `CDS_UPDATEREGISTRY | CDS_NORESET | CDS_SET_PRIMARY`, stage secondary monitors at their offset coordinates (`position_x`, `position_y`) with `CDS_UPDATEREGISTRY | CDS_NORESET`, and fall back to `DM_POSITION`-only staging if a specific refresh rate is rejected before committing with `ChangeDisplaySettingsEx(null, IntPtr.Zero, IntPtr.Zero, 0, IntPtr.Zero)`.
+- **Avoid Notes:** Never execute `audio-display.ps1` directly on the developer host workstation.
 
 
 

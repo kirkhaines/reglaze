@@ -1,9 +1,10 @@
-{
+﻿{
     "app_id":  "docker_desktop",
     "name":  "Docker Desktop",
     "website":  "https://www.docker.com/products/docker-desktop",
     "install":  {
                     "method":  "winget",
+                    "scope":  "machine",
                     "winget_id":  "Docker.DockerDesktop",
                     "steam_id":  null,
                     "download_url":  null,

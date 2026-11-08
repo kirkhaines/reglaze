@@ -37,7 +37,10 @@ function Build-ReglazePayload {
         [string]$PayloadDir,
 
         [Parameter(Mandatory=$false)]
-        [string]$BlueprintFile = $null
+        [string]$BlueprintFile = $null,
+
+        [Parameter(Mandatory=$false)]
+        [string]$BuildTag = $null
     )
 
     if (-not $RepoRoot) {
@@ -48,7 +51,15 @@ function Build-ReglazePayload {
         New-Item -ItemType Directory -Path $PayloadDir -Force | Out-Null
     }
 
-    # Stage linking & drive letter reconciliation modules into payload
+    if (-not [string]::IsNullOrWhiteSpace($BuildTag)) {
+        $BuildTag | Set-Content -Path (Join-Path $PayloadDir "reglaze.tag") -Encoding UTF8 -NoNewline -Force
+        $ParentReglazeDir = Split-Path -Parent $PayloadDir
+        if ($ParentReglazeDir -and (Test-Path $ParentReglazeDir)) {
+            $BuildTag | Set-Content -Path (Join-Path $ParentReglazeDir "reglaze.tag") -Encoding UTF8 -NoNewline -Force
+        }
+    }
+
+    # Stage linking, drive letter reconciliation, and Steam shortcut helpers into payload
     $LinkingDir = Join-Path $RepoRoot "src\linking"
     if (Test-Path $LinkingDir) {
         foreach ($LinkScript in @("Set-ReglazeDriveLetters.ps1", "Unlock-BitLockerVolumes.ps1", "New-DirectoryJunction.ps1", "Test-ReparsePoint.ps1", "Backup-CollisionFolder.ps1")) {
@@ -57,6 +68,10 @@ function Build-ReglazePayload {
                 Copy-Item -Path $SrcScript -Destination (Join-Path $PayloadDir $LinkScript) -Force
             }
         }
+    }
+    $GameLibScript = Join-Path $RepoRoot "src\common\GameLibraries.ps1"
+    if (Test-Path $GameLibScript) {
+        Copy-Item -Path $GameLibScript -Destination (Join-Path $PayloadDir "GameLibraries.ps1") -Force
     }
 
     # Stage modular Windows settings scripts
@@ -212,10 +227,14 @@ function Build-ReglazePayload {
     $WinSettings | ConvertTo-Json -Depth 8 | Set-Content -Path $WinSettingsPath -Encoding UTF8
 
     # =========================================================================
-    # 1. Generate WinGet DSC Manifest (configuration.dsc.yaml)
+    # 1. Generate WinGet DSC Manifest (configuration.dsc.yaml) & User Packages Queue (user-packages.json)
     # =========================================================================
     $DscPath = Join-Path $PayloadDir "configuration.dsc.yaml"
-    Build-WinGetDSCManifest -Blueprint $Blueprint -RepoRoot $RepoRoot -UserConfigDir $UserConfigDir -OutputPath $DscPath | Out-Null
+    $DscResult = Build-WinGetDSCManifest -Blueprint $Blueprint -RepoRoot $RepoRoot -UserConfigDir $UserConfigDir -OutputPath $DscPath
+    $UserPackagesPath = Join-Path $PayloadDir "user-packages.json"
+    $UserPackagesList = if ($DscResult -and $DscResult.UserPackages) { @($DscResult.UserPackages) } else { @() }
+    $UserPackagesJson = if ($UserPackagesList.Count -eq 0) { "[]" } else { ConvertTo-Json -InputObject $UserPackagesList -Depth 4 }
+    $UserPackagesJson | Set-Content -Path $UserPackagesPath -Encoding UTF8
 
     # =========================================================================
     # 2. Generate Preserved Disk & Drive Letter Reconciliation Config (disk-config.json)
@@ -565,10 +584,21 @@ function Build-ReglazePayload {
         "user@example.com"
     }
 
-    # Resolve SourceComputerName from: (1) storage.sync.source_computer, (2) profile-computers.json, (3) audit-reference.json, (4) system.computer_name
+    # Resolve SourceComputerName (Google Drive 'Other computers\<Name>' container name, e.g., 'My Computer')
     $SourceComputerName = $null
-    if ($Blueprint.storage -and $Blueprint.storage.sync -and $Blueprint.storage.sync.source_computer) {
-        $SourceComputerName = [string]$Blueprint.storage.sync.source_computer
+    if ($Blueprint.storage -and $Blueprint.storage.sync) {
+        if ($Blueprint.storage.sync.google_drive_computer_name) {
+            $SourceComputerName = [string]$Blueprint.storage.sync.google_drive_computer_name
+        } elseif ($Blueprint.storage.sync.source_computer) {
+            $SourceComputerName = [string]$Blueprint.storage.sync.source_computer
+        }
+    }
+    if (-not $SourceComputerName -and $AuditReference -and $AuditReference.storage_providers) {
+        if ($AuditReference.storage_providers.google_drive -and $AuditReference.storage_providers.google_drive.computer_folder_name) {
+            $SourceComputerName = [string]$AuditReference.storage_providers.google_drive.computer_folder_name
+        } elseif ($AuditReference.storage_providers.computer_folder_name) {
+            $SourceComputerName = [string]$AuditReference.storage_providers.computer_folder_name
+        }
     }
     if (-not $SourceComputerName -and $BlueprintFile) {
         $BpDir = Split-Path -Parent $BlueprintFile
@@ -578,22 +608,15 @@ function Build-ReglazePayload {
                 $ProfReg = Get-Content -Raw -Path $ProfRegPath | ConvertFrom-Json
                 if ($ProfReg.profiles -and $ProfReg.profiles.$ProfileName) {
                     $PEntry = $ProfReg.profiles.$ProfileName
-                    if ($PEntry.latest_computer_name) {
-                        $SourceComputerName = [string]$PEntry.latest_computer_name
+                    if ($PEntry.google_drive_computer_name) {
+                        $SourceComputerName = [string]$PEntry.google_drive_computer_name
                     }
                 }
             } catch {}
         }
     }
-    if (-not $SourceComputerName -and $AuditReference) {
-        if ($AuditReference.profile_association -and $AuditReference.profile_association.latest_computer_name) {
-            $SourceComputerName = [string]$AuditReference.profile_association.latest_computer_name
-        } elseif ($AuditReference.audit_metadata -and $AuditReference.audit_metadata.host_name) {
-            $SourceComputerName = [string]$AuditReference.audit_metadata.host_name
-        }
-    }
     if (-not $SourceComputerName) {
-        $SourceComputerName = $TargetComputerName
+        $SourceComputerName = "My Computer"
     }
 
     $MigrationMode = if ($Blueprint.storage -and $Blueprint.storage.sync -and $Blueprint.storage.sync.migration_mode) {
@@ -614,6 +637,12 @@ function Build-ReglazePayload {
             $ResolvedVerify = if ($SDir.verify_folder) { Resolve-VariableString -InputString $SDir.verify_folder -VariableMap $VarMap } else { $ResolvedLocal }
             $CloudFolder = if ($SDir.cloud_folder) { [string]$SDir.cloud_folder } else { Split-Path -Leaf $ResolvedLocal }
 
+            $LocalDriveRoot = if ($ResolvedLocal) { ([System.IO.Path]::GetPathRoot($ResolvedLocal)).TrimEnd('\') } else { "" }
+            $IsOnPreservedDisk = [bool](
+                ($LocalDriveRoot -and $LocalDriveRoot -inotlike "C*") -or
+                ($PreservedDiskSpecs | Where-Object { $_.ExpectedMount -and $_.ExpectedMount -ieq $LocalDriveRoot })
+            )
+
             $CloudDocId = $null
             if ($AuditReference -and $AuditReference.storage_providers -and $AuditReference.storage_providers.sync_directories) {
                 $AuditSyncMatch = $AuditReference.storage_providers.sync_directories | Where-Object { $_.id -eq $SProp -or $_.cloud_folder -eq $CloudFolder } | Select-Object -First 1
@@ -629,6 +658,7 @@ function Build-ReglazePayload {
                 VerifyFolder             = $ResolvedVerify
                 SyncVariable             = $SDir.sync_variable
                 CloudDocId               = $CloudDocId
+                IsOnPreservedDisk        = $IsOnPreservedDisk
                 SourceComputerStreamPath = "$StreamMountPoint\Other computers\$SourceComputerName\$CloudFolder"
             })
         }
@@ -761,11 +791,12 @@ try {
     & icacls.exe `$ReglazeRoot /grant "*S-1-5-32-545:(OI)(CI)M" /T /C /Q 2>&1 | Out-Null
 } catch {}
 
-# Enable Developer Mode for unprivileged symbolic links
+# Enable Developer Mode for unprivileged symbolic links and set RemoteSigned policy for standard users
 try {
     `$DevRegPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\AppModelUnlock"
     if (-not (Test-Path `$DevRegPath)) { New-Item -Path `$DevRegPath -Force | Out-Null }
     Set-ItemProperty -Path `$DevRegPath -Name "AllowDevelopmentWithoutDevLicense" -Value 1 -Type DWord -Force
+    Set-ExecutionPolicy -Scope LocalMachine -ExecutionPolicy RemoteSigned -Force -ErrorAction SilentlyContinue
 } catch {}
 `$TranscriptFile = "C:\Reglaze\bootstrap.log"
 try {
@@ -810,11 +841,11 @@ function Save-BootstrapStep ([string]`$StepName) {
 
 function Initialize-PSWindowsUpdate {
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-    Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope Process -Force -ErrorAction SilentlyContinue
+    Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force -ErrorAction SilentlyContinue
     Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force -ForceBootstrap -Scope CurrentUser -ErrorAction SilentlyContinue | Out-Null
-    Set-PSRepository -Name 'PSGallery' -InstallationPolicy Trusted -ErrorAction SilentlyContinue
+    Set-PSRepository -Name "PSGallery" -InstallationPolicy Trusted -ErrorAction SilentlyContinue
     if (-not (Get-Module -Name PSWindowsUpdate -ListAvailable -ErrorAction SilentlyContinue)) {
-        Install-Module -Name PSWindowsUpdate -Force -SkipPublisherCheck -AcceptLicense -Confirm:`$false -Scope CurrentUser -ErrorAction Stop
+        Install-Module -Name PSWindowsUpdate -Force -SkipPublisherCheck -Confirm:`$false -Scope CurrentUser -ErrorAction SilentlyContinue
     }
     # Trust the PSWindowsUpdate Authenticode publisher certificate and unblock module files so Import-Module never prompts for untrusted publisher
     `$ModCandidates = @(Get-Module -Name PSWindowsUpdate -ListAvailable -ErrorAction SilentlyContinue)
@@ -841,7 +872,7 @@ function Initialize-PSWindowsUpdate {
             }
         }
     }
-    Import-Module -Name PSWindowsUpdate -Force -DisableNameChecking -Global -ErrorAction Stop
+    Import-Module -Name PSWindowsUpdate -Force -DisableNameChecking -Global -ErrorAction SilentlyContinue
 }
 
 # 1. Pass 1 Drive Letter Reconciliation and Connected BitLocker Unlock
@@ -986,17 +1017,19 @@ if (`$BootstrapState.CompletedSteps -notcontains "windows_updates") {
     Save-BootstrapStep "windows_updates"
 }
 
-# 4. Pre-configure Google Drive DefaultMountPoint Policy and Execute WinGet DSC
-Write-Host "[4/9] Configuring Google Drive streaming mount policy ($StreamMountPoint) and running WinGet DSC..." -ForegroundColor Yellow
+# 4. Pre-configure Google Drive Enterprise Policies and Execute WinGet DSC
+Write-Host "[4/9] Configuring Google Drive streaming & backup suppression policies ($StreamMountPoint) and running WinGet DSC..." -ForegroundColor Yellow
 try {
-    `$DriveFsPolicyPath = "HKLM:\SOFTWARE\Policies\Google\DriveFS"
-    if (-not (Test-Path `$DriveFsPolicyPath)) {
-        New-Item -Path `$DriveFsPolicyPath -Force | Out-Null
-    }
-    Set-ItemProperty -Path `$DriveFsPolicyPath -Name "DefaultMountPoint" -Value "$StreamDriveLetter" -Type String -Force
-    Write-Host " - Configured DriveFS DefaultMountPoint policy to '${StreamDriveLetter}:'" -ForegroundColor Green
+    `$DrivePolicyPath = "HKLM:\SOFTWARE\Policies\Google\DriveFS"
+    New-Item -Path `$DrivePolicyPath -Force | Out-Null
+    Set-ItemProperty -Path `$DrivePolicyPath -Name "DefaultMountPoint" -Value "$StreamDriveLetter" -Type String -Force
+    Set-ItemProperty -Path `$DrivePolicyPath -Name "DisablePromptToBackupDevices" -Value 1 -Type DWord -Force
+    Set-ItemProperty -Path `$DrivePolicyPath -Name "DisableDesktopBackup" -Value 1 -Type DWord -Force
+    Set-ItemProperty -Path `$DrivePolicyPath -Name "DisableDocumentsBackup" -Value 1 -Type DWord -Force
+    Set-ItemProperty -Path `$DrivePolicyPath -Name "DisablePicturesBackup" -Value 1 -Type DWord -Force
+    Write-Host " - Configured DriveFS DefaultMountPoint ('${StreamDriveLetter}:') and backup suppression policies." -ForegroundColor Green
 } catch {
-    Write-Warning "   Could not set DriveFS DefaultMountPoint policy: `$(`$_.Exception.Message)"
+    Write-Warning "   Could not set DriveFS policies: `$(`$_.Exception.Message)"
 }
 
 # Ensure WinGet (Microsoft.DesktopAppInstaller) is registered, installed, and in PATH on clean Windows 11 installs
@@ -1026,7 +1059,7 @@ if (-not `$WingetCmd) {
     try {
         Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force -ForceBootstrap -Scope CurrentUser -ErrorAction SilentlyContinue | Out-Null
         Set-PSRepository -Name 'PSGallery' -InstallationPolicy Trusted -ErrorAction SilentlyContinue
-        Install-Module -Name Microsoft.WinGet.Client -Force -SkipPublisherCheck -AcceptLicense -Confirm:`$false -Scope CurrentUser -ErrorAction Stop
+        Install-Module -Name Microsoft.WinGet.Client -Force -SkipPublisherCheck -Confirm:`$false -Scope CurrentUser -ErrorAction Stop
         Import-Module -Name Microsoft.WinGet.Client -Force -ErrorAction SilentlyContinue
         Repair-WinGetPackageManager -AllUsers -Force -Latest -ErrorAction Stop
     } catch {
@@ -1053,60 +1086,48 @@ if (-not `$WingetCmd) {
     }
     `$WingetCmd = Resolve-WinGetBinary
 }
+`$winget = if (`$WingetCmd -and `$WingetCmd.Source) { `$WingetCmd.Source } else { "winget" }
 if (`$WingetCmd) {
     Write-Host " - WinGet CLI ready at: `$(`$WingetCmd.Source)" -ForegroundColor Green
 } else {
     Write-Warning " - WinGet CLI could not be resolved; package installations may be skipped."
 }
 
-# Enforce machine-wide installer preference in WinGet settings
+# Enforce machine-wide installer preference and enable DSC configuration in WinGet settings
 foreach (`$WsDir in @("`$env:LOCALAPPDATA\Packages\Microsoft.DesktopAppInstaller_8wekyb3d8bbwe\LocalState", "`$env:LOCALAPPDATA\Microsoft\WinGet\Settings")) {
     try {
         if (-not (Test-Path `$WsDir)) { New-Item -ItemType Directory -Path `$WsDir -Force | Out-Null }
-        '{"installBehavior":{"preferences":{"scope":"machine"}}}' | Set-Content -Path (Join-Path `$WsDir "settings.json") -Encoding UTF8 -Force
+        '{"installBehavior":{"preferences":{"scope":"machine"}},"experimentalFeatures":{"configuration":true,"configuration03":true}}' | Set-Content -Path (Join-Path `$WsDir "settings.json") -Encoding UTF8 -Force
     } catch {}
+}
+
+`$UserPackagesFile = Join-Path `$PayloadDir "user-packages.json"
+function Add-DeferredUserPackage ([string]`$PackageId, [string]`$Source = "winget") {
+    `$ExistingList = @()
+    if (Test-Path `$UserPackagesFile) {
+        try {
+            `$RawJson = Get-Content -Raw -LiteralPath `$UserPackagesFile | ConvertFrom-Json
+            if (`$RawJson) { `$ExistingList = @(`$RawJson) }
+        } catch {}
+    }
+    if (-not (`$ExistingList | Where-Object { `$_.PackageId -ieq `$PackageId })) {
+        `$ExistingList += [PSCustomObject]@{
+            AppId     = `$PackageId
+            AppName   = `$PackageId
+            PackageId = `$PackageId
+            Source    = `$Source
+            Scope     = "user"
+        }
+        `$OutJson = ConvertTo-Json -InputObject @(`$ExistingList) -Depth 4
+        `$OutJson | Set-Content -Path `$UserPackagesFile -Encoding UTF8 -Force
+    }
 }
 
 `$DscManifest = Join-Path `$PayloadDir "configuration.dsc.yaml"
 if (Test-Path `$DscManifest) {
-    Write-Host " - Enabling WinGet DSC configuration feature..."
-    & winget configure enable 2>&1 | Out-Null
-    & winget configure --enable --accept-configuration-agreements 2>&1 | Out-Null
-
-    # Install WinGet packages with explicit --scope machine and retry logic (up to 2 attempts per package)
-    `$DscText = Get-Content -Raw -LiteralPath `$DscManifest -ErrorAction SilentlyContinue
-    if (`$DscText) {
-        `$PkgMatches = [regex]::Matches(`$DscText, 'id:\s*"([^"]+)"\s*\r?\n\s*source:\s*(\S+)')
-        foreach (`$Match in `$PkgMatches) {
-            `$PkgId = `$Match.Groups[1].Value
-            `$PkgSource = `$Match.Groups[2].Value
-            if (`$PkgSource -eq "winget") {
-                `$PkgInstalled = `$false
-                for (`$Attempt = 1; `$Attempt -le 2; `$Attempt++) {
-                    if (`$Attempt -gt 1) {
-                        Write-Host "   Retrying package installation for `$PkgId (Attempt `$Attempt of 2)..." -ForegroundColor Yellow
-                        Start-Sleep -Seconds 5
-                    }
-                    Write-Host " - Installing machine-wide package: `$PkgId (--scope machine, attempt `$Attempt/2)..."
-                    & winget install --id `$PkgId --source `$PkgSource --scope machine --silent --accept-package-agreements --accept-source-agreements --disable-interactivity
-                    # 0 = Installed, -1978335189 (0x8A15002B) = Already installed / no applicable update
-                    if (`$LASTEXITCODE -eq 0 -or `$LASTEXITCODE -eq -1978335189) {
-                        `$PkgInstalled = `$true
-                        break
-                    }
-                    Write-Host "   Package `$PkgId has no dedicated machine-scope installer or returned exit `$LASTEXITCODE; trying default scope..." -ForegroundColor DarkGray
-                    & winget install --id `$PkgId --source `$PkgSource --silent --accept-package-agreements --accept-source-agreements --disable-interactivity
-                    if (`$LASTEXITCODE -eq 0 -or `$LASTEXITCODE -eq -1978335189) {
-                        `$PkgInstalled = `$true
-                        break
-                    }
-                }
-                if (-not `$PkgInstalled) {
-                    Write-Warning "   Package `$PkgId failed after 2 attempts (last exit code: `$LASTEXITCODE)."
-                }
-            }
-        }
-    }
+    Write-Host "Enabling WinGet DSC configuration feature..." -ForegroundColor Yellow
+    & `$winget configure --enable
+    & `$winget configure --enable --accept-configuration-agreements
 
     for (`$DscAttempt = 1; `$DscAttempt -le 2; `$DscAttempt++) {
         if (`$DscAttempt -gt 1) {
@@ -1114,9 +1135,41 @@ if (Test-Path `$DscManifest) {
             Start-Sleep -Seconds 5
         }
         Write-Host " - Running: winget configure --file ``"`$DscManifest``" --accept-configuration-agreements --disable-interactivity (Attempt `$DscAttempt/2)"
-        & winget configure --file `$DscManifest --accept-configuration-agreements --disable-interactivity
+        & `$winget configure --file "`$DscManifest" --accept-configuration-agreements --disable-interactivity
         if (`$LASTEXITCODE -eq 0) {
             break
+        }
+    }
+
+    # Verify each machine package; never fall back to user scope under LocalAdmin
+    `$DscText = Get-Content -Raw -LiteralPath `$DscManifest -ErrorAction SilentlyContinue
+    if (`$DscText) {
+        `$PkgMatches = [regex]::Matches(`$DscText, 'id:\s*"([^"]+)"\s*\r?\n\s*source:\s*(\S+)')
+        foreach (`$Match in `$PkgMatches) {
+            `$PkgId = `$Match.Groups[1].Value
+            `$PkgSource = `$Match.Groups[2].Value
+            if (`$PkgSource -eq "winget" -or `$PkgSource -eq "msstore") {
+                # Check if already installed by winget configure
+                `$ListOut = & `$winget list --id `$PkgId --exact --accept-source-agreements 2>&1
+                if (`$LASTEXITCODE -eq 0 -and (`$ListOut -join "`n") -match [regex]::Escape(`$PkgId)) {
+                    Write-Host " - [OK] Machine package verified installed: `$PkgId" -ForegroundColor Green
+                    continue
+                }
+
+                Write-Host " - Installing machine-wide package: `$PkgId (--scope machine)..."
+                & `$winget install --id `$PkgId --source `$PkgSource --scope machine --silent --accept-package-agreements --accept-source-agreements --disable-interactivity
+                # 0 = Installed, -1978335189 (0x8A15002B) = Already installed / no applicable update
+                if (`$LASTEXITCODE -eq 0 -or `$LASTEXITCODE -eq -1978335189) {
+                    Write-Host "   [+] Installed machine package: `$PkgId" -ForegroundColor Green
+                } elseif (`$LASTEXITCODE -eq -1978335216 -or `$LASTEXITCODE -eq -1978335146) {
+                    # Do NOT fall back to user scope under LocalAdmin; queue for hydrate.ps1 inside primary user session
+                    Write-Host "   [DEFERRED] Package `$PkgId lacks a dedicated machine-scope installer or refuses admin context (exit `$LASTEXITCODE); queuing to user-packages.json for user hydration." -ForegroundColor Yellow
+                    Add-DeferredUserPackage -PackageId `$PkgId -Source `$PkgSource
+                } else {
+                    Write-Warning "   Package `$PkgId returned exit code `$LASTEXITCODE; queuing to user-packages.json for retry during user hydration."
+                    Add-DeferredUserPackage -PackageId `$PkgId -Source `$PkgSource
+                }
+            }
         }
     }
     Write-Host "   WinGet DSC deployment pass completed." -ForegroundColor Green
@@ -1176,9 +1229,9 @@ if (Test-Path `$JunctionsManifest) {
             `$ParentDir = Split-Path -Parent `$Link
             if (-not (Test-Path `$ParentDir)) { New-Item -ItemType Directory -Path `$ParentDir -Force | Out-Null }
             if (`$IsFile) {
-                cmd.exe /c mklink "`$Link" "`$TargetFile" | Out-Null
+                cmd.exe /c "mklink ``"`$Link``" ``"`$TargetFile``"" | Out-Null
             } else {
-                cmd.exe /c mklink /J "`$Link" "`$Target" | Out-Null
+                cmd.exe /c "mklink /J ``"`$Link``" ``"`$Target``"" | Out-Null
             }
         }
     }
@@ -1203,10 +1256,13 @@ if (Test-Path `$WinSettingsFile) {
             & `$PwrScript -PowerPlan `$Plan -AcSleepTimeoutMinutes ([int]`$WinCfg.power.ac_sleep_minutes) -AcDisplayTimeoutMinutes `$AcDisp -LongPathsEnabled `$LongPaths -SshAgentStartup `$SshStartup
         }
         `$AudioScript = Join-Path `$WinScriptsDir "audio-display.ps1"
-        if ((Test-Path `$AudioScript) -and `$WinCfg.audio_and_devices) {
-            `$GameMode = if (`$WinCfg.display -and `$null -ne `$WinCfg.display.game_mode_enabled) { [bool]`$WinCfg.display.game_mode_enabled } else { `$true }
-            `$HwGpu = if (`$WinCfg.display -and `$null -ne `$WinCfg.display.hardware_gpu_scheduling) { [bool]`$WinCfg.display.hardware_gpu_scheduling } else { `$true }
-            & `$AudioScript -DefaultSpeakers `$WinCfg.audio_and_devices.default_speakers -DefaultMicrophone `$WinCfg.audio_and_devices.default_microphone -DefaultCamera `$WinCfg.audio_and_devices.default_camera -DisabledCameras @(`$WinCfg.audio_and_devices.disabled_cameras) -MasterVolumePercent ([int]`$WinCfg.audio_and_devices.master_volume_percent) -MasterMuted:([bool]`$WinCfg.audio_and_devices.master_muted) -GameModeEnabled:`$GameMode -HardwareGpuScheduling:`$HwGpu
+        if ((Test-Path `$AudioScript) -and (`$WinCfg.audio_and_devices -or `$WinCfg.audio_and_display)) {
+            `$AudDev = if (`$WinCfg.audio_and_devices) { `$WinCfg.audio_and_devices } else { `$WinCfg.audio_and_display }
+            `$DispCfg = if (`$WinCfg.display) { `$WinCfg.display } else { `$WinCfg.audio_and_display }
+            `$GameMode = if (`$DispCfg -and `$null -ne `$DispCfg.game_mode_enabled) { [bool]`$DispCfg.game_mode_enabled } else { `$true }
+            `$HwGpu = if (`$DispCfg -and `$null -ne `$DispCfg.hardware_gpu_scheduling) { [bool]`$DispCfg.hardware_gpu_scheduling } else { `$true }
+            `$Mons = if (`$DispCfg -and `$DispCfg.monitors) { @(`$DispCfg.monitors) } else { @() }
+            & `$AudioScript -DefaultSpeakers `$AudDev.default_speakers -DefaultMicrophone `$AudDev.default_microphone -DefaultCamera `$AudDev.default_camera -DisabledCameras @(`$AudDev.disabled_cameras) -MasterVolumePercent ([int]`$AudDev.master_volume_percent) -MasterMuted:([bool]`$AudDev.master_muted) -GameModeEnabled:`$GameMode -HardwareGpuScheduling:`$HwGpu -Monitors `$Mons
         }
         `$NetScript = Join-Path `$WinScriptsDir "network-firewall.ps1"
         if ((Test-Path `$NetScript) -and `$WinCfg.network) {
@@ -1238,19 +1294,18 @@ Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlo
 Remove-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce" -Name "ReglazeBootstrapResume" -ErrorAction SilentlyContinue
 Write-Host "   AutoLogon deactivated." -ForegroundColor Green
 
-# 9. Schedule Phase 5 Hydration on User Logon and Stage Desktop Shortcut
-Write-Host "[9/9] Scheduling Phase 5 User Hydration..." -ForegroundColor Yellow
-`$HydrateCmd = "powershell.exe -ExecutionPolicy Bypass -NoExit -File ``"C:\Reglaze\payload\hydrate.ps1``""
-Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce" -Name "ReglazeHydrate" -Value `$HydrateCmd -ErrorAction SilentlyContinue
+# 9. Stage Phase 5 Hydration Desktop Shortcut (Do NOT autorun via RunOnce; user launches shortcut when ready)
+Write-Host "[9/9] Staging Phase 5 User Hydration desktop shortcut..." -ForegroundColor Yellow
+Remove-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce" -Name "ReglazeHydrate" -ErrorAction SilentlyContinue
 
 try {
     `$WshShell = New-Object -ComObject WScript.Shell
     `$ShortcutPath = "C:\Users\Public\Desktop\Reglaze Hydration.lnk"
     `$Shortcut = `$WshShell.CreateShortcut(`$ShortcutPath)
-    `$Shortcut.TargetPath = "powershell.exe"
-    `$Shortcut.Arguments = "-ExecutionPolicy Bypass -NoExit -File ``"C:\Reglaze\payload\hydrate.ps1``""
+    `$Shortcut.TargetPath = "`$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
+    `$Shortcut.Arguments = "-NoProfile -ExecutionPolicy Bypass -NoExit -File ``"C:\Reglaze\payload\hydrate.ps1``""
     `$Shortcut.IconLocation = "shell32.dll,238"
-    `$Shortcut.Description = "Resume Reglaze User Hydration Wizard"
+    `$Shortcut.Description = "Launch Reglaze User Hydration Wizard"
     `$Shortcut.Save()
     Write-Host "   Created desktop shortcut: `$ShortcutPath" -ForegroundColor Green
 } catch {
@@ -1282,11 +1337,12 @@ Restart-Computer -Force
     Reglaze Phase 5 User Hydration and Interactive Wizard.
 .DESCRIPTION
     Runs in the primary user session. Manages state persistence via C:\Reglaze\hydrate-state.json
-    so users can safely exit and resume at any point. Verifies preserved drive mounts, walks through
-    Microsoft Account sign-in, Google Drive virtual mount and Computer sync folder setup/migration,
-    Steam library auto-discovery, manual app installations, user-scope directory junctions,
-    user-specific Windows Explorer/Taskbar/Theme/Input/UserShellFolders personalization,
-    WSL2 user hydration, and dev repositories.
+    so users can safely exit and resume at any point. Verifies preserved drive mounts, applies
+    Windows personalization and display positioning, walks through Microsoft Account sign-in,
+    Default Browser/Chrome/Bitwarden setup, User Shell Folders relocation, user-scope WinGet packages,
+    Google Drive virtual mount and Computer sync folder setup/migration, Steam library auto-discovery
+    and collection bulk install, manual app installations, user-scope directory junctions and shell pins,
+    WSL2 distro installation & user hydration, and dev repositories.
 #>
 [CmdletBinding()]
 param(
@@ -1294,6 +1350,7 @@ param(
 )
 
 `$ErrorActionPreference = "Continue"
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force -ErrorAction SilentlyContinue
 `$TranscriptFile = "C:\Reglaze\hydrate.log"
 try {
     `$TranscriptDir = Split-Path -Parent `$TranscriptFile
@@ -1320,6 +1377,9 @@ if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
 }
 
 `$PayloadDir = Split-Path -Parent `$MyInvocation.MyCommand.Path
+`$GameLibHelper = Join-Path `$PayloadDir "GameLibraries.ps1"
+if (Test-Path `$GameLibHelper) { . `$GameLibHelper }
+
 `$StateFile = "C:\Reglaze\hydrate-state.json"
 `$State = [PSCustomObject]@{
     CompletedSteps = @()
@@ -1347,6 +1407,25 @@ function Save-HydrateState {
     Write-Host "[Checkpoint: Saved step '`$StepName']" -ForegroundColor DarkGray
 }
 
+# PowerShell 5.1-safe JSON array reader (prevents @(ConvertFrom-Json) from wrapping Object[] inside a 1-element array)
+function Read-JsonArray ([string]`$Path) {
+    if (-not (Test-Path -LiteralPath `$Path)) { return @() }
+    `$Parsed = Get-Content -Raw -LiteralPath `$Path -Encoding UTF8 | ConvertFrom-Json
+    if (`$null -eq `$Parsed) { return @() }
+    if (`$Parsed -is [System.Array] -or (`$Parsed -is [System.Collections.IEnumerable] -and -not (`$Parsed -is [string]) -and -not (`$Parsed -is [System.Collections.IDictionary]))) {
+        `$List = [System.Collections.Generic.List[object]]::new()
+        foreach (`$Elem in `$Parsed) { `$List.Add(`$Elem) }
+        return `$List.ToArray()
+    }
+    return @(`$Parsed)
+}
+
+`$WinSettingsFile = Join-Path `$PayloadDir "windows-settings.json"
+`$WinScriptsDir = Join-Path `$PayloadDir "windows"
+`$WinCfg = if (Test-Path `$WinSettingsFile) {
+    try { Get-Content -Raw -LiteralPath `$WinSettingsFile -Encoding UTF8 | ConvertFrom-Json } catch { `$null }
+} else { `$null }
+
 # --- STEP 0: Verify Preserved Disk Mounts ---
 `$DiskConfigFile = Join-Path `$PayloadDir "disk-config.json"
 if (Test-Path `$DiskConfigFile) {
@@ -1358,52 +1437,199 @@ if (Test-Path `$DiskConfigFile) {
     }
 }
 
-# --- STEP 1: Microsoft Account Connection ---
+# --- STEP 1: Windows Personalization, Display Positioning, Input & Taskbar ---
+if (`$State.CompletedSteps -notcontains "personalization") {
+    Write-Host ""
+    Write-Host "--------------------------------------------------------------------------------" -ForegroundColor Yellow
+    Write-Host "  STEP 1: Applying Windows Personalization, Display Layout, Input & Taskbar" -ForegroundColor Yellow
+    Write-Host "--------------------------------------------------------------------------------" -ForegroundColor Yellow
+    if (`$WinCfg) {
+        try {
+            `$ThemeScript = Join-Path `$WinScriptsDir "theme-personalization.ps1"
+            if ((Test-Path `$ThemeScript) -and `$WinCfg.theme) {
+                & `$ThemeScript -AppsMode `$WinCfg.theme.apps_mode -SystemMode `$WinCfg.theme.system_mode -Transparency:([bool]`$WinCfg.theme.transparency) -AccentColor `$WinCfg.theme.accent_color -AccentOnTaskbar:([bool]`$WinCfg.theme.accent_on_taskbar) -AccentOnTitlebars:([bool]`$WinCfg.theme.accent_on_titlebars) -WallpaperPath `$WinCfg.theme.wallpaper_path -WallpaperStyle ([int]`$WinCfg.theme.wallpaper_style)
+            }
+            `$InputScript = Join-Path `$WinScriptsDir "input-mouse-keyboard.ps1"
+            if ((Test-Path `$InputScript) -and `$WinCfg.input) {
+                & `$InputScript -MouseSpeed ([int]`$WinCfg.input.mouse.speed) -EnhancePointerPrecision:([bool]`$WinCfg.input.mouse.enhance_pointer_precision) -SwapMouseButtons:([bool]`$WinCfg.input.mouse.swap_buttons) -WheelScrollLines ([int]`$WinCfg.input.mouse.wheel_scroll_lines) -KeyboardRepeatDelay ([int]`$WinCfg.input.keyboard.repeat_delay) -KeyboardRepeatSpeed ([int]`$WinCfg.input.keyboard.repeat_speed) -NumLockOnStartup:([bool]`$WinCfg.input.keyboard.numlock_on_startup) -InputLanguages @(`$WinCfg.input.keyboard.input_languages)
+            }
+            `$AudioScript = Join-Path `$WinScriptsDir "audio-display.ps1"
+            if (Test-Path `$AudioScript) {
+                `$AudDev = if (`$WinCfg.audio_and_devices) { `$WinCfg.audio_and_devices } else { `$WinCfg.audio_and_display }
+                `$DispCfg = if (`$WinCfg.display) { `$WinCfg.display } else { `$WinCfg.audio_and_display }
+                `$GameMode = if (`$DispCfg -and `$null -ne `$DispCfg.game_mode_enabled) { [bool]`$DispCfg.game_mode_enabled } else { `$true }
+                `$HwGpu = if (`$DispCfg -and `$null -ne `$DispCfg.hardware_gpu_scheduling) { [bool]`$DispCfg.hardware_gpu_scheduling } else { `$true }
+                `$Mons = if (`$DispCfg -and `$DispCfg.monitors) { @(`$DispCfg.monitors) } else { @() }
+                if (`$AudDev -or `$Mons.Count -gt 0) {
+                    & `$AudioScript -DefaultSpeakers `$AudDev.default_speakers -DefaultMicrophone `$AudDev.default_microphone -DefaultCamera `$AudDev.default_camera -DisabledCameras @(`$AudDev.disabled_cameras) -MasterVolumePercent ([int]`$AudDev.master_volume_percent) -MasterMuted:([bool]`$AudDev.master_muted) -GameModeEnabled:`$GameMode -HardwareGpuScheduling:`$HwGpu -Monitors `$Mons
+                }
+            }
+            `$TbScript = Join-Path `$WinScriptsDir "taskbar-system-tray.ps1"
+            if ((Test-Path `$TbScript) -and `$WinCfg.taskbar) {
+                & `$TbScript -TaskbarAlignment `$WinCfg.taskbar.alignment -SearchMode `$WinCfg.taskbar.search_mode -HideWidgets:(-not [bool]`$WinCfg.taskbar.widgets_visible) -HideChat:(-not [bool]`$WinCfg.taskbar.chat_visible) -ShowSecondsInClock:([bool]`$WinCfg.taskbar.show_seconds_in_clock) -EndTaskEnabled:([bool]`$WinCfg.taskbar.end_task_enabled) -PromotedTrayIcons @(`$WinCfg.taskbar.promoted_tray_icons)
+            }
+            `$PwrScript = Join-Path `$WinScriptsDir "performance-power.ps1"
+            if ((Test-Path `$PwrScript) -and `$WinCfg.system_ergonomics) {
+                `$Plan = (`$WinCfg.power.active_scheme_name -replace '\s+', '')
+                `$AcDisp = if (`$null -ne `$WinCfg.power.ac_display_minutes) { [int]`$WinCfg.power.ac_display_minutes } else { 30 }
+                & `$PwrScript -PowerPlan `$Plan -AcSleepTimeoutMinutes ([int]`$WinCfg.power.ac_sleep_minutes) -AcDisplayTimeoutMinutes `$AcDisp -ClipboardHistoryEnabled:([bool]`$WinCfg.system_ergonomics.clipboard_history_enabled) -DefaultTerminal `$WinCfg.system_ergonomics.default_terminal
+            }
+            Write-Host "[SUCCESS] Personalization, display positioning, mouse/keyboard, and taskbar preferences applied." -ForegroundColor Green
+        } catch {
+            Write-Warning "Could not apply some personalization settings: `$(`$_.Exception.Message)"
+        }
+    }
+    Save-HydrateState "personalization"
+} else {
+    Write-Host "[V] Step 1: Windows Personalization & Display Layout (Already completed)" -ForegroundColor DarkGray
+}
+
+# --- STEP 2: Microsoft Account Connection ---
 if (`$State.CompletedSteps -notcontains "microsoft_account") {
     Write-Host ""
     Write-Host "--------------------------------------------------------------------------------" -ForegroundColor Yellow
-    Write-Host "  STEP 1: Microsoft Account Sign-In (Optional)" -ForegroundColor Yellow
+    Write-Host "  STEP 2: Microsoft Account Sign-In (Optional)" -ForegroundColor Yellow
     Write-Host "--------------------------------------------------------------------------------" -ForegroundColor Yellow
     Write-Host "If you wish to link this standard account to your Microsoft Account for store and"
     Write-Host "digital license sync, open Windows Settings -> Accounts -> Your Info."
+    Write-Host "  [TIP] If prompted for a Windows Hello passkey from your old Windows installation," -ForegroundColor Cyan
+    Write-Host "        select 'Other ways to sign in' / 'Use a different device' or your authenticator." -ForegroundColor Cyan
     `$PromptMSA = Read-Host "Would you like to open Windows Accounts settings now? (y/N)"
     if (`$PromptMSA -match '^[Yy]') {
         Start-Process "ms-settings:yourinfo"
         Write-Host "Settings opened. Complete your sign-in, then return here."
-        Read-Host "Press [Enter] when ready to proceed to Step 2..."
+        Read-Host "Press [Enter] when ready to proceed..."
     }
     Save-HydrateState "microsoft_account"
 } else {
-    Write-Host "[V] Step 1: Microsoft Account (Already completed)" -ForegroundColor DarkGray
+    Write-Host "[V] Step 2: Microsoft Account (Already completed)" -ForegroundColor DarkGray
 }
 
-# --- STEP 2: Cloud Virtual Mount and Synced Folders Setup (Google Drive) ---
+# --- STEP 3: Default Browser, Chrome Profile Sync & Password Manager (Bitwarden) ---
+if (`$State.CompletedSteps -notcontains "browser_setup") {
+    Write-Host ""
+    Write-Host "--------------------------------------------------------------------------------" -ForegroundColor Yellow
+    Write-Host "  STEP 3: Default Browser, Profile Sync & Password Manager Setup" -ForegroundColor Yellow
+    Write-Host "--------------------------------------------------------------------------------" -ForegroundColor Yellow
+    Write-Host "Many applications (including Google Drive and Steam) use your browser for first-run"
+    Write-Host "authentication. Setting your default browser and signing into your password manager"
+    Write-Host "now will streamline the rest of hydration."
+    Write-Host ""
+    Write-Host "Recommended Browser Setup Checklist:" -ForegroundColor Cyan
+    Write-Host "  1. Set your preferred browser (e.g., Google Chrome) as the Windows Default Browser."
+    Write-Host "  2. Sign into your browser profile to sync bookmarks, extensions, and settings."
+    Write-Host "     * PASSKEY TIP: If Google prompts for a Windows Hello passkey from your previous" -ForegroundColor Yellow
+    Write-Host "       Windows install, click 'Try another way' to use your phone, authenticator, or password." -ForegroundColor Yellow
+    Write-Host "  3. Sign into your password manager extension (e.g., Bitwarden)."
+    Write-Host "  4. To restore open tabs from your previous installation, navigate to:" -ForegroundColor Green
+    Write-Host "       chrome://history/syncedTabs" -ForegroundColor Green
+    Write-Host "     and click 'Open all' next to your previous computer." -ForegroundColor Green
+    Write-Host ""
+    `$ChromeExe = "C:\Program Files\Google\Chrome\Application\chrome.exe"
+    `$PromptBrowser = Read-Host "Launch browser and Windows Default Apps settings now? (Y/n)"
+    if ([string]::IsNullOrWhiteSpace(`$PromptBrowser) -or `$PromptBrowser -match '^[Yy]') {
+        if (Test-Path `$ChromeExe) {
+            Start-Process -FilePath `$ChromeExe -ArgumentList "--make-default-browser", "chrome://history/syncedTabs" -ErrorAction SilentlyContinue
+        }
+        Start-Process "ms-settings:defaultapps" -ErrorAction SilentlyContinue
+        Read-Host "Press [Enter] once you have set your default browser and signed into your profile/password manager..."
+    }
+    Save-HydrateState "browser_setup"
+} else {
+    Write-Host "[V] Step 3: Browser & Password Manager Setup (Already completed)" -ForegroundColor DarkGray
+}
+
+# --- STEP 4: Relocate Windows User Shell Folders & Explorer Folder Options ---
+if (`$State.CompletedSteps -notcontains "user_shell_folders") {
+    Write-Host ""
+    Write-Host "--------------------------------------------------------------------------------" -ForegroundColor Yellow
+    Write-Host "  STEP 4: Relocating Windows User Shell Folders (Documents, Downloads, etc.)" -ForegroundColor Yellow
+    Write-Host "--------------------------------------------------------------------------------" -ForegroundColor Yellow
+    if (`$WinCfg) {
+        try {
+            `$ExpScript = Join-Path `$WinScriptsDir "explorer-folder-options.ps1"
+            if (Test-Path `$ExpScript) {
+                & `$ExpScript -ShowHiddenFiles:([bool]`$WinCfg.explorer.show_hidden_files) -ShowFileExtensions:([bool]`$WinCfg.explorer.show_file_extensions) -LaunchTo `$WinCfg.explorer.launch_to -HideRecentFromQuickAccess:([bool]`$WinCfg.explorer.hide_recent_in_quick_access) -ClassicContextMenu:([bool]`$WinCfg.explorer.classic_context_menu) -UserShellFolders `$WinCfg.user_shell_folders
+                Write-Host "[SUCCESS] User Shell Folders and Explorer folder options applied." -ForegroundColor Green
+            }
+        } catch {
+            Write-Warning "Could not apply User Shell Folders: `$(`$_.Exception.Message)"
+        }
+    }
+    Save-HydrateState "user_shell_folders"
+} else {
+    Write-Host "[V] Step 4: User Shell Folders & Explorer Options (Already completed)" -ForegroundColor DarkGray
+}
+
+# --- STEP 5: User-Scope WinGet Package Installations (user-packages.json) ---
+if (`$State.CompletedSteps -notcontains "user_packages") {
+    Write-Host ""
+    Write-Host "--------------------------------------------------------------------------------" -ForegroundColor Yellow
+    Write-Host "  STEP 5: Installing User-Scope WinGet Applications" -ForegroundColor Yellow
+    Write-Host "--------------------------------------------------------------------------------" -ForegroundColor Yellow
+    `$UserPackagesFile = Join-Path `$PayloadDir "user-packages.json"
+    `$UserPackages = Read-JsonArray `$UserPackagesFile
+    if (`$UserPackages.Count -gt 0) {
+        Write-Host "Found `$(`$UserPackages.Count) user-scoped / deferred WinGet package(s) to install in current user context:" -ForegroundColor Cyan
+        for (`$idx = 0; `$idx -lt `$UserPackages.Count; `$idx++) {
+            `$UPkg = `$UserPackages[`$idx]
+            `$PkgId = `$UPkg.PackageId
+            `$PkgSrc = if (`$UPkg.Source) { `$UPkg.Source } else { "winget" }
+            `$PkgName = if (`$UPkg.AppName) { `$UPkg.AppName } else { `$PkgId }
+            Write-Host " [`$(`$idx + 1)/`$(`$UserPackages.Count)] Installing user package: `$PkgName (`$PkgId)..." -ForegroundColor Cyan
+            `$ListCheck = & winget list --id `$PkgId --exact --accept-source-agreements 2>&1
+            if (`$LASTEXITCODE -eq 0 -and (`$ListCheck -join "`n") -match [regex]::Escape(`$PkgId)) {
+                Write-Host "   [OK] `$PkgId is already installed." -ForegroundColor Green
+                continue
+            }
+            & winget install --id `$PkgId --source `$PkgSrc --exact --scope user --silent --accept-package-agreements --accept-source-agreements --disable-interactivity
+            if (`$LASTEXITCODE -ne 0 -and `$LASTEXITCODE -ne -1978335189) {
+                Write-Host "   Retrying `$PkgId with default user-session scope..." -ForegroundColor DarkGray
+                & winget install --id `$PkgId --source `$PkgSrc --exact --silent --accept-package-agreements --accept-source-agreements --disable-interactivity
+            }
+            if (`$LASTEXITCODE -eq 0 -or `$LASTEXITCODE -eq -1978335189) {
+                Write-Host "   [+] Installed `$PkgName (`$PkgId)." -ForegroundColor Green
+            } else {
+                Write-Warning "   Package `$PkgId returned exit code `$LASTEXITCODE."
+            }
+        }
+    } else {
+        Write-Host "No user-scoped WinGet packages queued." -ForegroundColor DarkGray
+    }
+    Save-HydrateState "user_packages"
+} else {
+    Write-Host "[V] Step 5: User-Scope WinGet Packages (Already completed)" -ForegroundColor DarkGray
+}
+
+# --- STEP 6: Cloud Virtual Mount and Synced Folders Setup (Google Drive) ---
 if (`$State.CompletedSteps -notcontains "cloud_mount") {
     Write-Host ""
     Write-Host "--------------------------------------------------------------------------------" -ForegroundColor Yellow
-    Write-Host "  STEP 2: Google Drive Streaming Mount and Synced Folder Migration" -ForegroundColor Yellow
+    Write-Host "  STEP 6: Google Drive Streaming Mount and Synced Folder Migration" -ForegroundColor Yellow
     Write-Host "--------------------------------------------------------------------------------" -ForegroundColor Yellow
     `$SentinelPath = "$StreamSentinel"
+    `$StreamRoot = ([System.IO.Path]::GetPathRoot(`$SentinelPath)).TrimEnd('\')
     `$GDriveSetupFile = Join-Path `$PayloadDir "google-drive-setup.json"
     `$GDriveSetup = if (Test-Path `$GDriveSetupFile) { Get-Content -Raw `$GDriveSetupFile | ConvertFrom-Json } else { `$null }
 
     if (`$GDriveSetup) {
         # Pre-create local synced directories on physical disks
-        foreach (`$SDir in `$GDriveSetup.SyncDirectories) {
+        foreach (`$SDir in @(`$GDriveSetup.SyncDirectories)) {
             if (`$SDir.LocalPath -and -not (Test-Path `$SDir.LocalPath)) {
                 New-Item -ItemType Directory -Path `$SDir.LocalPath -Force | Out-Null
             }
         }
         Write-Host "Google Drive Setup Checklist (Profile: `$(`$GDriveSetup.Profile)):" -ForegroundColor Cyan
         Write-Host "  [WHAT TO DO / WHAT NOT TO DO DURING GOOGLE DRIVE SETUP]" -ForegroundColor Yellow
-        foreach (`$InstLine in `$GDriveSetup.RenderedInstructions) {
+        foreach (`$InstLine in @(`$GDriveSetup.RenderedInstructions)) {
             Write-Host "  * `$InstLine"
         }
-        if (`$GDriveSetup.SyncDirectories -and `$GDriveSetup.SyncDirectories.Count -gt 0) {
+        if (`$GDriveSetup.SyncDirectories -and @(`$GDriveSetup.SyncDirectories).Count -gt 0) {
             Write-Host ""
             Write-Host "  Pre-created Sync Folders to add in Google Drive Preferences -> 'Folders from your computer':" -ForegroundColor Green
-            foreach (`$SDir in `$GDriveSetup.SyncDirectories) {
-                Write-Host "    + `$(`$SDir.LocalPath) (Cloud folder: `$(`$SDir.CloudFolder))" -ForegroundColor Green
+            foreach (`$SDir in @(`$GDriveSetup.SyncDirectories)) {
+                `$DiskNote = if (`$SDir.IsOnPreservedDisk) { " [Preserved Drive - re-attach in Drive, no copy needed]" } else { " [OS Drive - will copy from cloud backup]" }
+                Write-Host "    + `$(`$SDir.LocalPath) (Cloud folder: `$(`$SDir.CloudFolder))`$DiskNote" -ForegroundColor Green
             }
         } else {
             Write-Host ""
@@ -1425,7 +1651,12 @@ if (`$State.CompletedSteps -notcontains "cloud_mount") {
         if (Test-Path `$GDFPath) {
             Start-Process `$GDFPath
         } else {
-            Start-Process "powershell.exe" "-Command Start-Process 'shell:AppsFolder\Google.GoogleDrive'" -ErrorAction SilentlyContinue
+            `$GdfExe = Get-ChildItem -Path "C:\Program Files\Google\Drive File Stream\*\GoogleDriveFS.exe" -ErrorAction SilentlyContinue | Sort-Object FullName -Descending | Select-Object -First 1
+            if (`$GdfExe) {
+                Start-Process `$GdfExe.FullName
+            } else {
+                Start-Process "powershell.exe" "-Command Start-Process 'shell:AppsFolder\Google.GoogleDrive'" -ErrorAction SilentlyContinue
+            }
         }
     }
 
@@ -1447,17 +1678,60 @@ if (`$State.CompletedSteps -notcontains "cloud_mount") {
         Write-Host "[SUCCESS] Cloud streaming mount verified at `$SentinelPath!" -ForegroundColor Green
     }
 
-    # Migrate (copy/move) files from previous computer's synced folders if configured
-    if (`$GDriveSetup -and `$GDriveSetup.SyncDirectories -and `$GDriveSetup.SyncDirectories.Count -gt 0 -and `$GDriveSetup.MigrationMode -ne "skip") {
+    # Migrate (copy/move) files from previous computer's synced folders ONLY for non-preserved (OS drive) folders
+    if (`$GDriveSetup -and `$GDriveSetup.SyncDirectories -and @(`$GDriveSetup.SyncDirectories).Count -gt 0 -and `$GDriveSetup.MigrationMode -ne "skip") {
         Write-Host ""
-        Write-Host "Checking previous computer ('`$(`$GDriveSetup.SourceComputerName)') synced folders for migration (`$(`$GDriveSetup.MigrationMode))..." -ForegroundColor Cyan
-        Read-Host "Ensure you have added your synced folder(s) under Google Drive Preferences -> 'Folders from your computer', then press [Enter] to migrate files..."
-        foreach (`$SDir in `$GDriveSetup.SyncDirectories) {
-            `$SrcStreamPath = `$SDir.SourceComputerStreamPath
+        Read-Host "Ensure you have added your synced folder(s) under Google Drive Preferences -> 'Folders from your computer', then press [Enter] to continue..."
+
+        # Resolve the actual Google Drive 'Other computers\<Name>' container path
+        `$OtherComputersRoot = Join-Path `$StreamRoot "Other computers"
+        `$ResolvedCompDir = `$null
+        if (Test-Path -LiteralPath `$OtherComputersRoot) {
+            `$CandidateNames = @(`$GDriveSetup.SourceComputerName, "My Computer", "My Laptop") | Select-Object -Unique
+            foreach (`$CName in `$CandidateNames) {
+                if (`$CName) {
+                    `$CandPath = Join-Path `$OtherComputersRoot `$CName
+                    if (Test-Path -LiteralPath `$CandPath) {
+                        `$ResolvedCompDir = `$CandPath
+                        break
+                    }
+                }
+            }
+            if (-not `$ResolvedCompDir) {
+                `$SubCompDirs = @(Get-ChildItem -LiteralPath `$OtherComputersRoot -Directory -ErrorAction SilentlyContinue)
+                if (`$SubCompDirs.Count -eq 1) {
+                    `$ResolvedCompDir = `$SubCompDirs[0].FullName
+                    Write-Host "Auto-detected Google Drive computer folder: `$ResolvedCompDir" -ForegroundColor Cyan
+                } elseif (`$SubCompDirs.Count -gt 1) {
+                    Write-Host "Available Google Drive computer backup folders under `$OtherComputersRoot:" -ForegroundColor Cyan
+                    for (`$ci = 0; `$ci -lt `$SubCompDirs.Count; `$ci++) {
+                        Write-Host "  [`$(`$ci + 1)] `$(`$SubCompDirs[`$ci].Name)"
+                    }
+                    `$Pick = Read-Host "Select computer folder number to copy OS-drive sync folders from (default: 1)"
+                    `$PickIdx = if (`$Pick -match '^\d+$' -and [int]`$Pick -ge 1 -and [int]`$Pick -le `$SubCompDirs.Count) { [int]`$Pick - 1 } else { 0 }
+                    `$ResolvedCompDir = `$SubCompDirs[`$PickIdx].FullName
+                }
+            }
+        }
+
+        foreach (`$SDir in @(`$GDriveSetup.SyncDirectories)) {
             `$DstLocalPath = `$SDir.LocalPath
-            if (`$SrcStreamPath -and (Test-Path `$SrcStreamPath)) {
+            `$LocalRoot = if (`$DstLocalPath) { ([System.IO.Path]::GetPathRoot(`$DstLocalPath)).TrimEnd('\') } else { "" }
+            `$IsPreserved = (`$SDir.IsOnPreservedDisk -eq `$true) -or (`$LocalRoot -and `$LocalRoot -inotlike "C*")
+            if (`$IsPreserved -and (Test-Path -LiteralPath `$DstLocalPath)) {
+                Write-Host " - [SKIP] '`$(`$SDir.CloudFolder)' (`$DstLocalPath) is on a preserved drive; skipping cloud file copy." -ForegroundColor DarkGray
+                continue
+            }
+
+            `$SrcStreamPath = if (`$ResolvedCompDir) {
+                Join-Path `$ResolvedCompDir `$SDir.CloudFolder
+            } else {
+                `$SDir.SourceComputerStreamPath
+            }
+
+            if (`$SrcStreamPath -and (Test-Path -LiteralPath `$SrcStreamPath)) {
                 Write-Host " - Migrating (`$(`$GDriveSetup.MigrationMode)) '`$(`$SDir.CloudFolder)' from `$SrcStreamPath -> `$DstLocalPath..." -ForegroundColor Yellow
-                if (-not (Test-Path `$DstLocalPath)) {
+                if (-not (Test-Path -LiteralPath `$DstLocalPath)) {
                     New-Item -ItemType Directory -Path `$DstLocalPath -Force | Out-Null
                 }
                 if (`$GDriveSetup.MigrationMode -eq "move") {
@@ -1476,14 +1750,14 @@ if (`$State.CompletedSteps -notcontains "cloud_mount") {
 
     Save-HydrateState "cloud_mount"
 } else {
-    Write-Host "[V] Step 2: Cloud Storage Mount and Sync Migration (Already completed)" -ForegroundColor DarkGray
+    Write-Host "[V] Step 6: Cloud Storage Mount and Sync Migration (Already completed)" -ForegroundColor DarkGray
 }
 
-# --- STEP 3: Game Managers and Multi-Library Discovery / Fresh Installs ---
+# --- STEP 7: Steam Multi-Library Discovery, Non-Steam Shortcuts & Bulk Game Installs ---
 if (`$State.CompletedSteps -notcontains "steam_signin") {
     Write-Host ""
     Write-Host "--------------------------------------------------------------------------------" -ForegroundColor Yellow
-    Write-Host "  STEP 3: Steam Multi-Library Rediscovery and Fresh Game Installs" -ForegroundColor Yellow
+    Write-Host "  STEP 7: Steam Multi-Library Rediscovery and Game Installations" -ForegroundColor Yellow
     Write-Host "--------------------------------------------------------------------------------" -ForegroundColor Yellow
     `$SteamExe = "`${env:ProgramFiles(x86)}\Steam\steam.exe"
 
@@ -1515,10 +1789,26 @@ if (`$State.CompletedSteps -notcontains "steam_signin") {
         Write-Host "Steam client not found at `$SteamExe; skipping launch." -ForegroundColor DarkGray
     }
 
-    # Inspect games declared in applications catalog or blueprint
+    # Re-register manually added non-Steam game shortcuts (shortcuts.vdf) if present in payload
+    `$ShortcutsPayloadFile = Join-Path `$PayloadDir "steam-shortcuts.json"
+    if ((Test-Path `$ShortcutsPayloadFile) -and (Get-Command Register-SteamShortcuts -ErrorAction SilentlyContinue)) {
+        try {
+            `$SavedShortcuts = Read-JsonArray `$ShortcutsPayloadFile
+            if (`$SavedShortcuts.Count -gt 0) {
+                `$RegRes = Register-SteamShortcuts -Shortcuts `$SavedShortcuts
+                if (`$RegRes -and `$RegRes.RegisteredCount -gt 0) {
+                    Write-Host "Re-registered `$(`$RegRes.RegisteredCount) non-Steam game shortcut(s) in Steam userdata (restart Steam later to see them in Library)." -ForegroundColor Green
+                }
+            }
+        } catch {
+            Write-Warning "Could not re-register non-Steam game shortcuts: `$(`$_.Exception.Message)"
+        }
+    }
+
+    # Inspect games declared in applications catalog or blueprint (using PS 5.1-safe Read-JsonArray)
     `$CatalogFile = Join-Path `$PayloadDir "applications.json"
     if (Test-Path `$CatalogFile) {
-        `$CatApps = @(Get-Content -Raw `$CatalogFile | ConvertFrom-Json)
+        `$CatApps = Read-JsonArray `$CatalogFile
         `$SteamGames = @(`$CatApps | Where-Object { `$_.install -and (`$_.install.method -eq "steam" -or `$_.install.steam_id) })
         `$UninstalledGames = @()
         foreach (`$Game in `$SteamGames) {
@@ -1547,37 +1837,49 @@ if (`$State.CompletedSteps -notcontains "steam_signin") {
 
         if (`$UninstalledGames.Count -gt 0) {
             Write-Host ""
-            Write-Host "Found `$(`$UninstalledGames.Count) Steam game(s) requiring fresh installation:" -ForegroundColor Cyan
-            for (`$i = 0; `$i -lt `$UninstalledGames.Count; `$i++) {
-                `$UGame = `$UninstalledGames[`$i]
-                Write-Host " [`$(`$i + 1)/`$(`$UninstalledGames.Count)] Triggering Steam install for '`$(`$UGame.GName)' (`$(`$UGame.SId))..." -ForegroundColor Cyan
-                try {
-                    Start-Process "steam://install/`$(`$UGame.SId)"
-                    if (`$i -lt (`$UninstalledGames.Count - 1)) {
-                        Read-Host "Press [Enter] after confirming the install prompt in Steam to queue the next game"
-                    } else {
-                        Read-Host "Press [Enter] after confirming the final install prompt in Steam to continue"
+            Write-Host "Steam games configured for installation (`$(`$UninstalledGames.Count)):" -ForegroundColor Cyan
+            foreach (`$UGame in `$UninstalledGames) {
+                Write-Host "  * `$(`$UGame.GName) (AppID: `$(`$UGame.SId))" -ForegroundColor White
+            }
+            Write-Host ""
+            Write-Host "Recommended Bulk Installation via Steam Collection:" -ForegroundColor Yellow
+            Write-Host "  1. In Steam's left navigation panel, open your Base Install collection (or create one)."
+            Write-Host "  2. Select all games in the collection (click first game, Shift+Click last game)."
+            Write-Host "  3. Right-click the selection and click 'Install selected...' to install them in bulk."
+            Write-Host ""
+            `$UseLinks = Read-Host "If you haven't set up a collection, would you like to iterate over these apps and launch steam://install links individually? (y/N)"
+            if (`$UseLinks -match '^[Yy]') {
+                for (`$i = 0; `$i -lt `$UninstalledGames.Count; `$i++) {
+                    `$UGame = `$UninstalledGames[`$i]
+                    Write-Host " [`$(`$i + 1)/`$(`$UninstalledGames.Count)] Triggering Steam install for '`$(`$UGame.GName)' (`$(`$UGame.SId))..." -ForegroundColor Cyan
+                    try {
+                        Start-Process "steam://install/`$(`$UGame.SId)"
+                        if (`$i -lt (`$UninstalledGames.Count - 1)) {
+                            Read-Host "Press [Enter] after confirming the install prompt in Steam to queue the next game"
+                        } else {
+                            Read-Host "Press [Enter] after confirming the final install prompt in Steam to continue"
+                        }
+                    } catch {
+                        Write-Warning "Could not trigger steam://install/`$(`$UGame.SId)"
                     }
-                } catch {
-                    Write-Warning "Could not trigger steam://install/`$(`$UGame.SId)"
                 }
             }
         }
     }
     Save-HydrateState "steam_signin"
 } else {
-    Write-Host "[V] Step 3: Steam Multi-Library and Game Provisioning (Already completed)" -ForegroundColor DarkGray
+    Write-Host "[V] Step 7: Steam Multi-Library and Game Provisioning (Already completed)" -ForegroundColor DarkGray
 }
 
-# --- STEP 4: Manual Application Installs Walkthrough ---
+# --- STEP 8: Manual Application Installs Walkthrough ---
 if (`$State.CompletedSteps -notcontains "manual_installs") {
     Write-Host ""
     Write-Host "--------------------------------------------------------------------------------" -ForegroundColor Yellow
-    Write-Host "  STEP 4: Manual Application Installation Guidance" -ForegroundColor Yellow
+    Write-Host "  STEP 8: Manual Application Installation Guidance" -ForegroundColor Yellow
     Write-Host "--------------------------------------------------------------------------------" -ForegroundColor Yellow
     `$CatalogFile = Join-Path `$PayloadDir "applications.json"
     if (Test-Path `$CatalogFile) {
-        `$CatApps = @(Get-Content -Raw `$CatalogFile | ConvertFrom-Json)
+        `$CatApps = Read-JsonArray `$CatalogFile
         `$ManualApps = @(`$CatApps | Where-Object { `$_.install -and `$_.install.method -eq "manual" })
         if (`$ManualApps.Count -gt 0) {
             foreach (`$MApp in `$ManualApps) {
@@ -1588,7 +1890,7 @@ if (`$State.CompletedSteps -notcontains "manual_installs") {
                 if (`$MApp.install.default_target_directory) { Write-Host "   Target Dir:   `$(`$MApp.install.default_target_directory)" }
                 if (`$MApp.install.instructions) {
                     Write-Host "   Instructions:"
-                    foreach (`$Inst in `$MApp.install.instructions) {
+                    foreach (`$Inst in @(`$MApp.install.instructions)) {
                         Write-Host "    - `$Inst"
                     }
                 }
@@ -1600,20 +1902,21 @@ if (`$State.CompletedSteps -notcontains "manual_installs") {
     }
     Save-HydrateState "manual_installs"
 } else {
-    Write-Host "[V] Step 4: Manual Applications (Already completed)" -ForegroundColor DarkGray
+    Write-Host "[V] Step 8: Manual Applications (Already completed)" -ForegroundColor DarkGray
 }
 
-# --- STEP 5: User-Level Directory Junctions and Personalization ---
+# --- STEP 9: User-Level Directory Junctions and Shell Pins ---
 if (`$State.CompletedSteps -notcontains "user_junctions") {
     Write-Host ""
     Write-Host "--------------------------------------------------------------------------------" -ForegroundColor Yellow
-    Write-Host "  STEP 5: Creating User-Level Directory Junctions and Personalization" -ForegroundColor Yellow
+    Write-Host "  STEP 9: Creating User-Level Directory Junctions and Shell Pins" -ForegroundColor Yellow
     Write-Host "--------------------------------------------------------------------------------" -ForegroundColor Yellow
     `$JunctionsManifest = Join-Path `$PayloadDir "junctions-manifest.json"
     if (Test-Path `$JunctionsManifest) {
-        `$Junctions = Get-Content -Raw `$JunctionsManifest | ConvertFrom-Json
+        `$Junctions = Read-JsonArray `$JunctionsManifest
         `$UserJuncs = @(`$Junctions | Where-Object { `$_.Scope -eq "user" })
         Write-Host "Linking `$(`$UserJuncs.Count) user-scope directory junction(s)..."
+        `$FailedJuncs = 0
 
         foreach (`$Junc in `$UserJuncs) {
             `$Link = `$Junc.Link
@@ -1640,7 +1943,7 @@ if (`$State.CompletedSteps -notcontains "user_junctions") {
                 }
             } else {
                 # Ensure cloud target directory exists
-                if (-not (Test-Path `$Target)) {
+                if (-not (Test-Path -LiteralPath `$Target)) {
                     try {
                         New-Item -ItemType Directory -Path `$Target -Force | Out-Null
                         Write-Host "   Created target folder: `$Target" -ForegroundColor DarkGray
@@ -1650,119 +1953,141 @@ if (`$State.CompletedSteps -notcontains "user_junctions") {
                 }
             }
 
-            # Handle existing collision
-            if (Test-Path `$Link) {
-                `$Item = Get-Item `$Link -Force
+            # Handle existing collision (with retry prompt if locked by a running application such as Chrome or Antigravity)
+            if (Test-Path -LiteralPath `$Link) {
+                `$Item = Get-Item -LiteralPath `$Link -Force
                 if (-not (`$Item.Attributes -band [System.IO.FileAttributes]::ReparsePoint)) {
                     `$BackupPath = "`$Link.bak_`$(Get-Date -Format 'yyyyMMdd_HHmmss')"
-                    try {
-                        if (`$Item -is [System.IO.DirectoryInfo]) {
-                            [System.IO.Directory]::Move(`$Link, `$BackupPath)
-                        } else {
-                            [System.IO.File]::Move(`$Link, `$BackupPath)
+                    `$MovedOk = `$false
+                    for (`$MoveTry = 1; `$MoveTry -le 2; `$MoveTry++) {
+                        try {
+                            if (`$Item -is [System.IO.DirectoryInfo]) {
+                                [System.IO.Directory]::Move(`$Link, `$BackupPath)
+                            } else {
+                                [System.IO.File]::Move(`$Link, `$BackupPath)
+                            }
+                            `$MovedOk = `$true
+                            Write-Host "   Collision: Backed up existing file/directory to `$BackupPath." -ForegroundColor Yellow
+                            break
+                        } catch {
+                            if (`$MoveTry -eq 1) {
+                                Write-Warning "   Path '`$Link' is locked by a running application (e.g., Chrome, Antigravity, or Steam)."
+                                `$CloseChoice = Read-Host "   Please close [`$(`$Junc.AppId)] and press [Enter] to retry (or type 'skip' to skip this junction)"
+                                if (`$CloseChoice -eq 'skip') { break }
+                            } else {
+                                Write-Warning "   Could not backup existing `${Link}: `$(`$_.Exception.Message)"
+                            }
                         }
-                        Write-Host "   Collision: Backed up existing file/directory to `$BackupPath." -ForegroundColor Yellow
-                    } catch {
-                        Write-Warning "   Could not backup existing `${Link}: `$(`$_.Exception.Message)"
+                    }
+                    if (-not `$MovedOk) {
+                        `$FailedJuncs++
+                        continue
                     }
                 } else {
-                    if ((Get-Item `$Link -Force) -is [System.IO.DirectoryInfo]) {
-                        [System.IO.Directory]::Delete(`$Link)
-                    } else {
-                        [System.IO.File]::Delete(`$Link)
+                    try {
+                        if ((Get-Item -LiteralPath `$Link -Force) -is [System.IO.DirectoryInfo]) {
+                            [System.IO.Directory]::Delete(`$Link)
+                        } else {
+                            [System.IO.File]::Delete(`$Link)
+                        }
+                    } catch {
+                        Write-Warning "   Could not remove existing reparse point `${Link}: `$(`$_.Exception.Message)"
+                        `$FailedJuncs++
+                        continue
                     }
                 }
             }
 
             # Create Link
             `$ParentDir = Split-Path -Parent `$Link
-            if (-not (Test-Path `$ParentDir)) { New-Item -ItemType Directory -Path `$ParentDir -Force | Out-Null }
+            if (-not (Test-Path -LiteralPath `$ParentDir)) { New-Item -ItemType Directory -Path `$ParentDir -Force | Out-Null }
 
             if (`$IsFile) {
-                # Create file symbolic link
-                `$MkOut = & cmd.exe /c "mklink `"`$Link`" `"`$TargetFile`" 2>&1"
-                if (`$LASTEXITCODE -ne 0 -or -not (Test-Path `$Link)) {
+                # Create file symbolic link with properly escaped inner quotes for paths with spaces
+                `$MkOut = & cmd.exe /c "mklink ``"`$Link``" ``"`$TargetFile``"" 2>&1
+                if (`$LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath `$Link)) {
                     Write-Warning "   Failed to create file symbolic link: `$MkOut"
+                    `$FailedJuncs++
                 } else {
                     Write-Host "   [+] Created file symbolic link: `$Link -> `$TargetFile" -ForegroundColor Green
                 }
             } else {
-                cmd.exe /c mklink /J "`$Link" "`$Target" | Out-Null
+                `$MkOut = & cmd.exe /c "mklink /J ``"`$Link``" ``"`$Target``"" 2>&1
+                if (`$LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath `$Link)) {
+                    Write-Warning "   Failed to create directory junction: `$MkOut"
+                    `$FailedJuncs++
+                }
             }
         }
-        Write-Host "[SUCCESS] All user directory junctions created successfully!" -ForegroundColor Green
+        if (`$FailedJuncs -eq 0) {
+            Write-Host "[SUCCESS] All user directory junctions created successfully!" -ForegroundColor Green
+        } else {
+            Write-Warning "`$FailedJuncs user junction(s) could not be linked. Close any locking applications and re-run with -ResetState if needed."
+        }
     }
 
-    # Apply user-level Windows Explorer, User Shell Folders, Taskbar, Theme, Input, and Shell Pins
-    `$WinSettingsFile = Join-Path `$PayloadDir "windows-settings.json"
-    `$WinScriptsDir = Join-Path `$PayloadDir "windows"
-    if (Test-Path `$WinSettingsFile) {
+    # Apply declarative Taskbar, Start Menu, and Quick Access pins + App PATH entries + Steam Library VDF
+    if (`$WinCfg) {
         try {
-            `$WinCfg = Get-Content -Raw `$WinSettingsFile | ConvertFrom-Json
-            `$ExpScript = Join-Path `$WinScriptsDir "explorer-folder-options.ps1"
-            if (Test-Path `$ExpScript) {
-                & `$ExpScript -ShowHiddenFiles:([bool]`$WinCfg.explorer.show_hidden_files) -ShowFileExtensions:([bool]`$WinCfg.explorer.show_file_extensions) -LaunchTo `$WinCfg.explorer.launch_to -HideRecentFromQuickAccess:([bool]`$WinCfg.explorer.hide_recent_in_quick_access) -ClassicContextMenu:([bool]`$WinCfg.explorer.classic_context_menu) -UserShellFolders `$WinCfg.user_shell_folders
-            }
-            `$TbScript = Join-Path `$WinScriptsDir "taskbar-system-tray.ps1"
-            if (Test-Path `$TbScript) {
-                & `$TbScript -TaskbarAlignment `$WinCfg.taskbar.alignment -SearchMode `$WinCfg.taskbar.search_mode -HideWidgets:(-not [bool]`$WinCfg.taskbar.widgets_visible) -HideChat:(-not [bool]`$WinCfg.taskbar.chat_visible) -ShowSecondsInClock:([bool]`$WinCfg.taskbar.show_seconds_in_clock) -EndTaskEnabled:([bool]`$WinCfg.taskbar.end_task_enabled) -PromotedTrayIcons @(`$WinCfg.taskbar.promoted_tray_icons)
-            }
-            `$ThemeScript = Join-Path `$WinScriptsDir "theme-personalization.ps1"
-            if ((Test-Path `$ThemeScript) -and `$WinCfg.theme) {
-                & `$ThemeScript -AppsMode `$WinCfg.theme.apps_mode -SystemMode `$WinCfg.theme.system_mode -Transparency:([bool]`$WinCfg.theme.transparency) -AccentColor `$WinCfg.theme.accent_color -AccentOnTaskbar:([bool]`$WinCfg.theme.accent_on_taskbar) -AccentOnTitlebars:([bool]`$WinCfg.theme.accent_on_titlebars) -WallpaperPath `$WinCfg.theme.wallpaper_path -WallpaperStyle ([int]`$WinCfg.theme.wallpaper_style)
-            }
-            `$InputScript = Join-Path `$WinScriptsDir "input-mouse-keyboard.ps1"
-            if ((Test-Path `$InputScript) -and `$WinCfg.input) {
-                & `$InputScript -MouseSpeed ([int]`$WinCfg.input.mouse.speed) -EnhancePointerPrecision:([bool]`$WinCfg.input.mouse.enhance_pointer_precision) -SwapMouseButtons:([bool]`$WinCfg.input.mouse.swap_buttons) -WheelScrollLines ([int]`$WinCfg.input.mouse.wheel_scroll_lines) -KeyboardRepeatDelay ([int]`$WinCfg.input.keyboard.repeat_delay) -KeyboardRepeatSpeed ([int]`$WinCfg.input.keyboard.repeat_speed) -NumLockOnStartup:([bool]`$WinCfg.input.keyboard.numlock_on_startup) -InputLanguages @(`$WinCfg.input.keyboard.input_languages)
-            }
-            `$PwrScript = Join-Path `$WinScriptsDir "performance-power.ps1"
-            if ((Test-Path `$PwrScript) -and `$WinCfg.system_ergonomics) {
-                `$Plan = (`$WinCfg.power.active_scheme_name -replace '\s+', '')
-                `$AcDisp = if (`$null -ne `$WinCfg.power.ac_display_minutes) { [int]`$WinCfg.power.ac_display_minutes } else { 30 }
-                & `$PwrScript -PowerPlan `$Plan -AcSleepTimeoutMinutes ([int]`$WinCfg.power.ac_sleep_minutes) -AcDisplayTimeoutMinutes `$AcDisp -ClipboardHistoryEnabled:([bool]`$WinCfg.system_ergonomics.clipboard_history_enabled) -DefaultTerminal `$WinCfg.system_ergonomics.default_terminal
-            }
             `$ShellPinsScript = Join-Path `$WinScriptsDir "shell-pins.ps1"
             if (Test-Path `$ShellPinsScript) {
                 & `$ShellPinsScript -QuickAccessPins @(`$WinCfg.explorer.quick_access_pins) -TaskbarPinnedApps @(`$WinCfg.taskbar.pinned_apps) -StartMenuPinnedApps @(`$WinCfg.start_menu.pinned_apps) -AppPathEntries @(`$WinCfg.app_path_entries) -SteamLibraries @(`$WinCfg.steam_libraries)
             }
         } catch {
-            Write-Warning "Could not apply user personalization and shell pins: `$(`$_.Exception.Message)"
+            Write-Warning "Could not apply shell pins: `$(`$_.Exception.Message)"
         }
     }
 
     Save-HydrateState "user_junctions"
 } else {
-    Write-Host "[V] Step 5: User Junctions and Personalization (Already completed)" -ForegroundColor DarkGray
+    Write-Host "[V] Step 9: User Junctions and Shell Pins (Already completed)" -ForegroundColor DarkGray
 }
 
-# --- STEP 6: Non-Interactive WSL2 Setup ---
+# --- STEP 10: Non-Interactive WSL2 Setup ---
 if (`$State.CompletedSteps -notcontains "wsl_setup") {
     Write-Host ""
     Write-Host "--------------------------------------------------------------------------------" -ForegroundColor Yellow
-    Write-Host "  STEP 6: Non-Interactive WSL2 Subsystem Configuration" -ForegroundColor Yellow
+    Write-Host "  STEP 10: Non-Interactive WSL2 Subsystem Configuration" -ForegroundColor Yellow
     Write-Host "--------------------------------------------------------------------------------" -ForegroundColor Yellow
     `$WslScript = Join-Path `$PayloadDir "setup-wsl.sh"
     if (Test-Path `$WslScript) {
-        Write-Host "Executing non-interactive setup-wsl.sh inside Ubuntu distro..."
         try {
+            # Verify whether Ubuntu distribution is registered (wsl.exe --list outputs UTF-16LE)
+            `$DistroListRaw = (& wsl.exe --list --quiet 2>`$null) -join "`n"
+            `$DistroListClean = `$DistroListRaw -replace "`0", ""
+            if (`$DistroListClean -notmatch '(?m)^Ubuntu') {
+                Write-Host "Ubuntu distribution not yet registered (WSL kernel required reboot after Phase 4). Installing Ubuntu now..." -ForegroundColor Yellow
+                & wsl.exe --install -d Ubuntu --no-launch
+                # Initialize root filesystem if Ubuntu Appx launcher is available
+                `$UbuntuAppx = Get-Command ubuntu.exe -ErrorAction SilentlyContinue
+                if (`$UbuntuAppx) {
+                    & ubuntu.exe install --root 2>&1 | Out-Null
+                }
+            }
+            Write-Host "Executing non-interactive setup-wsl.sh inside Ubuntu distro..."
             & wsl.exe -d Ubuntu -u root -- /bin/bash /mnt/c/Reglaze/payload/setup-wsl.sh
-            Write-Host "[SUCCESS] WSL2 environment provisioned!" -ForegroundColor Green
+            if (`$LASTEXITCODE -eq 0) {
+                Write-Host "[SUCCESS] WSL2 environment provisioned!" -ForegroundColor Green
+                Save-HydrateState "wsl_setup"
+            } else {
+                Write-Warning "WSL setup script exited with code `$LASTEXITCODE. Ensure Ubuntu is installed ('wsl --install -d Ubuntu') and re-run hydration."
+            }
         } catch {
             Write-Warning "WSL setup encountered an error: `$(`$_.Exception.Message)"
         }
     } else {
         Write-Host "No setup-wsl.sh script found; skipping WSL2 customization." -ForegroundColor DarkGray
+        Save-HydrateState "wsl_setup"
     }
-    Save-HydrateState "wsl_setup"
 } else {
-    Write-Host "[V] Step 6: WSL2 Environment (Already completed)" -ForegroundColor DarkGray
+    Write-Host "[V] Step 10: WSL2 Environment (Already completed)" -ForegroundColor DarkGray
 }
 
-# --- STEP 7: Developer Repositories and Dotfiles ---
+# --- STEP 11: Developer Repositories and Dotfiles ---
 if (`$State.CompletedSteps -notcontains "dev_repos") {
     Write-Host ""
     Write-Host "--------------------------------------------------------------------------------" -ForegroundColor Yellow
-    Write-Host "  STEP 7: Developer Repositories and Dotfiles Configuration" -ForegroundColor Yellow
+    Write-Host "  STEP 11: Developer Repositories and Dotfiles Configuration" -ForegroundColor Yellow
     Write-Host "--------------------------------------------------------------------------------" -ForegroundColor Yellow
     Write-Host "Verifying chezmoi and git developer repositories..."
     if (Get-Command "chezmoi" -ErrorAction SilentlyContinue) {
@@ -1772,7 +2097,7 @@ if (`$State.CompletedSteps -notcontains "dev_repos") {
     }
     Save-HydrateState "dev_repos"
 } else {
-    Write-Host "[V] Step 7: Dev Repositories (Already completed)" -ForegroundColor DarkGray
+    Write-Host "[V] Step 11: Dev Repositories (Already completed)" -ForegroundColor DarkGray
 }
 
 # --- STEP 8: Cleanup and Unregister ---
@@ -1863,7 +2188,7 @@ echo "=== WSL2 Provisioning Completed Successfully ==="
     [System.IO.File]::WriteAllText($WslPath, $WslScript, [System.Text.UTF8Encoding]::new($false))
 
     # =========================================================================
-    # 7. Export Filtered Applications Catalog for Blueprint (applications.json)
+    # 7. Export Filtered Applications Catalog for Blueprint (applications.json) & Non-Steam Shortcuts
     # =========================================================================
     $CatalogJsonPath = Join-Path $PayloadDir "applications.json"
     $PayloadCatalog = [System.Collections.Generic.List[PSCustomObject]]::new()
@@ -1887,6 +2212,20 @@ echo "=== WSL2 Provisioning Completed Successfully ==="
                 })
             }
         }
+        foreach ($CApp in $CombinedCustomApps) {
+            if ($null -ne $CApp.install -and ($CApp.install -eq $false -or $CApp.install.enabled -eq $false)) {
+                continue
+            }
+            if ($CApp.install) {
+                $CId = if ($CApp.app_id) { $CApp.app_id } elseif ($CApp.name) { ($CApp.name -replace '[^a-zA-Z0-9_]', '_').ToLower() } else { "custom_app" }
+                $PayloadCatalog.Add([PSCustomObject]@{
+                    app_id  = $CId
+                    name    = if ($CApp.name) { $CApp.name } else { $CId }
+                    website = $CApp.website
+                    install = $CApp.install
+                })
+            }
+        }
     } else {
         foreach ($CatItem in $Catalog) {
             $PayloadCatalog.Add($CatItem)
@@ -1894,6 +2233,22 @@ echo "=== WSL2 Provisioning Completed Successfully ==="
     }
     $CatalogJson = if ($PayloadCatalog.Count -eq 0) { "[]" } else { ConvertTo-Json -InputObject @($PayloadCatalog.ToArray()) -Depth 6 }
     $CatalogJson | Set-Content -Path $CatalogJsonPath -Encoding UTF8
+
+    # Export non-Steam shortcuts (steam-shortcuts.json) if present in blueprint or audit-reference.json
+    $SteamShortcutsPath = Join-Path $PayloadDir "steam-shortcuts.json"
+    $ShortcutsToExport = [System.Collections.Generic.List[object]]::new()
+    if ($Blueprint.steam_shortcuts) {
+        foreach ($Sc in @($Blueprint.steam_shortcuts)) { $ShortcutsToExport.Add($Sc) }
+    } elseif ($AuditReference -and $AuditReference.steam_shortcuts) {
+        foreach ($Sc in @($AuditReference.steam_shortcuts)) { $ShortcutsToExport.Add($Sc) }
+    }
+    foreach ($PApp in $PayloadCatalog) {
+        if ($PApp.install -and $PApp.install.steam_shortcut) {
+            $ShortcutsToExport.Add($PApp.install.steam_shortcut)
+        }
+    }
+    $ShortcutsJson = if ($ShortcutsToExport.Count -eq 0) { "[]" } else { ConvertTo-Json -InputObject @($ShortcutsToExport.ToArray()) -Depth 5 }
+    $ShortcutsJson | Set-Content -Path $SteamShortcutsPath -Encoding UTF8
 
     return [PSCustomObject]@{
         PayloadDir           = $PayloadDir

@@ -4,6 +4,7 @@
     "website":  "https://projectoutfox.com",
     "install":  {
                     "method":  "manual",
+                    "scope":  "user",
                     "winget_id":  null,
                     "steam_id":  null,
                     "download_url":  "https://projectoutfox.com/download",

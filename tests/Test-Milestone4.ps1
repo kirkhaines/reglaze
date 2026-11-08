@@ -252,6 +252,34 @@ try {
         -Details "CheckA: $($CheckA.IsInstalled), CheckB: $($CheckB.IsInstalled), Missing: $($CheckMissing.IsInstalled), InstallExisting: $($InstallExisting.Status), InstallMissing: $($InstallMissing.Status)"
 
     # =========================================================================
+    # Test 8c: Non-Steam Game Shortcuts Binary VDF Round-Trip
+    # =========================================================================
+    $MockVdfFile = Join-Path $MockLibA "userdata\12345678\config\shortcuts.vdf"
+    $SampleShortcuts = @(
+        [PSCustomObject]@{
+            app_name       = "Project OutFox"
+            exe            = "D:\Games\OutFox\OutFox.exe"
+            start_dir      = "D:\Games\OutFox"
+            icon           = ""
+            shortcut_path  = ""
+            launch_options = "--fullscreen"
+            tags           = @("Favorite", "Rhythm")
+        }
+    )
+    $RegShortcutsRes = Register-SteamShortcuts -Shortcuts $SampleShortcuts -TargetVdfPaths @($MockVdfFile)
+    $ParsedShortcuts = @(Get-SteamShortcuts -AdditionalVdfPaths @($MockVdfFile))
+    Assert-Test -Name "8c. Non-Steam Shortcuts: writes and parses binary shortcuts.vdf entries cleanly" `
+        -Condition (
+            $RegShortcutsRes.RegisteredCount -eq 1 -and
+            $ParsedShortcuts.Count -eq 1 -and
+            $ParsedShortcuts[0].app_name -eq "Project OutFox" -and
+            $ParsedShortcuts[0].exe -eq "D:\Games\OutFox\OutFox.exe" -and
+            $ParsedShortcuts[0].launch_options -eq "--fullscreen" -and
+            ($ParsedShortcuts[0].tags -contains "Rhythm")
+        ) `
+        -Details "Registered: $($RegShortcutsRes.RegisteredCount), Parsed: $($ParsedShortcuts.Count)"
+
+    # =========================================================================
     # Test 8: End-to-End Start-UserHydration in Simulation Mode
     # =========================================================================
     $MockGDriveSetup = [PSCustomObject]@{

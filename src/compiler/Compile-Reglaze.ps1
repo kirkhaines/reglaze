@@ -148,10 +148,26 @@ function Invoke-ReglazeCompilation {
         New-Item -ItemType Directory -Path $PayloadDir -Force | Out-Null
     }
 
+    # 5b. Generate Unique Build Sentinel Tag (reglaze.tag)
+    $TimestampTag = [DateTime]::UtcNow.ToString("yyyyMMddTHHmmssZ")
+    $GitHash = "nogit"
+    try {
+        $GitOut = & git -C $RepoRoot rev-parse --short HEAD 2>$null
+        if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($GitOut)) {
+            $GitHash = ($GitOut | Select-Object -First 1).Trim()
+        }
+    } catch {}
+    $BuildTag = "${TimestampTag}_${GitHash}_$([Guid]::NewGuid().ToString('N').Substring(0, 8))"
+    $TagFilePath = Join-Path $ReglazeDir "reglaze.tag"
+    $PayloadTagFilePath = Join-Path $PayloadDir "reglaze.tag"
+    $BuildTag | Set-Content -Path $TagFilePath -Encoding UTF8 -NoNewline -Force
+    $BuildTag | Set-Content -Path $PayloadTagFilePath -Encoding UTF8 -NoNewline -Force
+    Write-ReglazeInfo "Build Sentinel:   $BuildTag"
+
     # 6. Generate autounattend.xml
     Write-ReglazeInfo "Generating autounattend.xml..."
     $AutounattendPath = Join-Path $MediaDir "autounattend.xml"
-    Build-AutounattendXml -Blueprint $Blueprint -AuditReference $AuditReference -OutputPath $AutounattendPath | Out-Null
+    Build-AutounattendXml -Blueprint $Blueprint -AuditReference $AuditReference -OutputPath $AutounattendPath -BuildTag $BuildTag | Out-Null
     Write-ReglazeSuccess "Generated: $AutounattendPath"
 
     # 7. Stage WinPE Dynamic Disk Matching & Preparation Engine
@@ -166,7 +182,7 @@ function Invoke-ReglazeCompilation {
 
     # 8. Compile Deployment Payload (WinGet DSC, Disk Config, BitLocker, Junctions, Google Drive Setup, Bootstrap, Hydrate, WSL2)
     Write-ReglazeInfo "Compiling deployment payload artifacts..."
-    $PayloadResult = Build-ReglazePayload -Blueprint $Blueprint -AuditReference $AuditReference -RepoRoot $RepoRoot -PayloadDir $PayloadDir -BlueprintFile $BlueprintFile
+    $PayloadResult = Build-ReglazePayload -Blueprint $Blueprint -AuditReference $AuditReference -RepoRoot $RepoRoot -PayloadDir $PayloadDir -BlueprintFile $BlueprintFile -BuildTag $BuildTag
     Write-ReglazeSuccess "Compiled: $($PayloadResult.JunctionCount) directory junctions in junctions-manifest.json"
     Write-ReglazeSuccess "Compiled: Preserved disk & drive letter reconciliation config ($($PayloadResult.DiskConfigPath))"
     Write-ReglazeSuccess "Compiled: Google Drive streaming & sync migration payload ($($PayloadResult.GoogleDriveSetupPath))"

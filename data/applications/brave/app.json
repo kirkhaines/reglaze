@@ -1,10 +1,11 @@
-{
+﻿{
     "$schema":  "../_schema.json",
     "app_id":  "brave",
     "name":  "Brave Browser",
     "website":  "https://brave.com/",
     "install":  {
                     "method":  "winget",
+                    "scope":  "machine",
                     "winget_id":  "Brave.Brave",
                     "steam_id":  null,
                     "download_url":  null,

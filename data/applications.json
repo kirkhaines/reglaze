@@ -1,10 +1,11 @@
-[
+﻿[
     {
         "app_id":  "adobe_lightroom",
         "name":  "Adobe Lightroom Classic",
         "website":  "https://www.adobe.com/products/photoshop-lightroom.html",
         "install":  {
                         "method":  "winget",
+                        "scope":  "machine",
                         "winget_id":  "Adobe.CreativeCloud",
                         "steam_id":  null,
                         "download_url":  null,
@@ -44,6 +45,7 @@
         "website":  "https://www.darktable.org",
         "install":  {
                         "method":  "winget",
+                        "scope":  "machine",
                         "winget_id":  "Darktable.Darktable",
                         "steam_id":  null,
                         "download_url":  null,
@@ -73,6 +75,7 @@
         "website":  "https://beatsaber.com",
         "install":  {
                         "method":  "steam",
+                        "scope":  null,
                         "winget_id":  null,
                         "steam_id":  620980,
                         "download_url":  null,
@@ -112,6 +115,7 @@
         "website":  "https://projectoutfox.com",
         "install":  {
                         "method":  "manual",
+                        "scope":  "user",
                         "winget_id":  null,
                         "steam_id":  null,
                         "download_url":  "https://projectoutfox.com/download",
@@ -153,6 +157,7 @@
         "website":  "https://www.satisfactorygame.com",
         "install":  {
                         "method":  "steam",
+                        "scope":  null,
                         "winget_id":  null,
                         "steam_id":  526870,
                         "download_url":  null,
@@ -192,6 +197,7 @@
         "website":  "https://www.nomada.studio",
         "install":  {
                         "method":  "steam",
+                        "scope":  null,
                         "winget_id":  null,
                         "steam_id":  2420660,
                         "download_url":  null,
@@ -221,6 +227,7 @@
         "website":  "https://playbloodstained.com",
         "install":  {
                         "method":  "steam",
+                        "scope":  null,
                         "winget_id":  null,
                         "steam_id":  692850,
                         "download_url":  null,
@@ -250,6 +257,7 @@
         "website":  "https://www.lotro.com",
         "install":  {
                         "method":  "steam",
+                        "scope":  null,
                         "winget_id":  "StandingStoneGames.TheLordoftheRingsOnline",
                         "steam_id":  212500,
                         "download_url":  null,
@@ -279,6 +287,7 @@
         "website":  "https://store.steampowered.com",
         "install":  {
                         "method":  "winget",
+                        "scope":  "machine",
                         "winget_id":  "Valve.Steam",
                         "steam_id":  null,
                         "download_url":  null,
@@ -308,6 +317,7 @@
         "website":  "https://code.visualstudio.com",
         "install":  {
                         "method":  "winget",
+                        "scope":  "user",
                         "winget_id":  "Microsoft.VisualStudioCode",
                         "steam_id":  null,
                         "download_url":  null,
@@ -337,6 +347,7 @@
         "website":  "https://notepad-plus-plus.org",
         "install":  {
                         "method":  "winget",
+                        "scope":  "machine",
                         "winget_id":  "Notepad++.Notepad++",
                         "steam_id":  null,
                         "download_url":  null,
@@ -366,6 +377,7 @@
         "website":  "https://git-scm.com",
         "install":  {
                         "method":  "winget",
+                        "scope":  "machine",
                         "winget_id":  "Git.Git",
                         "steam_id":  null,
                         "download_url":  null,
@@ -396,6 +408,7 @@
         "website":  "https://www.docker.com/products/docker-desktop",
         "install":  {
                         "method":  "winget",
+                        "scope":  "machine",
                         "winget_id":  "Docker.DockerDesktop",
                         "steam_id":  null,
                         "download_url":  null,
@@ -425,6 +438,7 @@
         "website":  "https://www.google.com/drive/download/",
         "install":  {
                         "method":  "winget",
+                        "scope":  "machine",
                         "winget_id":  "Google.GoogleDrive",
                         "steam_id":  null,
                         "download_url":  "https://www.google.com/drive/download/",

@@ -5,6 +5,7 @@
     "website":  "https://ollama.com",
     "install":  {
                     "method":  "winget",
+                    "scope":  "user",
                     "winget_id":  "Ollama.Ollama",
                     "steam_id":  null,
                     "download_url":  null,

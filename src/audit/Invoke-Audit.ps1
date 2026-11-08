@@ -119,6 +119,9 @@ if (Test-Path $WinSettingsScript) {
         if ($WindowsSettings.system_ergonomics -and $WindowsSettings.system_ergonomics.ssh_keys_unmapped_warning) {
             Write-ReglazeWarning "Detected '%USERPROFILE%\.ssh' on C: without a directory junction. Consider mapping or backing up your SSH keys before re-imaging!"
         }
+        if ($WindowsSettings.system_ergonomics -and $WindowsSettings.system_ergonomics.windows_hello_passkeys_detected) {
+            Write-ReglazeWarning "Windows Hello PIN / TPM Passkeys detected on C:. TPM-bound passkeys cannot be migrated across an OS wipe; ensure you have secondary sign-in methods ('Try another way', phone authenticator, or Bitwarden) ready for Google & Microsoft accounts."
+        }
     } catch {
         Write-ReglazeWarning "Could not execute Windows settings audit: $($_.Exception.Message)"
     }
@@ -134,8 +137,9 @@ $PhysicalDiskMountLetters = @(
 )
 $StorageProvidersData = Get-StorageProvidersAudit -AdditionalOccupiedLetters $PhysicalDiskMountLetters
 $UserIdentityData = Get-UserIdentityAudit
+$GDriveComputerName = if ($StorageProvidersData.computer_folder_name) { [string]$StorageProvidersData.computer_folder_name } else { "My Computer" }
 Write-ReglazeSuccess "User Identity: $($UserIdentityData.email) ($($UserIdentityData.account_type))"
-Write-ReglazeSuccess "Cloud Streaming: $($StorageProvidersData.streaming.mount_point) ($($StorageProvidersData.streaming.cloud_provider), detected=$($StorageProvidersData.streaming.detected)), Synced roots: $($StorageProvidersData.sync_directories.Count)."
+Write-ReglazeSuccess "Cloud Streaming: $($StorageProvidersData.streaming.mount_point) ($($StorageProvidersData.streaming.cloud_provider), detected=$($StorageProvidersData.streaming.detected)), Google Drive Computer Name: '$GDriveComputerName', Synced roots: $($StorageProvidersData.sync_directories.Count)."
 
 # 9. Execute Network & Firewall Discovery
 Write-ReglazeStep "Auditing Network Adapters, Sharing Preferences & Custom Firewall Rules..."
@@ -206,18 +210,20 @@ if ($ExistingProfileEntry) {
 }
 
 $CurrentComputerRecord = [PSCustomObject]@{
-    computer_name    = $ComputerName
-    audited_at       = $AuditTimestamp
-    sync_directories = $SyncDirEntries
+    computer_name              = $ComputerName
+    google_drive_computer_name = $GDriveComputerName
+    audited_at                 = $AuditTimestamp
+    sync_directories           = $SyncDirEntries
 }
 $ComputerHistory = @($CurrentComputerRecord) + $ComputerHistory
 
 $ProfileAssociation = [PSCustomObject]@{
-    profile                = $ResolvedProfile
-    latest_computer_name   = $ComputerName
-    previous_computer_name = $PreviousComputerName
-    latest_audit_timestamp = $AuditTimestamp
-    computers              = $ComputerHistory
+    profile                    = $ResolvedProfile
+    latest_computer_name       = $ComputerName
+    google_drive_computer_name = $GDriveComputerName
+    previous_computer_name     = $PreviousComputerName
+    latest_audit_timestamp     = $AuditTimestamp
+    computers                  = $ComputerHistory
 }
 
 $ProfileRegistry.profiles[$ResolvedProfile] = $ProfileAssociation
@@ -247,6 +253,7 @@ $AuditReference = [PSCustomObject]@{
     detected_non_winget_applications = $AppsData.detected_non_winget_applications
     detected_windows_settings        = $WindowsSettings
     detected_game_libraries          = $AppsData.detected_game_libraries
+    steam_shortcuts                  = $AppsData.steam_shortcuts
 }
 
 $AuditJsonPath = Join-Path $TargetDir "audit-reference.json"
@@ -661,7 +668,7 @@ if ($PreservedDisks.Count -gt 0) {
     '    stream_variable: "STREAM"',
     '  sync:',
     '    provider: "google-drive-sync"',
-    "    source_computer: `"$ComputerName`"",
+    "    source_computer: `"$(& $EscapeYamlStr $GDriveComputerName)`"",
     '    migration_mode: "copy"',
     '    directories:'
 ) | ForEach-Object { $YamlLines.Add($_) }
@@ -815,10 +822,12 @@ foreach ($Pkg in @($AppsData.installed_winget_packages | Where-Object { -not $_.
 
     $EscName = & $EscapeYamlStr $PkgName
     $EscId = & $EscapeYamlStr $Pkg.id
+    $PkgScope = if ($Pkg.scope -eq "user") { "user" } else { "machine" }
     $CustomYamlLines.Add("    - name: `"$EscName`"")
     $CustomYamlLines.Add("      install:")
     $CustomYamlLines.Add("        method: `"winget`"")
     $CustomYamlLines.Add("        winget_id: `"$EscId`"")
+    $CustomYamlLines.Add("        scope: `"$PkgScope`"")
     $CustomYamlLines.Add("      directories: []")
 }
 
@@ -857,7 +866,7 @@ foreach ($SGame in $UnmatchedSteamGames) {
     $CustomYamlLines.Add("      directories: []")
 }
 
-# 3. Unmatched non-WinGet Registry (ARP) applications
+# 3. Unmatched non-WinGet Registry (ARP) applications & Non-Steam Shortcuts
 foreach ($App in @($AppsData.detected_non_winget_applications | Where-Object { -not $_.matched_app_id -and $null -eq $_.steam_id })) {
     if (-not $App.display_name) { continue }
     if (-not $SeenCustomKeys.Add("name:$($App.display_name)")) { continue }
@@ -931,6 +940,23 @@ $DefaultDevReposRoot = if ($AvailableSyncVars -contains "SYNC_PROJECTS") {
 [System.IO.File]::WriteAllLines($BlueprintPath, $YamlLines.ToArray(), (New-Object System.Text.UTF8Encoding($false)))
 Write-ReglazeSuccess "Scaffolded starter blueprint: $BlueprintPath"
 
+Write-Host ""
+Write-Host "================================================================================" -ForegroundColor Cyan
+Write-Host "  PRE-REIMAGE PREPARATION CHECKLIST" -ForegroundColor Cyan
+Write-Host "================================================================================" -ForegroundColor Cyan
+Write-Host "  1. Passkeys & 2FA Fallback:" -ForegroundColor Yellow
+Write-Host "     Windows Hello PIN / TPM-bound passkeys on C: do not carry over across a clean"
+Write-Host "     OS install. Ensure you have secondary sign-in options ('Try another way', phone"
+Write-Host "     QR/Bluetooth passkey, authenticator app, or Bitwarden) ready for your Microsoft"
+Write-Host "     and Google accounts before wiping C:."
+Write-Host "  2. Steam Bulk Installation Collection:" -ForegroundColor Yellow
+Write-Host "     In Steam Library, consider creating a Collection (e.g., 'Base Install') with all"
+Write-Host "     games you want on the new build. During hydration, you can select all games in"
+Write-Host "     that collection and click 'Install selected...' to queue them in bulk."
+Write-Host "  3. Browser Tabs & Sync:" -ForegroundColor Yellow
+Write-Host "     Verify Chrome Sync is enabled for Open Tabs & Extensions. On the new install,"
+Write-Host "     open 'chrome://history/syncedTabs' to restore your previous tabs in one click."
+Write-Host "================================================================================" -ForegroundColor Cyan
 Write-Host ""
 Write-ReglazeSuccess "Pre-flight audit complete! You can now review and customize your blueprint."
 Write-Host ""

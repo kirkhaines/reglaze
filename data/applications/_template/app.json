@@ -5,6 +5,7 @@
     "website":  "https://example.com",
     "install":  {
                     "method":  "winget",
+                    "scope":  "machine",
                     "winget_id":  "Publisher.ExampleApp",
                     "steam_id":  null,
                     "download_url":  null,

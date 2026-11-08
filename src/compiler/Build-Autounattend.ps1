@@ -19,7 +19,10 @@ function Build-AutounattendXml {
         [PSCustomObject]$AuditReference = $null,
 
         [Parameter(Mandatory=$true)]
-        [string]$OutputPath
+        [string]$OutputPath,
+
+        [Parameter(Mandatory=$false)]
+        [string]$BuildTag = $null
     )
 
     $ComputerName = if ($Blueprint.system.computer_name) { $Blueprint.system.computer_name } else { "DESKTOP" }
@@ -69,6 +72,12 @@ Set it in your terminal session before compiling:
         }
     }
 
+    $WinPeCmdPath = if (-not [string]::IsNullOrWhiteSpace($BuildTag)) {
+        "cmd.exe /c for %d in (C D E F G H I J K L M N O P Q R S T U V W X Y Z) do @if exist &quot;%d:\Reglaze\reglaze.tag&quot; findstr /i /c:&quot;$BuildTag&quot; &quot;%d:\Reglaze\reglaze.tag&quot; &gt;nul 2&gt;&amp;1 &amp;&amp; if exist &quot;%d:\Reglaze\prepare-target-disk.cmd&quot; call &quot;%d:\Reglaze\prepare-target-disk.cmd&quot; %d &quot;$BuildTag&quot;"
+    } else {
+        "cmd.exe /c for %d in (C D E F G H I J K L M N O P Q R S T U V W X Y Z) do if exist %d:\Reglaze\prepare-target-disk.cmd call %d:\Reglaze\prepare-target-disk.cmd %d"
+    }
+
     $XmlContent = @"
 <?xml version="1.0" encoding="utf-8"?>
 <unattend xmlns="urn:schemas-microsoft-com:unattend">
@@ -105,7 +114,7 @@ Set it in your terminal session before compiling:
         <RunSynchronousCommand wcm:action="add" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
           <Description>Prepare and Partition Target OS Disk</Description>
           <Order>1</Order>
-          <Path>cmd.exe /c for %d in (C D E F G H I J K L M N O P Q R S T U V W X Y Z) do if exist %d:\Reglaze\prepare-target-disk.cmd call %d:\Reglaze\prepare-target-disk.cmd %d</Path>
+          <Path>$WinPeCmdPath</Path>
         </RunSynchronousCommand>
       </RunSynchronous>
     </component>
@@ -164,7 +173,7 @@ Set it in your terminal session before compiling:
       </UserAccounts>
       <FirstLogonCommands>
         <SynchronousCommand wcm:action="add" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
-          <CommandLine>powershell.exe -ExecutionPolicy Bypass -NoExit -Command "&amp; { if (-not (Test-Path C:\Reglaze\payload\bootstrap.ps1)) { `$src = (Get-PSDrive -PSProvider FileSystem | ForEach-Object { (Join-Path `$_.Root 'Reglaze\payload'), (Join-Path `$_.Root 'payload') } | Where-Object { Test-Path (Join-Path `$_ 'bootstrap.ps1') } | Select-Object -First 1); if (`$src) { New-Item -ItemType Directory -Path C:\Reglaze -Force | Out-Null; Copy-Item -Path `$src -Destination C:\Reglaze\payload -Recurse -Force } }; if (Test-Path C:\Reglaze\payload\bootstrap.ps1) { &amp; C:\Reglaze\payload\bootstrap.ps1 } else { Write-Error 'Reglaze bootstrap payload not found.' } }"</CommandLine>
+          <CommandLine>powershell.exe -ExecutionPolicy Bypass -NoExit -Command "&amp; { if (-not (Test-Path C:\Reglaze\payload\bootstrap.ps1)) { `$tag = '$BuildTag'; `$drives = Get-PSDrive -PSProvider FileSystem | Sort-Object { try { if ((Get-Volume -DriveLetter `$_.Name -ErrorAction Stop).FileSystemLabel -eq 'REGLAZE') { 0 } else { 1 } } catch { 2 } }; `$src = (`$drives | ForEach-Object { (Join-Path `$_.Root 'Reglaze\payload'), (Join-Path `$_.Root 'payload') } | Where-Object { (Test-Path (Join-Path `$_ 'bootstrap.ps1')) -and ([string]::IsNullOrEmpty(`$tag) -or ((Test-Path (Join-Path `$_ 'reglaze.tag')) -and ((Get-Content -Raw (Join-Path `$_ 'reglaze.tag')).Trim() -eq `$tag)) -or ((Test-Path (Join-Path (Split-Path -Parent `$_) 'reglaze.tag')) -and ((Get-Content -Raw (Join-Path (Split-Path -Parent `$_) 'reglaze.tag')).Trim() -eq `$tag))) } | Select-Object -First 1); if (-not `$src) { `$src = (`$drives | ForEach-Object { (Join-Path `$_.Root 'Reglaze\payload'), (Join-Path `$_.Root 'payload') } | Where-Object { Test-Path (Join-Path `$_ 'bootstrap.ps1') } | Select-Object -First 1) }; if (`$src) { New-Item -ItemType Directory -Path C:\Reglaze -Force | Out-Null; Copy-Item -Path `$src -Destination C:\Reglaze\payload -Recurse -Force } }; if (Test-Path C:\Reglaze\payload\bootstrap.ps1) { &amp; C:\Reglaze\payload\bootstrap.ps1 } else { Write-Error 'Reglaze bootstrap payload not found.' } }"</CommandLine>
           <Description>Launch Reglaze Machine Bootstrap</Description>
           <Order>1</Order>
         </SynchronousCommand>

@@ -1,9 +1,10 @@
-{
+﻿{
     "app_id":  "bloodstained",
     "name":  "Bloodstained: Ritual of the Night",
     "website":  "https://playbloodstained.com",
     "install":  {
                     "method":  "steam",
+                    "scope":  null,
                     "winget_id":  null,
                     "steam_id":  692850,
                     "download_url":  null,

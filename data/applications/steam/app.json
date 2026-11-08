@@ -1,9 +1,10 @@
-{
+﻿{
     "app_id":  "steam",
     "name":  "Valve Steam",
     "website":  "https://store.steampowered.com",
     "install":  {
                     "method":  "winget",
+                    "scope":  "machine",
                     "winget_id":  "Valve.Steam",
                     "steam_id":  null,
                     "download_url":  null,

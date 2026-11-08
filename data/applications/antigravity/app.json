@@ -5,6 +5,7 @@
     "website":  "https://github.com/google/antigravity",
     "install":  {
                     "method":  "winget",
+                    "scope":  "user",
                     "winget_id":  "Google.Antigravity",
                     "steam_id":  null,
                     "download_url":  null,

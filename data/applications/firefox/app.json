@@ -1,10 +1,11 @@
-{
+﻿{
     "$schema":  "../_schema.json",
     "app_id":  "firefox",
     "name":  "Mozilla Firefox",
     "website":  "https://www.mozilla.org/firefox/",
     "install":  {
                     "method":  "winget",
+                    "scope":  "machine",
                     "winget_id":  "Mozilla.Firefox",
                     "steam_id":  null,
                     "download_url":  null,

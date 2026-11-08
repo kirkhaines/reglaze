@@ -1,10 +1,11 @@
-{
+﻿{
     "$schema":  "../_schema.json",
     "app_id":  "google_drive",
     "name":  "Google Drive for Desktop",
     "website":  "https://www.google.com/drive/download/",
     "install":  {
                     "method":  "winget",
+                    "scope":  "machine",
                     "winget_id":  "Google.GoogleDrive",
                     "steam_id":  null,
                     "download_url":  "https://www.google.com/drive/download/",

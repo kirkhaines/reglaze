@@ -116,9 +116,11 @@ function Get-StorageProvidersAudit {
         }
     }
 
-    # 2. Discover Google Drive for Desktop Synced Folders
+    # 2. Discover Google Drive for Desktop Synced Folders & Computer Container Name
     $SyncedDirectories = @()
-    $DriveFsDb = Join-Path $env:LOCALAPPDATA "Google\DriveFS\root_preference_sqlite.db"
+    $DetectedComputerFolderName = "My Computer"
+    $DriveFsBase = Join-Path $env:LOCALAPPDATA "Google\DriveFS"
+    $DriveFsDb = Join-Path $DriveFsBase "root_preference_sqlite.db"
 
     if (Test-Path $DriveFsDb -ErrorAction SilentlyContinue) {
         try {
@@ -130,11 +132,28 @@ function Get-StorageProvidersAudit {
             $FileStream.Close()
             $OutStream.Close()
 
+            # Locate account metadata_sqlite_db if present to resolve the exact 'Computers' container title (e.g., 'My Computer')
+            $TempMetaDb = ""
+            $MetaDbFile = Get-ChildItem -Path $DriveFsBase -Filter "metadata_sqlite_db" -Recurse -File -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($MetaDbFile) {
+                try {
+                    $TempMetaDb = Join-Path $env:TEMP "reglaze_drivefs_meta_$((Get-Random)).db"
+                    $MIn = [System.IO.File]::Open($MetaDbFile.FullName, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+                    $MOut = [System.IO.File]::Create($TempMetaDb)
+                    $MIn.CopyTo($MOut)
+                    $MIn.Close()
+                    $MOut.Close()
+                } catch {
+                    $TempMetaDb = ""
+                }
+            }
+
             if (Get-Command "python" -ErrorAction SilentlyContinue) {
                 $PyScript = Join-Path $env:TEMP "reglaze_query_roots_$((Get-Random)).py"
                 $PyCode = @'
-import sqlite3, json, sys
+import sqlite3, json, sys, os
 temp_db = sys.argv[1]
+temp_meta = sys.argv[2] if len(sys.argv) > 2 else ""
 conn = sqlite3.connect(temp_db)
 cols = [c[1] for c in conn.execute("PRAGMA table_info(roots);").fetchall()]
 has_doc_id = 'doc_id' in cols
@@ -146,25 +165,58 @@ if has_media_id:
     query_cols.append('media_id')
 cursor = conn.execute(f"SELECT {', '.join(query_cols)} FROM roots WHERE state = 2;")
 rows = []
+doc_ids = []
 for r in cursor.fetchall():
     item = {'title': r[0], 'root_path': r[1], 'absolute_path': r[2], 'doc_id': None, 'media_id': None}
     idx = 3
     if has_doc_id:
         item['doc_id'] = r[idx]
+        if r[idx]:
+            doc_ids.append(str(r[idx]))
         idx += 1
     if has_media_id:
         item['media_id'] = r[idx]
     rows.append(item)
 conn.close()
-print(json.dumps(rows))
+
+computer_name = None
+if temp_meta and os.path.exists(temp_meta) and doc_ids:
+    try:
+        mconn = sqlite3.connect(temp_meta)
+        item_cols = [c[1] for c in mconn.execute("PRAGMA table_info(items);").fetchall()]
+        id_col = 'id' if 'id' in item_cols else ('cloud_id' if 'cloud_id' in item_cols else ('doc_id' if 'doc_id' in item_cols else None))
+        if id_col and 'stable_id' in item_cols and 'local_title' in item_cols:
+            for did in doc_ids:
+                q = f"""
+                SELECT p_item.local_title
+                FROM items c_item
+                JOIN parents p ON p.item_stable_id = c_item.stable_id
+                JOIN items p_item ON p_item.stable_id = p.parent_stable_id
+                WHERE c_item.{id_col} = ?
+                LIMIT 1;
+                """
+                res = mconn.execute(q, (did,)).fetchone()
+                if res and res[0]:
+                    computer_name = str(res[0])
+                    break
+        mconn.close()
+    except Exception:
+        pass
+
+print(json.dumps({'roots': rows, 'computer_name': computer_name}))
 '@
                 $PyCode | Set-Content -Path $PyScript -Encoding UTF8
-                $JsonResult = & python $PyScript $TempDb 2>$null
+                $JsonResult = & python $PyScript $TempDb $TempMetaDb 2>$null
                 Remove-Item $PyScript -Force -ErrorAction SilentlyContinue
 
                 if ($JsonResult) {
-                    $Roots = $JsonResult | ConvertFrom-Json
+                    $ParsedPayload = $JsonResult | ConvertFrom-Json
+                    if ($ParsedPayload.computer_name) {
+                        $DetectedComputerFolderName = [string]$ParsedPayload.computer_name
+                    }
+                    $Roots = if ($null -ne $ParsedPayload.roots) { @($ParsedPayload.roots) } else { @($ParsedPayload) }
                     foreach ($Root in $Roots) {
+                        if (-not $Root.title) { continue }
                         $CleanId = ($Root.title -replace "[^a-zA-Z0-9_]", "_").ToLower()
                         $VarName = "SYNC_" + ($CleanId.ToUpper())
                         $SyncedDirectories += [PSCustomObject]@{
@@ -181,9 +233,39 @@ print(json.dumps(rows))
                 }
             }
 
-            if (Test-Path $TempDb) { Remove-Item $TempDb -Force }
+            if (Test-Path $TempDb) { Remove-Item $TempDb -Force -ErrorAction SilentlyContinue }
+            if ($TempMetaDb -and (Test-Path $TempMetaDb)) { Remove-Item $TempMetaDb -Force -ErrorAction SilentlyContinue }
         } catch {
             Write-Warning "Could not parse Google Drive sync roots: $($_.Exception.Message)"
+        }
+    }
+
+    # Fallback check against '<StreamMount>\Other computers' if streaming mount is active
+    if ($StreamingInfo.detected -and $StreamingInfo.mount_point) {
+        $OtherCompsDir = Join-Path "$($StreamingInfo.mount_point)\" "Other computers"
+        if (Test-Path -LiteralPath $OtherCompsDir -ErrorAction SilentlyContinue) {
+            $CompFolders = @(Get-ChildItem -LiteralPath $OtherCompsDir -Directory -ErrorAction SilentlyContinue)
+            if ($CompFolders.Count -eq 1) {
+                $DetectedComputerFolderName = $CompFolders[0].Name
+            } elseif ($CompFolders.Count -gt 1 -and $SyncedDirectories.Count -gt 0) {
+                $BestFolder = $null
+                $BestScore = 0
+                foreach ($CF in $CompFolders) {
+                    $Score = 0
+                    foreach ($SD in $SyncedDirectories) {
+                        if (Test-Path -LiteralPath (Join-Path $CF.FullName $SD.cloud_folder) -ErrorAction SilentlyContinue) {
+                            $Score++
+                        }
+                    }
+                    if ($Score -gt $BestScore) {
+                        $BestScore = $Score
+                        $BestFolder = $CF.Name
+                    }
+                }
+                if ($BestFolder) {
+                    $DetectedComputerFolderName = $BestFolder
+                }
+            }
         }
     }
 
@@ -210,8 +292,9 @@ print(json.dumps(rows))
     } catch {}
 
     return [PSCustomObject]@{
-        streaming          = $StreamingInfo
-        sync_directories   = $SyncedDirectories
-        user_shell_folders = $ShellFolders
+        streaming            = $StreamingInfo
+        computer_folder_name = $DetectedComputerFolderName
+        sync_directories     = $SyncedDirectories
+        user_shell_folders   = $ShellFolders
     }
 }

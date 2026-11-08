@@ -1,9 +1,10 @@
-{
+﻿{
     "app_id":  "git",
     "name":  "Git for Windows",
     "website":  "https://git-scm.com",
     "install":  {
                     "method":  "winget",
+                    "scope":  "machine",
                     "winget_id":  "Git.Git",
                     "steam_id":  null,
                     "download_url":  null,

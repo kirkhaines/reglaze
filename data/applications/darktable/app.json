@@ -1,9 +1,10 @@
-{
+﻿{
     "app_id":  "darktable",
     "name":  "Darktable",
     "website":  "https://www.darktable.org",
     "install":  {
                     "method":  "winget",
+                    "scope":  "machine",
                     "winget_id":  "Darktable.Darktable",
                     "steam_id":  null,
                     "download_url":  null,

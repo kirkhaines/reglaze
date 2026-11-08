@@ -1,10 +1,11 @@
-{
+﻿{
     "$schema":  "../_schema.json",
     "app_id":  "logitech_ghub",
     "name":  "Logitech G HUB",
     "website":  "https://www.logitechg.com/innovation/g-hub.html",
     "install":  {
                     "method":  "winget",
+                    "scope":  "machine",
                     "winget_id":  "Logitech.GHUB",
                     "steam_id":  null,
                     "download_url":  null,

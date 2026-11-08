@@ -414,6 +414,9 @@ function New-ReglazeBootableUsb {
             Write-Host "  [Simulation] Retaining existing Windows install files on $TargetDriveLetter. Skipped format, ISO mount, and image copy." -ForegroundColor DarkCyan
         } else {
             Write-Host "  Retaining existing Windows install files on $TargetDriveLetter. Skipped format, ISO mount, and image copy." -ForegroundColor Green
+            try {
+                Set-Volume -DriveLetter $CleanLetter -NewFileSystemLabel "REGLAZE" -ErrorAction SilentlyContinue | Out-Null
+            } catch {}
         }
     }
 
@@ -551,7 +554,7 @@ function New-ReglazeBootableUsb {
             # Copy WinPE & preparation tools exclusively to \Reglaze\
             $ReglazeSub = Join-Path $TargetDriveLetter "Reglaze"
             if (-not (Test-Path -LiteralPath $ReglazeSub)) { New-Item -ItemType Directory -Path $ReglazeSub -Force | Out-Null }
-            foreach ($ToolName in @("DiskMatch.vbs", "protect-disks.cmd", "DiskMatch.ps1", "prepare-target-disk.cmd", "prepare-target-disk.vbs")) {
+            foreach ($ToolName in @("DiskMatch.vbs", "protect-disks.cmd", "DiskMatch.ps1", "prepare-target-disk.cmd", "prepare-target-disk.vbs", "reglaze.tag")) {
                 $ToolSrc = Join-Path $MediaArtifactsDir "Reglaze\$ToolName"
                 if (-not (Test-Path -LiteralPath $ToolSrc)) {
                     $ToolSrc = Join-Path $MediaArtifactsDir $ToolName

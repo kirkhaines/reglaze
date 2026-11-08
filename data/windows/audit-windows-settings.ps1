@@ -577,6 +577,58 @@ try {
     }
 
     Add-Type -AssemblyName System.Windows.Forms -ErrorAction SilentlyContinue
+    if (-not ("Reglaze.AuditDisplayHelper" -as [type])) {
+        Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+
+namespace Reglaze {
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Ansi)]
+    public struct AuditDisplayDevice {
+        public int cb;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)]
+        public string DeviceName;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)]
+        public string DeviceString;
+        public int StateFlags;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)]
+        public string DeviceID;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)]
+        public string DeviceKey;
+    }
+
+    public static class AuditDisplayHelper {
+        [DllImport("user32.dll", CharSet = CharSet.Ansi)]
+        public static extern bool EnumDisplayDevices(string lpDevice, uint iDevNum, ref AuditDisplayDevice lpDisplayDevice, uint dwFlags);
+
+        public static string GetMonitorPnpCode(string gdiDeviceName) {
+            AuditDisplayDevice mon = new AuditDisplayDevice();
+            mon.cb = Marshal.SizeOf(mon);
+            // Try EDD_GET_DEVICE_INTERFACE_NAME (1) first for exact instance matching, then fallback to 0
+            if (EnumDisplayDevices(gdiDeviceName, 0, ref mon, 1) && !string.IsNullOrEmpty(mon.DeviceID)) {
+                string[] parts = mon.DeviceID.Split(new char[] { '#', '\\' }, StringSplitOptions.RemoveEmptyEntries);
+                if (parts.Length >= 3 && parts[0].Equals("?", StringComparison.OrdinalIgnoreCase)) {
+                    return parts[2];
+                }
+                if (parts.Length >= 2) {
+                    return parts[1];
+                }
+            }
+            mon = new AuditDisplayDevice();
+            mon.cb = Marshal.SizeOf(mon);
+            if (EnumDisplayDevices(gdiDeviceName, 0, ref mon, 0) && !string.IsNullOrEmpty(mon.DeviceID)) {
+                string[] parts = mon.DeviceID.Split(new char[] { '\\', '#' }, StringSplitOptions.RemoveEmptyEntries);
+                if (parts.Length >= 2) {
+                    return parts[1];
+                }
+            }
+            return null;
+        }
+    }
+}
+"@ -ErrorAction SilentlyContinue
+    }
+
     $Screens = [System.Windows.Forms.Screen]::AllScreens
     $MonIds = @(Get-CimInstance -Namespace root\wmi -ClassName WmiMonitorID -ErrorAction SilentlyContinue)
     $VideoCtrls = @(Get-CimInstance -ClassName Win32_VideoController -ErrorAction SilentlyContinue)
@@ -586,9 +638,21 @@ try {
     for ($i = 0; $i -lt $Screens.Count; $i++) {
         $Scr = $Screens[$i]
         $HwId = $Scr.DeviceName
-        if ($i -lt $MonIds.Count -and $MonIds[$i]) {
-            $Mfg = if ($MonIds[$i].ManufacturerName) { ([char[]]($MonIds[$i].ManufacturerName | Where-Object { $_ -ne 0 })) -join '' } else { "" }
-            $NameChars = if ($MonIds[$i].UserFriendlyName) { ([char[]]($MonIds[$i].UserFriendlyName | Where-Object { $_ -ne 0 })) -join '' } else { "" }
+        $MatchedMon = $null
+
+        if ("Reglaze.AuditDisplayHelper" -as [type]) {
+            $PnpCode = [Reglaze.AuditDisplayHelper]::GetMonitorPnpCode($Scr.DeviceName)
+            if ($PnpCode) {
+                $MatchedMon = $MonIds | Where-Object { $_.InstanceName -match "(?i)\\$([regex]::Escape($PnpCode))\\" } | Select-Object -First 1
+            }
+        }
+        if (-not $MatchedMon -and $i -lt $MonIds.Count) {
+            $MatchedMon = $MonIds[$i]
+        }
+
+        if ($MatchedMon) {
+            $Mfg = if ($MatchedMon.ManufacturerName) { ([char[]]($MatchedMon.ManufacturerName | Where-Object { $_ -ne 0 })) -join '' } else { "" }
+            $NameChars = if ($MatchedMon.UserFriendlyName) { ([char[]]($MatchedMon.UserFriendlyName | Where-Object { $_ -ne 0 })) -join '' } else { "" }
             if ($Mfg -or $NameChars) {
                 $HwId = ("$Mfg $NameChars").Trim()
             }
@@ -607,7 +671,7 @@ try {
     $Settings.display.monitors = $MonitorEntries.ToArray()
 } catch {}
 
-# 9. System & Developer Ergonomics (Clipboard History, LongPaths, SSH Agent, Default Browser/Terminal)
+# 9. System & Developer Ergonomics (Clipboard History, LongPaths, SSH Agent, Default Browser/Terminal, Windows Hello Passkeys)
 try {
     $Clip = Get-ItemProperty -Path "HKCU:\Software\Microsoft\Clipboard" -ErrorAction SilentlyContinue
     if ($Clip -and $null -ne $Clip.EnableClipboardHistory) {
@@ -632,6 +696,11 @@ try {
             $Settings.system_ergonomics.ssh_keys_unmapped_warning = $true
         }
     }
+
+    $NgcPath = "C:\Windows\ServiceProfiles\LocalService\AppData\Local\Microsoft\Ngc"
+    $NgcReg = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Authentication\LogonUI\NgcPin"
+    $HasNgc = (Test-Path -LiteralPath $NgcReg -ErrorAction SilentlyContinue) -or (Test-Path -LiteralPath $NgcPath -ErrorAction SilentlyContinue)
+    Add-Member -InputObject $Settings.system_ergonomics -MemberType NoteProperty -Name "windows_hello_passkeys_detected" -Value ([bool]$HasNgc) -Force
 
     $HttpsChoice = Get-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\Shell\Associations\UrlAssociations\https\UserChoice" -ErrorAction SilentlyContinue
     if ($HttpsChoice -and $HttpsChoice.ProgId) {

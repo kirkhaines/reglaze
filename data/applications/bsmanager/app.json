@@ -5,6 +5,7 @@
     "website":  "https://github.com/Zagrios/bs-manager",
     "install":  {
                     "method":  "winget",
+                    "scope":  "user",
                     "winget_id":  "Zagrios.BSManager",
                     "steam_id":  null,
                     "download_url":  null,

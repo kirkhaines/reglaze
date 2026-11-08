@@ -1,9 +1,10 @@
-{
+﻿{
     "app_id":  "neva",
     "name":  "Neva",
     "website":  "https://www.nomada.studio",
     "install":  {
                     "method":  "steam",
+                    "scope":  null,
                     "winget_id":  null,
                     "steam_id":  2420660,
                     "download_url":  null,

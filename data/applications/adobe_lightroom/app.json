@@ -1,9 +1,10 @@
-{
+﻿{
     "app_id":  "adobe_lightroom",
     "name":  "Adobe Lightroom Classic",
     "website":  "https://www.adobe.com/products/photoshop-lightroom.html",
     "install":  {
                     "method":  "winget",
+                    "scope":  "machine",
                     "winget_id":  "Adobe.CreativeCloud",
                     "steam_id":  null,
                     "download_url":  null,

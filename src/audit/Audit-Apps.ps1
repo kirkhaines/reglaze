@@ -139,10 +139,17 @@ function Get-InstalledApplicationsAudit {
                                     continue
                                 }
 
+                                $DefaultPkgScope = if ($MatchedApp -and $MatchedApp.install -and $MatchedApp.install.scope) {
+                                    [string]$MatchedApp.install.scope
+                                } else {
+                                    "machine"
+                                }
+
                                 $WinGetPackages += [PSCustomObject]@{
                                     id             = $Id
                                     name           = $Name
                                     version        = $Version
+                                    scope          = $DefaultPkgScope
                                     matched_app_id = if ($MatchedApp) { $MatchedApp.app_id } else { $null }
                                 }
                             }
@@ -227,6 +234,15 @@ function Get-InstalledApplicationsAudit {
                 $_.name -eq $DisplayName -or 
                 ($_.id -and $DisplayName -like "*$($_.id)*")
             }
+            if ($AlreadyInWinGet) {
+                $InstLoc = if ($Entry.InstallLocation) { "$($Entry.InstallLocation)".Trim() } else { "" }
+                $IsUserHiveOrPath = ($Target.Hive -eq "HKCU_User") -or ($InstLoc -match "\\Users\\[^\\]+\\AppData\\")
+                if ($IsUserHiveOrPath) {
+                    foreach ($WgItem in $AlreadyInWinGet) {
+                        $WgItem.scope = "user"
+                    }
+                }
+            }
             $AlreadyInSteamLibs = $SteamGames | Where-Object {
                 ($null -ne $ArpSteamId -and [int]$_.SteamId -eq $ArpSteamId) -or
                 ($_.GameName -and $_.GameName -ieq $DisplayName)
@@ -272,9 +288,53 @@ function Get-InstalledApplicationsAudit {
         }
     }
 
+    # 4. Discover Non-Steam Game Shortcuts in Steam userdata (shortcuts.vdf)
+    $SteamShortcuts = @()
+    if (Get-Command Get-SteamShortcuts -ErrorAction SilentlyContinue) {
+        try {
+            $SteamShortcuts = @(Get-SteamShortcuts -Libraries $SteamLibs)
+            foreach ($Sc in $SteamShortcuts) {
+                $ScName = if ($Sc.app_name) { $Sc.app_name.Trim() } else { "" }
+                if (-not $ScName) { continue }
+
+                $MatchedApp = $Catalog | Where-Object {
+                    ($_.name -and $_.name -ieq $ScName) -or
+                    ($_.app_id -and $_.app_id -ieq $ScName) -or
+                    ($_.name -and ($ScName -like "*$($_.name)*" -or $_.name -like "*$ScName*"))
+                } | Select-Object -First 1
+
+                $InWinGet = $WinGetPackages | Where-Object {
+                    $_.name -ieq $ScName -or
+                    ($MatchedApp -and $_.matched_app_id -and $_.matched_app_id -ieq $MatchedApp.app_id)
+                }
+                $InSteamLibs = $SteamGames | Where-Object {
+                    $_.GameName -and $_.GameName -ieq $ScName
+                }
+
+                if (-not $InWinGet -and -not $InSteamLibs -and -not $SeenNames.Contains($ScName)) {
+                    $SeenNames.Add($ScName) | Out-Null
+                    $ScRecord = [PSCustomObject]@{
+                        display_name      = $ScName
+                        display_version   = "Steam Shortcut"
+                        publisher         = "Non-Steam Shortcut"
+                        install_location  = if ($Sc.start_dir) { $Sc.start_dir } elseif ($Sc.exe) { Split-Path -Parent $Sc.exe } else { $null }
+                        registry_hive     = "Steam_Shortcuts_VDF"
+                        matched_app_id    = if ($MatchedApp) { $MatchedApp.app_id } else { $null }
+                        is_steam_shortcut = $true
+                        steam_shortcut    = $Sc
+                    }
+                    $NonWinGetApps += $ScRecord
+                }
+            }
+        } catch {
+            Write-Warning "Failed to audit Steam shortcuts.vdf: $($_.Exception.Message)"
+        }
+    }
+
     return [PSCustomObject]@{
         installed_winget_packages        = $WinGetPackages
         detected_non_winget_applications = $NonWinGetApps
         detected_game_libraries          = $GameLibraryEntries
+        steam_shortcuts                  = $SteamShortcuts
     }
 }

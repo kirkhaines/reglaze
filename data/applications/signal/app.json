@@ -5,6 +5,7 @@
     "website":  "https://signal.org",
     "install":  {
                     "method":  "winget",
+                    "scope":  "user",
                     "winget_id":  "OpenWhisperSystems.Signal",
                     "steam_id":  null,
                     "download_url":  null,

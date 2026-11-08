@@ -1,9 +1,10 @@
-{
+﻿{
     "app_id": "satisfactory",
     "name": "Satisfactory",
     "website": "https://www.satisfactorygame.com",
     "install": {
         "method": "steam",
+                    "scope":  null,
         "winget_id": null,
         "steam_id": 526870,
         "download_url": null,

@@ -7,15 +7,41 @@ echo ================================================================
 
 rem 1. Determine installation media drive letter
 set "MEDIA_DRIVE=%~1"
+set "EXPECTED_TAG=%~2"
 if not "%MEDIA_DRIVE%"=="" (
     rem Strip trailing backslash or colon if present
     set "MEDIA_DRIVE=%MEDIA_DRIVE:~0,1%:"
     goto :media_arg_check
 )
 
-for %%d in (C D E F G H I J K L M N O P Q R S T U V W X Y Z) do (
-    if exist "%%d:\Reglaze\prepare-target-disk.vbs" (
-        set "MEDIA_DRIVE=%%d:"
+if not "%EXPECTED_TAG%"=="" (
+    for %%d in (C D E F G H I J K L M N O P Q R S T U V W X Y Z) do (
+        if exist "%%d:\Reglaze\reglaze.tag" (
+            findstr /i /c:"%EXPECTED_TAG%" "%%d:\Reglaze\reglaze.tag" >nul 2>&1
+            if not errorlevel 1 (
+                if exist "%%d:\Reglaze\prepare-target-disk.vbs" (
+                    set "MEDIA_DRIVE=%%d:"
+                )
+            )
+        )
+    )
+)
+
+if "%MEDIA_DRIVE%"=="" (
+    for %%d in (C D E F G H I J K L M N O P Q R S T U V W X Y Z) do (
+        if exist "%%d:\Reglaze\reglaze.tag" (
+            if exist "%%d:\Reglaze\prepare-target-disk.vbs" (
+                set "MEDIA_DRIVE=%%d:"
+            )
+        )
+    )
+)
+
+if "%MEDIA_DRIVE%"=="" (
+    for %%d in (C D E F G H I J K L M N O P Q R S T U V W X Y Z) do (
+        if exist "%%d:\Reglaze\prepare-target-disk.vbs" (
+            set "MEDIA_DRIVE=%%d:"
+        )
     )
 )
 

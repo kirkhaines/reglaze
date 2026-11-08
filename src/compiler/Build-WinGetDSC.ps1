@@ -34,6 +34,7 @@ function Build-WinGetDSCManifest {
     }
 
     $PackagesToInstall = [System.Collections.Generic.List[PSCustomObject]]::new()
+    $UserPackagesToInstall = [System.Collections.Generic.List[PSCustomObject]]::new()
     $SeenPackageIds = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
 
     # 1. Inspect Applications section in blueprint
@@ -52,6 +53,21 @@ function Build-WinGetDSCManifest {
             $PackageId = $null
             $Source = "winget"
             $AppName = $AppId
+            $Scope = "machine"
+
+            # Look up in application catalog (built-in + user applications.json)
+            $CatalogApp = Get-ReglazeApplicationById -AppId $AppId -RepoRoot $RepoRoot -UserConfigDir $UserConfigDir
+            if ($CatalogApp) {
+                if ($CatalogApp.name) { $AppName = $CatalogApp.name }
+                if ($CatalogApp.install -and $CatalogApp.install.scope) {
+                    $Scope = [string]$CatalogApp.install.scope
+                } elseif ($CatalogApp.install -and $CatalogApp.install.default_target_directory -match '^%(LOCALAPPDATA|APPDATA|USERPROFILE)%') {
+                    $Scope = "user"
+                }
+            }
+            if ($AppConfig.install -and $AppConfig.install.scope) {
+                $Scope = [string]$AppConfig.install.scope
+            }
 
             # Check if explicit install info in blueprint
             $ExplicitPkgId = if ($AppConfig.install -and $AppConfig.install.package_id) {
@@ -72,18 +88,13 @@ function Build-WinGetDSCManifest {
             } elseif ($AppConfig.install -and $AppConfig.install.method -and $AppConfig.install.method -ne "winget") {
                 # Non-winget install method explicitly declared (e.g. steam, manual)
                 continue
-            } else {
-                # Look up in application catalog (built-in + user applications.json)
-                $CatalogApp = Get-ReglazeApplicationById -AppId $AppId -RepoRoot $RepoRoot -UserConfigDir $UserConfigDir
-                if ($CatalogApp) {
-                    $AppName = if ($CatalogApp.name) { $CatalogApp.name } else { $AppId }
-                    $Method = if ($CatalogApp.install -and $CatalogApp.install.method) { $CatalogApp.install.method } else { "winget" }
-                    if ($Method -eq "winget" -and $CatalogApp.install) {
-                        if ($CatalogApp.install.winget_id) {
-                            $PackageId = [string]$CatalogApp.install.winget_id
-                        } elseif ($CatalogApp.install.package_id) {
-                            $PackageId = [string]$CatalogApp.install.package_id
-                        }
+            } elseif ($CatalogApp) {
+                $Method = if ($CatalogApp.install -and $CatalogApp.install.method) { $CatalogApp.install.method } else { "winget" }
+                if ($Method -eq "winget" -and $CatalogApp.install) {
+                    if ($CatalogApp.install.winget_id) {
+                        $PackageId = [string]$CatalogApp.install.winget_id
+                    } elseif ($CatalogApp.install.package_id) {
+                        $PackageId = [string]$CatalogApp.install.package_id
                     }
                 }
             }
@@ -97,13 +108,19 @@ function Build-WinGetDSCManifest {
                 if (-not $SeenPackageIds.Contains($PackageId)) {
                     $SeenPackageIds.Add($PackageId) | Out-Null
                     $CleanResourceId = ($PackageId -replace '[^a-zA-Z0-9_]', '_')
-                    $PackagesToInstall.Add([PSCustomObject]@{
+                    $PkgEntry = [PSCustomObject]@{
                         AppId      = $AppId
                         AppName    = $AppName
                         PackageId  = $PackageId
                         ResourceId = "WinGetPackage_$CleanResourceId"
                         Source     = $Source
-                    })
+                        Scope      = $Scope
+                    }
+                    if ($Scope -ieq "user") {
+                        $UserPackagesToInstall.Add($PkgEntry)
+                    } else {
+                        $PackagesToInstall.Add($PkgEntry)
+                    }
                 }
             }
         }
@@ -135,6 +152,13 @@ function Build-WinGetDSCManifest {
             if ($Method -eq "winget") {
                 $PackageId = $CustPkgId
                 $Source = if ($CustomApp.install -and $CustomApp.install.source) { [string]$CustomApp.install.source } else { "winget" }
+                $CustScope = if ($CustomApp.install -and $CustomApp.install.scope) {
+                    [string]$CustomApp.install.scope
+                } elseif ($CustomApp.scope) {
+                    [string]$CustomApp.scope
+                } else {
+                    "machine"
+                }
                 if ($Source -eq "winget" -and ($PackageId -match '^[A-Z0-9]{12}$' -or $PackageId -match '^9[A-Z0-9]{11}$' -or ($PackageId -notmatch '\.' -and $PackageId -match '^[A-Z0-9]{10,15}$'))) {
                     $Source = "msstore"
                 }
@@ -143,13 +167,19 @@ function Build-WinGetDSCManifest {
                     $SeenPackageIds.Add($PackageId) | Out-Null
                     $CleanResourceId = ($PackageId -replace '[^a-zA-Z0-9_]', '_')
                     $CustomName = if ($CustomApp.name) { $CustomApp.name } else { $PackageId }
-                    $PackagesToInstall.Add([PSCustomObject]@{
+                    $CustEntry = [PSCustomObject]@{
                         AppId      = "custom"
                         AppName    = $CustomName
                         PackageId  = $PackageId
                         ResourceId = "WinGetPackage_$CleanResourceId"
                         Source     = $Source
-                    })
+                        Scope      = $CustScope
+                    }
+                    if ($CustScope -ieq "user") {
+                        $UserPackagesToInstall.Add($CustEntry)
+                    } else {
+                        $PackagesToInstall.Add($CustEntry)
+                    }
                 }
             }
         }
@@ -209,8 +239,10 @@ function Build-WinGetDSCManifest {
     $YamlContent | Set-Content -Path $OutputPath -Encoding UTF8
 
     return [PSCustomObject]@{
-        OutputPath   = $OutputPath
-        PackageCount = $PackagesToInstall.Count
-        Packages     = $PackagesToInstall.ToArray()
+        OutputPath        = $OutputPath
+        PackageCount      = $PackagesToInstall.Count
+        Packages          = $PackagesToInstall.ToArray()
+        UserPackageCount  = $UserPackagesToInstall.Count
+        UserPackages      = $UserPackagesToInstall.ToArray()
     }
 }

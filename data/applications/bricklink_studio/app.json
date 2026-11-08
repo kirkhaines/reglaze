@@ -1,10 +1,11 @@
-{
+﻿{
     "$schema":  "../_schema.json",
     "app_id":  "bricklink_studio",
     "name":  "BrickLink Studio",
     "website":  "https://www.bricklink.com/v3/studio/download.page",
     "install":  {
                     "method":  "winget",
+                    "scope":  "machine",
                     "winget_id":  "BrickLink.Studio",
                     "steam_id":  null,
                     "download_url":  null,

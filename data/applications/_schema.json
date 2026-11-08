@@ -11,6 +11,7 @@
       "type": "object",
       "properties": {
         "method": { "enum": ["winget", "steam", "manual"] },
+        "scope": { "enum": ["machine", "user", null] },
         "winget_id": { "type": ["string", "null"] },
         "steam_id": { "type": ["integer", "null"] },
         "download_url": { "type": ["string", "null"] },

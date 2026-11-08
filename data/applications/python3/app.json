@@ -1,10 +1,11 @@
-{
+﻿{
     "$schema":  "../_schema.json",
     "app_id":  "python3",
     "name":  "Python 3",
     "website":  "https://www.python.org",
     "install":  {
                     "method":  "winget",
+                    "scope":  "machine",
                     "winget_id":  "Python.Python.3.12",
                     "steam_id":  null,
                     "download_url":  null,

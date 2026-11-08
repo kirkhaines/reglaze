@@ -5,10 +5,11 @@
     "website":  "https://www.spotify.com",
     "install":  {
                     "method":  "winget",
+                    "scope":  "user",
                     "winget_id":  "Spotify.Spotify",
                     "steam_id":  null,
                     "download_url":  null,
-                    "default_target_directory":  null,
+                    "default_target_directory":  "%APPDATA%\\Spotify",
                     "guide_file":  null,
                     "post_install_script":  null,
                     "instructions":  []

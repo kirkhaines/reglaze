@@ -141,6 +141,18 @@ if ((Test-Path -LiteralPath $StateFile) -and -not $ResetState) {
     }
 }
 
+function Read-JsonArray ([string]$Path) {
+    if (-not $Path -or -not (Test-Path -LiteralPath $Path)) { return @() }
+    $Parsed = Get-Content -Raw -LiteralPath $Path -Encoding UTF8 | ConvertFrom-Json
+    if ($null -eq $Parsed) { return @() }
+    if ($Parsed -is [System.Array] -or ($Parsed -is [System.Collections.IEnumerable] -and -not ($Parsed -is [string]) -and -not ($Parsed -is [System.Collections.IDictionary]))) {
+        $List = [System.Collections.Generic.List[object]]::new()
+        foreach ($Elem in $Parsed) { $List.Add($Elem) }
+        return $List.ToArray()
+    }
+    return @($Parsed)
+}
+
 function Save-HydrationCheckpoint {
     param([string]$StepKey)
     $HydrateState.last_updated = (Get-Date).ToString("o")
@@ -173,18 +185,30 @@ if ($ResolvedConfigFile -and (Test-Path -LiteralPath $ResolvedConfigFile)) {
 }
 
 # =============================================================================
-# Step 1: Microsoft Account (MSA) Connection
+# Step 1: Microsoft Account (MSA), Browser Sync & Password Manager Setup
 # =============================================================================
-Write-ReglazeStep "Step 1/8: Microsoft Account (MSA) Connection..."
+Write-ReglazeStep "Step 1/8: Microsoft Account (MSA) & Browser Setup..."
 if (-not $HydrateState.msa_connected) {
     if (-not $NonInteractive -and -not $IsSimulated) {
         Write-Host "If you wish to link this standard account to your Microsoft Account for digital licenses and Store,"
         Write-Host "Windows Settings -> Accounts -> Your Info will open."
+        Write-Host "  [TIP] If prompted for a Windows Hello passkey from your old install, select 'Try another way'." -ForegroundColor Cyan
         $MsaChoice = Read-Host "Would you like to open Accounts Settings now? (y/N)"
         if ($MsaChoice -match '^[Yy]') {
             Start-Process "ms-settings:yourinfo"
             Read-Host "Press [Enter] when finished with MSA sign-in to proceed..."
         }
+
+        Write-Host ""
+        Write-Host "Recommended Browser & Password Manager Setup:" -ForegroundColor Cyan
+        Write-Host "  1. Set your preferred browser (e.g., Chrome) as Default Browser and sign into your profile."
+        Write-Host "  2. Sign into your password manager extension (e.g., Bitwarden)."
+        Write-Host "  3. Restore previous open tabs via: chrome://history/syncedTabs ('Open all')." -ForegroundColor Green
+        $ChromeExe = "C:\Program Files\Google\Chrome\Application\chrome.exe"
+        if (Test-Path $ChromeExe) {
+            Start-Process -FilePath $ChromeExe -ArgumentList "--make-default-browser", "chrome://history/syncedTabs" -ErrorAction SilentlyContinue
+        }
+        Read-Host "Press [Enter] when your browser and password manager are ready..."
     } else {
         Write-ReglazeInfo "MSA interactive connection bypassed (Simulation: $IsSimulated, NonInteractive: $NonInteractive)."
     }
@@ -192,6 +216,23 @@ if (-not $HydrateState.msa_connected) {
     Save-HydrationCheckpoint "msa_connected"
 } else {
     Write-ReglazeSuccess "Microsoft Account connection already validated."
+}
+
+# Install User-Scope WinGet Packages (user-packages.json) if present
+$UserPackagesFile = if ($ResolvedPayload) { Join-Path $ResolvedPayload "user-packages.json" } else { $null }
+if ($UserPackagesFile -and (Test-Path -LiteralPath $UserPackagesFile)) {
+    $UserPackages = Read-JsonArray $UserPackagesFile
+    if ($UserPackages.Count -gt 0 -and -not $IsSimulated) {
+        Write-ReglazeInfo "Installing $($UserPackages.Count) user-scoped WinGet package(s)..."
+        foreach ($UPkg in $UserPackages) {
+            $PkgId = $UPkg.PackageId
+            $PkgSrc = if ($UPkg.Source) { $UPkg.Source } else { "winget" }
+            & winget install --id $PkgId --source $PkgSrc --exact --scope user --silent --accept-package-agreements --accept-source-agreements --disable-interactivity
+            if ($LASTEXITCODE -ne 0 -and $LASTEXITCODE -ne -1978335189) {
+                & winget install --id $PkgId --source $PkgSrc --exact --silent --accept-package-agreements --accept-source-agreements --disable-interactivity
+            }
+        }
+    }
 }
 
 # =============================================================================
@@ -286,6 +327,12 @@ if (-not $HydrateState.cloud_mount_verified) {
             foreach ($SDir in $GDriveSetup.SyncDirectories) {
                 $SrcPath = $SDir.SourceComputerStreamPath
                 $DstPath = $SDir.LocalPath
+                $LocalRoot = if ($DstPath) { ([System.IO.Path]::GetPathRoot($DstPath)).TrimEnd('\') } else { "" }
+                $IsPreserved = ($SDir.IsOnPreservedDisk -eq $true) -or ($LocalRoot -and $LocalRoot -inotlike "C*")
+                if ($IsPreserved -and (Test-Path -LiteralPath $DstPath)) {
+                    Write-ReglazeInfo "Synced folder '$($SDir.CloudFolder)' ($DstPath) resides on a preserved drive; skipping cloud file copy."
+                    continue
+                }
                 if ($SrcPath -and (Test-Path -LiteralPath $SrcPath)) {
                     Write-ReglazeInfo "Migrating ($($GDriveSetup.MigrationMode)) synced folder '$($SDir.CloudFolder)' from '$SrcPath' -> '$DstPath'..."
                     if ($GDriveSetup.MigrationMode -eq "move") {
@@ -346,12 +393,25 @@ if (-not $HydrateState.steam_library_connected) {
         Write-ReglazeInfo "Simulated Steam sign-in and library discovery."
     }
 
+    # Re-register non-Steam shortcuts if present
+    $ShortcutsPayloadFile = if ($ResolvedPayload) { Join-Path $ResolvedPayload "steam-shortcuts.json" } else { $null }
+    if ($ShortcutsPayloadFile -and (Test-Path -LiteralPath $ShortcutsPayloadFile) -and (Get-Command Register-SteamShortcuts -ErrorAction SilentlyContinue)) {
+        try {
+            $SavedShortcuts = Read-JsonArray $ShortcutsPayloadFile
+            if ($SavedShortcuts.Count -gt 0) {
+                Register-SteamShortcuts -Shortcuts $SavedShortcuts -Simulation:$IsSimulated | Out-Null
+            }
+        } catch {}
+    }
+
     # 2. Check games declared in Blueprint across all detected libraries
     if ($Blueprint -and $Blueprint.applications) {
         $Catalog = Get-ReglazeCatalog -RepoRoot $RepoRoot
         $AppProperties = @($Blueprint.applications.PSObject.Properties)
+        $UninstalledGames = @()
         foreach ($Prop in $AppProperties) {
             $AppId = $Prop.Name
+            if ($AppId -eq "custom") { continue }
             $AppConfig = $Prop.Value
 
             # Check if installation explicitly disabled
@@ -373,18 +433,38 @@ if (-not $HydrateState.steam_library_connected) {
             }
 
             if ($SteamId) {
-                $InstallResult = Install-SteamGame -SteamId $SteamId -GameName $GameName -Libraries $DiscoveredLibraries -Simulation:$IsSimulated -Live:(-not $IsSimulated)
-                if ($InstallResult.Status -eq "AlreadyInstalled") {
-                    Write-ReglazeSuccess "Steam Game '$GameName' (ID: $SteamId): Found in reattached library ($($InstallResult.LibraryPath))"
-                } elseif ($InstallResult.Status -eq "Simulated") {
+                $Check = Test-SteamGameInLibraries -SteamId $SteamId -GameName $GameName -Libraries $DiscoveredLibraries
+                if ($Check.IsInstalled) {
+                    Write-ReglazeSuccess "Steam Game '$GameName' (ID: $SteamId): Found in reattached library ($($Check.LibraryPath))"
+                } elseif ($IsSimulated) {
                     Write-ReglazeInfo "Steam Game '$GameName' (ID: $SteamId): Not in any library. Simulated fresh install into default library."
-                } elseif ($InstallResult.Status -eq "Triggered") {
-                    Write-ReglazeSuccess "Steam Game '$GameName' (ID: $SteamId): Triggered fresh installation into default library."
-                    if (-not $IsSimulated -and -not $NonInteractive) {
-                        Read-Host "Press [Enter] after confirming the install prompt in Steam to queue the next game"
-                    }
                 } else {
-                    Write-ReglazeWarning "Steam Game '$GameName' (ID: $SteamId): $($InstallResult.Message)"
+                    $UninstalledGames += [PSCustomObject]@{ SteamId = $SteamId; GameName = $GameName }
+                }
+            }
+        }
+
+        if ($UninstalledGames.Count -gt 0 -and -not $IsSimulated) {
+            Write-Host ""
+            Write-Host "Steam games configured for installation ($($UninstalledGames.Count)):" -ForegroundColor Cyan
+            foreach ($UGame in $UninstalledGames) {
+                Write-Host "  * $($UGame.GameName) (AppID: $($UGame.SteamId))" -ForegroundColor White
+            }
+            Write-Host ""
+            Write-Host "Recommended Bulk Installation via Steam Collection:" -ForegroundColor Yellow
+            Write-Host "  1. In Steam's left navigation panel, open your Base Install collection (or create one)."
+            Write-Host "  2. Select all games in the collection (click first game, Shift+Click last game)."
+            Write-Host "  3. Right-click the selection and click 'Install selected...' to install them in bulk."
+            Write-Host ""
+            if (-not $NonInteractive) {
+                $UseLinks = Read-Host "If you haven't set up a collection, would you like to iterate over these apps and launch steam://install links individually? (y/N)"
+                if ($UseLinks -match '^[Yy]') {
+                    for ($i = 0; $i -lt $UninstalledGames.Count; $i++) {
+                        $UGame = $UninstalledGames[$i]
+                        $InstallResult = Install-SteamGame -SteamId $UGame.SteamId -GameName $UGame.GameName -Libraries $DiscoveredLibraries -Simulation:$false -Live:$true
+                        Write-ReglazeSuccess "Steam Game '$($UGame.GameName)' (ID: $($UGame.SteamId)): $($InstallResult.Message)"
+                        Read-Host "Press [Enter] after confirming the install prompt in Steam to continue"
+                    }
                 }
             }
         }
@@ -408,7 +488,7 @@ if (-not (Test-Path -LiteralPath $CatalogFile)) {
 $ManualApps = @()
 if (Test-Path -LiteralPath $CatalogFile) {
     try {
-        $CatalogData = Get-Content -Raw -LiteralPath $CatalogFile -Encoding UTF8 | ConvertFrom-Json
+        $CatalogData = Read-JsonArray $CatalogFile
         $ManualApps = @($CatalogData | Where-Object { $_.install -and $_.install.method -eq "manual" })
     } catch {
         Write-ReglazeWarning "Could not parse applications.json for manual installations: $($_.Exception.Message)"
@@ -475,7 +555,7 @@ if (-not $HydrateState.user_junctions_established) {
             $ActiveCount = @($UserResults | Where-Object { $_.Success }).Count
             Write-ReglazeSuccess "Created $ActiveCount user directory junction(s) via manifest."
         } else {
-            $RawJuncs = Get-Content -Raw -LiteralPath $JunctionsManifest -Encoding UTF8 | ConvertFrom-Json
+            $RawJuncs = Read-JsonArray $JunctionsManifest
             $UserEntries = @($RawJuncs | Where-Object { $_.Scope -eq "user" })
             Write-ReglazeInfo "Simulated $($UserEntries.Count) user-scope directory junction(s)."
         }

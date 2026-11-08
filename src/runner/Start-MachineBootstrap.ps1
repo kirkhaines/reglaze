@@ -78,7 +78,7 @@ function Initialize-ReglazePSWindowsUpdate {
     Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force -ForceBootstrap -Scope CurrentUser -ErrorAction SilentlyContinue | Out-Null
     Set-PSRepository -Name 'PSGallery' -InstallationPolicy Trusted -ErrorAction SilentlyContinue
     if (-not (Get-Module -Name PSWindowsUpdate -ListAvailable -ErrorAction SilentlyContinue)) {
-        Install-Module -Name PSWindowsUpdate -Force -SkipPublisherCheck -AcceptLicense -Confirm:$false -Scope CurrentUser -ErrorAction Stop
+        Install-Module -Name PSWindowsUpdate -Force -SkipPublisherCheck -Confirm:$false -Scope CurrentUser -ErrorAction SilentlyContinue
     }
     $ModCandidates = @(Get-Module -Name PSWindowsUpdate -ListAvailable -ErrorAction SilentlyContinue)
     foreach ($Mod in $ModCandidates) {
@@ -104,7 +104,7 @@ function Initialize-ReglazePSWindowsUpdate {
             }
         }
     }
-    Import-Module -Name PSWindowsUpdate -Force -DisableNameChecking -Global -ErrorAction Stop
+    Import-Module -Name PSWindowsUpdate -Force -DisableNameChecking -Global -ErrorAction SilentlyContinue
 }
 
 # Resolve Payload Directory
@@ -309,9 +309,13 @@ if ($GDriveSetupFile -and (Test-Path -LiteralPath $GDriveSetupFile)) {
             $DriveFsPolicyPath = "HKLM:\SOFTWARE\Policies\Google\DriveFS"
             if (-not (Test-Path $DriveFsPolicyPath)) { New-Item -Path $DriveFsPolicyPath -Force | Out-Null }
             Set-ItemProperty -Path $DriveFsPolicyPath -Name "DefaultMountPoint" -Value $MountLetter -Type String -Force
-            Write-ReglazeSuccess "Configured Google Drive DefaultMountPoint policy to '${MountLetter}:'."
+            Set-ItemProperty -Path $DriveFsPolicyPath -Name "DisablePromptToBackupDevices" -Value 1 -Type DWord -Force
+            Set-ItemProperty -Path $DriveFsPolicyPath -Name "DisableDesktopBackup" -Value 1 -Type DWord -Force
+            Set-ItemProperty -Path $DriveFsPolicyPath -Name "DisableDocumentsBackup" -Value 1 -Type DWord -Force
+            Set-ItemProperty -Path $DriveFsPolicyPath -Name "DisablePicturesBackup" -Value 1 -Type DWord -Force
+            Write-ReglazeSuccess "Configured Google Drive enterprise policies (DefaultMountPoint='${MountLetter}:', backup prompts suppressed)."
         } else {
-            Write-ReglazeInfo "[SIMULATION] Would set HKLM:\SOFTWARE\Policies\Google\DriveFS DefaultMountPoint = '$MountLetter'."
+            Write-ReglazeInfo "[SIMULATION] Would set HKLM:\SOFTWARE\Policies\Google\DriveFS DefaultMountPoint = '$MountLetter' and suppress backup wizard prompts."
         }
     } catch {
         Write-ReglazeWarning "Could not apply Google Drive DefaultMountPoint policy: $($_.Exception.Message)"
@@ -339,7 +343,7 @@ if ($DscManifest -and (Test-Path -LiteralPath $DscManifest)) {
             try {
                 Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force -ForceBootstrap -Scope CurrentUser -ErrorAction SilentlyContinue | Out-Null
                 Set-PSRepository -Name 'PSGallery' -InstallationPolicy Trusted -ErrorAction SilentlyContinue
-                Install-Module -Name Microsoft.WinGet.Client -Force -SkipPublisherCheck -AcceptLicense -Confirm:$false -Scope CurrentUser -ErrorAction Stop
+                Install-Module -Name Microsoft.WinGet.Client -Force -SkipPublisherCheck -Confirm:$false -Scope CurrentUser -ErrorAction Stop
                 Import-Module -Name Microsoft.WinGet.Client -Force -ErrorAction SilentlyContinue
                 Repair-WinGetPackageManager -AllUsers -Force -Latest -ErrorAction Stop
             } catch {
@@ -361,38 +365,12 @@ if ($DscManifest -and (Test-Path -LiteralPath $DscManifest)) {
         foreach ($WsDir in @("$env:LOCALAPPDATA\Packages\Microsoft.DesktopAppInstaller_8wekyb3d8bbwe\LocalState", "$env:LOCALAPPDATA\Microsoft\WinGet\Settings")) {
             try {
                 if (-not (Test-Path $WsDir)) { New-Item -ItemType Directory -Path $WsDir -Force | Out-Null }
-                '{"installBehavior":{"preferences":{"scope":"machine"}}}' | Set-Content -Path (Join-Path $WsDir "settings.json") -Encoding UTF8 -Force
+                '{"installBehavior":{"preferences":{"scope":"machine"}},"experimentalFeatures":{"configuration":true}}' | Set-Content -Path (Join-Path $WsDir "settings.json") -Encoding UTF8 -Force
             } catch {}
         }
-        Write-ReglazeInfo "Pre-enabling WinGet configuration agreements and experimental subsystem..."
-        & winget configure enable 2>&1 | Out-Null
+        Write-ReglazeInfo "Enabling WinGet DSC configuration feature..."
+        & winget configure --enable 2>&1 | Out-Null
         & winget configure --enable --accept-configuration-agreements 2>&1 | Out-Null
-
-        $DscText = Get-Content -Raw -LiteralPath $DscManifest -ErrorAction SilentlyContinue
-        if ($DscText) {
-            $PkgMatches = [regex]::Matches($DscText, 'id:\s*"([^"]+)"\s*\r?\n\s*source:\s*(\S+)')
-            foreach ($Match in $PkgMatches) {
-                $PkgId = $Match.Groups[1].Value
-                $PkgSource = $Match.Groups[2].Value
-                if ($PkgSource -eq "winget") {
-                    for ($Attempt = 1; $Attempt -le 2; $Attempt++) {
-                        if ($Attempt -gt 1) {
-                            Write-ReglazeWarning "Retrying package installation for $PkgId (Attempt $Attempt of 2)..."
-                            Start-Sleep -Seconds 5
-                        }
-                        Write-ReglazeInfo "Installing machine-wide package: $PkgId (--scope machine, attempt $Attempt/2)..."
-                        & winget install --id $PkgId --source $PkgSource --scope machine --silent --accept-package-agreements --accept-source-agreements --disable-interactivity
-                        if ($LASTEXITCODE -eq 0 -or $LASTEXITCODE -eq -1978335189) {
-                            break
-                        }
-                        & winget install --id $PkgId --source $PkgSource --silent --accept-package-agreements --accept-source-agreements --disable-interactivity
-                        if ($LASTEXITCODE -eq 0 -or $LASTEXITCODE -eq -1978335189) {
-                            break
-                        }
-                    }
-                }
-            }
-        }
 
         for ($DscAttempt = 1; $DscAttempt -le 2; $DscAttempt++) {
             if ($DscAttempt -gt 1) {
@@ -403,6 +381,23 @@ if ($DscManifest -and (Test-Path -LiteralPath $DscManifest)) {
             & winget configure --file $DscManifest --accept-configuration-agreements --disable-interactivity
             if ($LASTEXITCODE -eq 0) {
                 break
+            }
+        }
+
+        $DscText = Get-Content -Raw -LiteralPath $DscManifest -ErrorAction SilentlyContinue
+        if ($DscText) {
+            $PkgMatches = [regex]::Matches($DscText, 'id:\s*"([^"]+)"\s*\r?\n\s*source:\s*(\S+)')
+            foreach ($Match in $PkgMatches) {
+                $PkgId = $Match.Groups[1].Value
+                $PkgSource = $Match.Groups[2].Value
+                if ($PkgSource -eq "winget") {
+                    $ListOut = & winget list --id $PkgId --exact --accept-source-agreements 2>&1
+                    if ($LASTEXITCODE -eq 0 -and ($ListOut -join "`n") -match [regex]::Escape($PkgId)) {
+                        continue
+                    }
+                    Write-ReglazeInfo "Installing / verifying machine package: $PkgId (--scope machine)..."
+                    & winget install --id $PkgId --source $PkgSource --exact --scope machine --silent --accept-package-agreements --accept-source-agreements --disable-interactivity
+                }
             }
         }
         Write-ReglazeSuccess "WinGet DSC machine application deployment complete."
@@ -513,25 +508,26 @@ $HydrateScriptPath = if ($ResolvedPayload) { Join-Path $ResolvedPayload "hydrate
 
 if (-not $IsSimulated) {
     try {
-        # 1. Register in RunOnce for primary user session
-        $HydrateCmd = "powershell.exe -ExecutionPolicy Bypass -File `"$HydrateScriptPath`""
-        Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce" -Name "ReglazeHydrate" -Value $HydrateCmd -ErrorAction SilentlyContinue
+        # Ensure hydrate.ps1 is NOT auto-launched via RunOnce so the user can inspect bootstrap before launching desktop shortcut
+        Remove-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce" -Name "ReglazeHydrate" -ErrorAction SilentlyContinue
 
-        # 2. Place desktop shortcut on Public Desktop
+        # Place desktop shortcut on Public Desktop
         $WshShell = New-Object -ComObject WScript.Shell
         $PublicDesktop = [Environment]::GetFolderPath([Environment+SpecialFolder]::CommonDesktopDirectory)
         if (-not $PublicDesktop) { $PublicDesktop = "C:\Users\Public\Desktop" }
-        $ShortcutPath = Join-Path $PublicDesktop "Resume Reglaze Setup.lnk"
-        $Shortcut = $WshShell.CreateShortcut($ShortcutPath)
-        $Shortcut.TargetPath = "powershell.exe"
-        $Shortcut.Arguments = "-ExecutionPolicy Bypass -NoExit -File `"$HydrateScriptPath`""
-        $Shortcut.IconLocation = "shell32.dll,238"
-        $Shortcut.Description = "Resume Reglaze User Hydration Wizard"
-        $Shortcut.Save()
+        foreach ($ShortcutName in @("Reglaze Hydration.lnk", "Resume Reglaze Setup.lnk")) {
+            $ShortcutPath = Join-Path $PublicDesktop $ShortcutName
+            $Shortcut = $WshShell.CreateShortcut($ShortcutPath)
+            $Shortcut.TargetPath = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
+            $Shortcut.Arguments = "-NoProfile -ExecutionPolicy Bypass -NoExit -File `"$HydrateScriptPath`""
+            $Shortcut.IconLocation = "shell32.dll,238"
+            $Shortcut.Description = "Launch Reglaze User Hydration Wizard"
+            $Shortcut.Save()
+        }
 
-        Write-ReglazeSuccess "Staged user hydration in RunOnce and created Public Desktop shortcut: $ShortcutPath"
+        Write-ReglazeSuccess "Created Public Desktop shortcut for Phase 5 User Hydration: $PublicDesktop\Reglaze Hydration.lnk"
     } catch {
-        Write-ReglazeWarning "Could not stage user hydration RunOnce / shortcut: $($_.Exception.Message)"
+        Write-ReglazeWarning "Could not stage user hydration shortcut: $($_.Exception.Message)"
     }
 } else {
     Write-ReglazeInfo "Staging Phase 5 User Hydration simulated."

@@ -1,9 +1,10 @@
-{
+﻿{
     "app_id":  "beat_saber",
     "name":  "Beat Saber",
     "website":  "https://beatsaber.com",
     "install":  {
                     "method":  "steam",
+                    "scope":  null,
                     "winget_id":  null,
                     "steam_id":  620980,
                     "download_url":  null,

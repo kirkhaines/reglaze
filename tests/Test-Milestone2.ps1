@@ -483,8 +483,8 @@ applications:
     $DscResult = Build-WinGetDSCManifest -Blueprint $DscBlueprint -RepoRoot $RepoRoot -OutputPath $DscOut
     $DscContent = Get-Content -Raw $DscOut
 
-    Assert-Test -Name "12. WinGet DSC: compiles valid DSC YAML schema with expected package entries" `
-        -Condition ($DscContent -match "Spotify\.Spotify" -and $DscContent -match "Python\.Python\.3\.12" -and $DscContent -match "Custom\.Package")
+    Assert-Test -Name "12. WinGet DSC: compiles machine packages into DSC YAML and segregates user-scoped apps (Spotify) into UserPackages" `
+        -Condition ($DscContent -notmatch "Spotify\.Spotify" -and ($DscResult.UserPackages.PackageId -contains "Spotify.Spotify") -and $DscContent -match "Python\.Python\.3\.12" -and $DscContent -match "Custom\.Package")
 
     Assert-Test -Name "13. WinGet DSC: assigns msstore source to Microsoft Store IDs (NVIDIA App)" `
         -Condition ($DscContent -match 'id: "XP8CLZL93F5Z4P"[\s\S]*?source: msstore')
@@ -595,7 +595,7 @@ applications:
     Assert-Test -Name "19b. Payload: renders Google Drive setup template payload with target mount, source computer, and DO/DO NOT sync instructions" `
         -Condition (
             $GDrivePayload.StreamMountPoint -eq "E:" -and
-            $GDrivePayload.SourceComputerName -eq "TESTPC" -and
+            $GDrivePayload.SourceComputerName -eq "My Computer" -and
             $GDrivePayload.MigrationMode -eq "copy" -and
             ($GDrivePayload.RenderedInstructions -join ' ') -notmatch '\{\{' -and
             ($GDrivePayload.RenderedInstructions -join ' ') -match 'DO NOT select' -and
@@ -612,16 +612,19 @@ applications:
     # -------------------------------------------------------------------------
     $E2EMedia = Join-Path $TestDir "media_e2e"
     $CompileRes = Invoke-ReglazeCompilation -ConfigFile $ValidYamlFile -DistDir $E2EMedia -AuditReferencePath $null -BypassValidation:$false
-    Assert-Test -Name "21. End-to-End Compile: generates media tree with autounattend.xml and staged DiskMatch tools" `
+    Assert-Test -Name "21. End-to-End Compile: generates media tree with autounattend.xml, reglaze.tag sentinel, and staged DiskMatch tools" `
         -Condition (
             $CompileRes.Status -eq "Success" -and
             (Test-Path (Join-Path $E2EMedia "autounattend.xml")) -and
+            (Test-Path (Join-Path $E2EMedia "Reglaze\reglaze.tag")) -and
+            (Test-Path (Join-Path $E2EMedia "Reglaze\payload\reglaze.tag")) -and
             (Test-Path (Join-Path $E2EMedia "Reglaze\DiskMatch.vbs")) -and
             (Test-Path (Join-Path $E2EMedia "Reglaze\protect-disks.cmd")) -and
             (Test-Path (Join-Path $E2EMedia "Reglaze\DiskMatch.ps1")) -and
             (Test-Path (Join-Path $E2EMedia "Reglaze\prepare-target-disk.cmd")) -and
             (Test-Path (Join-Path $E2EMedia "Reglaze\prepare-target-disk.vbs")) -and
-            (Test-Path (Join-Path $E2EMedia "Reglaze\payload\bootstrap.ps1"))
+            (Test-Path (Join-Path $E2EMedia "Reglaze\payload\bootstrap.ps1")) -and
+            (Test-Path (Join-Path $E2EMedia "Reglaze\payload\user-packages.json"))
         )
 
     # -------------------------------------------------------------------------
@@ -984,27 +987,34 @@ applications:
         $GenBootstrapRaw -match 'C:\\Reglaze\\bootstrap\.log' -and
         $GenBootstrapRaw -match 'Initialize-PSWindowsUpdate' -and
         $GenBootstrapRaw -match '-SkipPublisherCheck' -and
+        $GenBootstrapRaw -notmatch '-AcceptLicense' -and
         $GenBootstrapRaw -match 'TrustedPublisher' -and
         $GenBootstrapRaw -match 'Import-Module -Name PSWindowsUpdate -Force -DisableNameChecking -Global' -and
         $GenBootstrapRaw -match 'bcdboot\.exe C:\\Windows /s' -and
         $GenBootstrapRaw -match 'Microsoft\.DesktopAppInstaller_\*_x64__8wekyb3d8bbwe\\winget\.exe' -and
         $GenBootstrapRaw -match 'Repair-WinGetPackageManager' -and
         $GenBootstrapRaw -match 'https://aka\.ms/getwinget' -and
-        $GenBootstrapRaw -match 'winget configure enable' -and
+        $GenBootstrapRaw -match 'configure --enable' -and
         $GenBootstrapRaw -match '--scope machine' -and
-        $GenBootstrapRaw -match 'Retrying package installation for' -and
+        $GenBootstrapRaw -match 'Add-DeferredUserPackage' -and
+        $GenBootstrapRaw -match 'DisablePromptToBackupDevices' -and
+        $GenBootstrapRaw -match 'DisableDesktopBackup' -and
         $GenBootstrapRaw -notmatch 'UserShellFolders' -and
-        $GenBootstrapRaw -match '-ExecutionPolicy Bypass -NoExit -File'
+        $GenBootstrapRaw -match '-NoProfile -ExecutionPolicy Bypass -NoExit -File'
     )
     $HydrateChecks = (
         $GenHydrateRaw -match 'Start-Transcript -Path \$TranscriptFile' -and
         $GenHydrateRaw -match 'C:\\Reglaze\\hydrate\.log' -and
+        $GenHydrateRaw -match 'function Read-JsonArray' -and
+        $GenHydrateRaw -match 'chrome://history/syncedTabs' -and
+        $GenHydrateRaw -match 'user-packages\.json' -and
         $GenHydrateRaw -match 'Add-AppxPackage -RegisterByFamilyName -MainPackage Microsoft\.DesktopAppInstaller_8wekyb3d8bbwe' -and
         $GenHydrateRaw -match 'WHAT TO DO / WHAT NOT TO DO DURING GOOGLE DRIVE SETUP' -and
         $GenHydrateRaw -match '\$\{Target\}:' -and
         $GenHydrateRaw -match '\$\{Link\}:' -and
         $GenHydrateRaw -match 'UserShellFolders' -and
         $GenHydrateRaw -match '\$UninstalledGames' -and
+        $GenHydrateRaw -match 'Recommended Bulk Installation via Steam Collection' -and
         $GenHydrateRaw -match 'Press \[Enter\] after confirming the install prompt in Steam'
     )
 

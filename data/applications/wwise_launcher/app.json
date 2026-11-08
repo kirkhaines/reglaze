@@ -4,14 +4,18 @@
     "name":  "Wwise Launcher",
     "website":  "https://www.audiokinetic.com/en/products/wwise",
     "install":  {
-                    "method":  "winget",
-                    "winget_id":  "Audiokinetic.WwiseLauncher",
+                    "method":  "manual",
+                    "scope":  "machine",
+                    "winget_id":  null,
                     "steam_id":  null,
-                    "download_url":  null,
+                    "download_url":  "https://www.audiokinetic.com/en/download/",
                     "default_target_directory":  null,
                     "guide_file":  null,
                     "post_install_script":  null,
-                    "instructions":  []
+                    "instructions":  [
+                        "Download the Wwise Launcher installer from Audiokinetic (requires login).",
+                        "Run the installer to install Wwise Launcher and sign in to manage Wwise SDK versions."
+                    ]
                 },
     "directories":  [
                         {

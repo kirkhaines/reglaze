@@ -1,10 +1,11 @@
-{
+﻿{
     "$schema":  "../_schema.json",
     "app_id":  "visual_studio",
     "name":  "Visual Studio 2022 Community",
     "website":  "https://visualstudio.microsoft.com/",
     "install":  {
                     "method":  "winget",
+                    "scope":  "machine",
                     "winget_id":  "Microsoft.VisualStudio.2022.Community",
                     "steam_id":  null,
                     "download_url":  null,

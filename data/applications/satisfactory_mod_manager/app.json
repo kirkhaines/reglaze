@@ -5,10 +5,11 @@
     "website":  "https://ficsit.app",
     "install":  {
                     "method":  "winget",
+                    "scope":  "user",
                     "winget_id":  "SatisfactoryModding.SatisfactoryModManager",
                     "steam_id":  null,
                     "download_url":  null,
-                    "default_target_directory":  null,
+                    "default_target_directory":  "%LOCALAPPDATA%\\Programs\\Satisfactory Mod Manager",
                     "guide_file":  null,
                     "post_install_script":  null,
                     "instructions":  []

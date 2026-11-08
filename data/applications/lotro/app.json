@@ -1,9 +1,10 @@
-{
+﻿{
     "app_id":  "lotro",
     "name":  "The Lord of the Rings Online",
     "website":  "https://www.lotro.com",
     "install":  {
                     "method":  "winget",
+                    "scope":  "machine",
                     "winget_id":  "StandingStoneGames.TheLordoftheRingsOnline",
                     "steam_id":  212500,
                     "download_url":  null,

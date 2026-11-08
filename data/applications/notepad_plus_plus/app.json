@@ -1,9 +1,10 @@
-{
+﻿{
     "app_id":  "notepad_plus_plus",
     "name":  "Notepad++",
     "website":  "https://notepad-plus-plus.org",
     "install":  {
                     "method":  "winget",
+                    "scope":  "machine",
                     "winget_id":  "Notepad++.Notepad++",
                     "steam_id":  null,
                     "download_url":  null,
