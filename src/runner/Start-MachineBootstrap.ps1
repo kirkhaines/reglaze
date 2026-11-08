@@ -418,14 +418,14 @@ if ($DscManifest -and (Test-Path -LiteralPath $DscManifest)) {
 #   wsl.exe --status; wsl.exe --list --verbose
 # [HITL-LAST-INPUT]: wsl.exe --status; wsl.exe --list --verbose (2026-10-21)
 # [HITL-LAST-RESULT]: Default Distribution: Ubuntu, Default Version: 2, status reported cleanly.
-# [HITL-PATTERN]: wsl.exe --install -d <distro> --no-launch
-# [HITL-AVOID]: Launching interactive distro setup during unattended LocalAdmin phase
+# [HITL-PATTERN]: wsl.exe --install --no-distribution (distro installation is user-scoped and runs in Start-UserHydration.ps1)
+# [HITL-AVOID]: Installing WSL distros during LocalAdmin bootstrap (registers distro under LocalAdmin instead of primary user)
 # =============================================================================
-Write-ReglazeStep "Step 5/9: Staging WSL2 Base Subsystem & Linux Distribution..."
+Write-ReglazeStep "Step 5/9: Staging Machine-Scope WSL2 Subsystem Kernel (--no-distribution)..."
 if (-not $IsSimulated) {
     try {
-        & wsl.exe --install -d Ubuntu --no-launch 2>&1 | Out-Null
-        Write-ReglazeSuccess "WSL2 and Ubuntu staged successfully."
+        & wsl.exe --install --no-distribution 2>&1 | Out-Null
+        Write-ReglazeSuccess "WSL2 machine-scope subsystem staged successfully (distro install deferred to user hydration)."
     } catch {
         Write-ReglazeWarning "WSL2 staging returned: $($_.Exception.Message)"
     }

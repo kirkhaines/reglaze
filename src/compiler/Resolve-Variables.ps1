@@ -75,6 +75,17 @@ function Get-BlueprintVariables {
     }
     $VarMap["STEAM_LIBRARY"] = $VarMap["STEAM_DIR"]
 
+    # 4c. Relocated User Shell Folders (e.g., %DOCUMENTS% when redirected to D:\Users\<user>\Documents)
+    $RedirectedDocuments = $null
+    if ($Blueprint.storage -and $Blueprint.storage.user_shell_folders -and $Blueprint.storage.user_shell_folders.documents) {
+        $RedirectedDocuments = [string]$Blueprint.storage.user_shell_folders.documents
+    } elseif ($Blueprint.windows_settings -and $Blueprint.windows_settings.user_shell_folders -and $Blueprint.windows_settings.user_shell_folders.documents) {
+        $RedirectedDocuments = [string]$Blueprint.windows_settings.user_shell_folders.documents
+    }
+    if (-not [string]::IsNullOrWhiteSpace($RedirectedDocuments)) {
+        $VarMap["DOCUMENTS"] = $RedirectedDocuments
+    }
+
     # 5. Custom Blueprint Variables (e.g. GAMES_DIR, STEAM_DIR)
     if ($Blueprint.variables) {
         $CustomVars = $Blueprint.variables
@@ -91,7 +102,7 @@ function Get-BlueprintVariables {
         if ($VarProps -contains "USER_DIR" -and $VarMap.ContainsKey("USER_DIR")) {
             $UDir = $VarMap["USER_DIR"].TrimEnd('\')
             if (-not ($VarProps -contains "USERPROFILE")) { $VarMap["USERPROFILE"] = $UDir }
-            if (-not ($VarProps -contains "DOCUMENTS"))   { $VarMap["DOCUMENTS"] = "$UDir\Documents" }
+            if (-not ($VarProps -contains "DOCUMENTS") -and [string]::IsNullOrWhiteSpace($RedirectedDocuments)) { $VarMap["DOCUMENTS"] = "$UDir\Documents" }
             if (-not ($VarProps -contains "APPDATA"))     { $VarMap["APPDATA"] = "$UDir\AppData\Roaming" }
             if (-not ($VarProps -contains "LOCALAPPDATA")){ $VarMap["LOCALAPPDATA"] = "$UDir\AppData\Local" }
         }

@@ -134,13 +134,26 @@ fi
             return $Result
         }
 
-        # Check if distribution is installed
+        # Check if distribution is installed for the current user; if not, install it (--no-launch)
         $DistroList = & wsl.exe --list --quiet 2>&1
-        $DistroClean = $DistroList | ForEach-Object { ($_ -replace "`0", "").Trim() } | Where-Object { $_ -ne "" }
+        $DistroClean = @($DistroList | ForEach-Object { ($_ -replace "`0", "").Trim() } | Where-Object { $_ -ne "" })
         if ($DistroClean -notcontains $Distro) {
-            $Result.Status = "Skipped"
-            $Result.Message = "WSL2 distribution '$Distro' is not installed or registered."
-            return $Result
+            & wsl.exe --install -d $Distro --no-launch 2>&1 | Out-Null
+            $DistroListAfter = & wsl.exe --list --quiet 2>&1
+            $DistroCleanAfter = @($DistroListAfter | ForEach-Object { ($_ -replace "`0", "").Trim() } | Where-Object { $_ -ne "" })
+            if ($DistroCleanAfter -notcontains $Distro) {
+                $LauncherExe = ($Distro -replace '[^a-zA-Z0-9]', '').ToLower() + ".exe"
+                if (Get-Command $LauncherExe -ErrorAction SilentlyContinue) {
+                    & $LauncherExe install --root 2>&1 | Out-Null
+                    $DistroListAfter = & wsl.exe --list --quiet 2>&1
+                    $DistroCleanAfter = @($DistroListAfter | ForEach-Object { ($_ -replace "`0", "").Trim() } | Where-Object { $_ -ne "" })
+                }
+            }
+            if ($DistroCleanAfter -notcontains $Distro) {
+                $Result.Status = "Skipped"
+                $Result.Message = "WSL2 distribution '$Distro' could not be installed or registered."
+                return $Result
+            }
         }
 
         # Execute provisioning script as root
@@ -158,8 +171,9 @@ fi
         $Process.WaitForExit()
 
         if ($Process.ExitCode -eq 0) {
+            & wsl.exe --terminate $Distro 2>$null | Out-Null
             $Result.Status = "Success"
-            $Result.Message = "Configured root user '$WSLUser', wsl.conf, and packages for '$Distro'."
+            $Result.Message = "Installed and configured user '$WSLUser', wsl.conf, and packages for '$Distro'."
         } else {
             $Result.Status = "Failed"
             $Result.Message = "WSL2 configuration exited with code $($Process.ExitCode): $StdErr"

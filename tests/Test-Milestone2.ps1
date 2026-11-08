@@ -1000,6 +1000,8 @@ applications:
         $GenBootstrapRaw -match 'DisablePromptToBackupDevices' -and
         $GenBootstrapRaw -match 'DisableDesktopBackup' -and
         $GenBootstrapRaw -notmatch 'UserShellFolders' -and
+        $GenBootstrapRaw -match 'wsl\.exe --install --no-distribution' -and
+        $GenBootstrapRaw -notmatch 'wsl\.exe --install -d' -and
         $GenBootstrapRaw -match '-NoProfile -ExecutionPolicy Bypass -NoExit -File'
     )
     $HydrateChecks = (
@@ -1015,7 +1017,9 @@ applications:
         $GenHydrateRaw -match 'UserShellFolders' -and
         $GenHydrateRaw -match '\$UninstalledGames' -and
         $GenHydrateRaw -match 'Recommended Bulk Installation via Steam Collection' -and
-        $GenHydrateRaw -match 'Press \[Enter\] after confirming the install prompt in Steam'
+        $GenHydrateRaw -match 'Press \[Enter\] after confirming the install prompt in Steam' -and
+        $GenHydrateRaw -match 'wsl\.exe --install -d \$WslDistroName --no-launch' -and
+        $GenHydrateRaw -match 'wsl\.exe --terminate \$WslDistroName'
     )
 
     Assert-Test -Name "30. Payload Scripts: bootstrap.ps1 & hydrate.ps1 pass PowerShell AST validation with 0 errors and include all bare-metal fixes" `

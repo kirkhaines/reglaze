@@ -487,13 +487,16 @@ function Build-ReglazePayload {
                 foreach ($Dir in $CatalogApp.directories) {
                     $ConfiguredTarget = $null
                     $ConfiguredLink = $null
+                    $IsOmitted = $false
 
                     if ($AppConfig.directories -and $AppConfig.directories.$($Dir.id)) {
                         $DirConf = $AppConfig.directories.$($Dir.id)
                         $ConfiguredTarget = $DirConf.target
                         if ($DirConf.link) { $ConfiguredLink = $DirConf.link }
+                        if ($DirConf.override -and $DirConf.override.action -eq "omit") { $IsOmitted = $true }
                     }
 
+                    if ($IsOmitted) { continue }
                     if (-not $ConfiguredLink) {
                         $ConfiguredLink = $Dir.default_path
                     }
@@ -1178,11 +1181,11 @@ if (Test-Path `$DscManifest) {
 }
 Save-BootstrapStep "winget_dsc"
 
-# 5. Stage WSL2 Base Kernel and Ubuntu Distro
-Write-Host "[5/9] Staging WSL2 subsystem and Ubuntu distribution..." -ForegroundColor Yellow
+# 5. Stage Machine-Scope WSL2 Subsystem Kernel (Distros are user-scoped and installed in hydrate.ps1)
+Write-Host "[5/9] Staging machine-scope WSL2 subsystem kernel (--no-distribution)..." -ForegroundColor Yellow
 try {
-    & wsl.exe --install -d Ubuntu --no-launch
-    Write-Host "   WSL2 staged successfully." -ForegroundColor Green
+    & wsl.exe --install --no-distribution
+    Write-Host "   WSL2 subsystem kernel staged successfully (distro installation deferred to user hydration)." -ForegroundColor Green
 } catch {
     Write-Warning "   WSL2 staging returned: `$(`$_.Exception.Message)"
 }
@@ -1330,6 +1333,7 @@ Restart-Computer -Force
     # =========================================================================
     $StreamSentinel = if ($VarMap.ContainsKey("STREAM")) { $VarMap["STREAM"] } else { "E:\My Drive" }
     $DataDrive = if ($VarMap.ContainsKey("DATA_DRIVE")) { $VarMap["DATA_DRIVE"] } else { "D:" }
+    $WslDistro = if ($Blueprint.wsl2 -and $Blueprint.wsl2.distro) { [string]$Blueprint.wsl2.distro } else { "Ubuntu" }
 
     $HydrateScript = @"
 <#
@@ -1578,7 +1582,7 @@ if (`$State.CompletedSteps -notcontains "user_packages") {
             `$PkgName = if (`$UPkg.AppName) { `$UPkg.AppName } else { `$PkgId }
             Write-Host " [`$(`$idx + 1)/`$(`$UserPackages.Count)] Installing user package: `$PkgName (`$PkgId)..." -ForegroundColor Cyan
             `$ListCheck = & winget list --id `$PkgId --exact --accept-source-agreements 2>&1
-            if (`$LASTEXITCODE -eq 0 -and (`$ListCheck -join "`n") -match [regex]::Escape(`$PkgId)) {
+            if (`$LASTEXITCODE -eq 0 -and (`$ListCheck -join "``n") -match [regex]::Escape(`$PkgId)) {
                 Write-Host "   [OK] `$PkgId is already installed." -ForegroundColor Green
                 continue
             }
@@ -1703,7 +1707,7 @@ if (`$State.CompletedSteps -notcontains "cloud_mount") {
                     `$ResolvedCompDir = `$SubCompDirs[0].FullName
                     Write-Host "Auto-detected Google Drive computer folder: `$ResolvedCompDir" -ForegroundColor Cyan
                 } elseif (`$SubCompDirs.Count -gt 1) {
-                    Write-Host "Available Google Drive computer backup folders under `$OtherComputersRoot:" -ForegroundColor Cyan
+                    Write-Host "Available Google Drive computer backup folders under `${OtherComputersRoot}:" -ForegroundColor Cyan
                     for (`$ci = 0; `$ci -lt `$SubCompDirs.Count; `$ci++) {
                         Write-Host "  [`$(`$ci + 1)] `$(`$SubCompDirs[`$ci].Name)"
                     }
@@ -2043,34 +2047,45 @@ if (`$State.CompletedSteps -notcontains "user_junctions") {
     Write-Host "[V] Step 9: User Junctions and Shell Pins (Already completed)" -ForegroundColor DarkGray
 }
 
-# --- STEP 10: Non-Interactive WSL2 Setup ---
+# --- STEP 10: User-Scope WSL2 Distro Installation & Non-Interactive Setup ---
 if (`$State.CompletedSteps -notcontains "wsl_setup") {
     Write-Host ""
     Write-Host "--------------------------------------------------------------------------------" -ForegroundColor Yellow
-    Write-Host "  STEP 10: Non-Interactive WSL2 Subsystem Configuration" -ForegroundColor Yellow
+    Write-Host "  STEP 10: User-Scope WSL2 Distribution Installation & Provisioning" -ForegroundColor Yellow
     Write-Host "--------------------------------------------------------------------------------" -ForegroundColor Yellow
+    `$WslDistroName = "$WslDistro"
     `$WslScript = Join-Path `$PayloadDir "setup-wsl.sh"
     if (Test-Path `$WslScript) {
         try {
-            # Verify whether Ubuntu distribution is registered (wsl.exe --list outputs UTF-16LE)
-            `$DistroListRaw = (& wsl.exe --list --quiet 2>`$null) -join "`n"
-            `$DistroListClean = `$DistroListRaw -replace "`0", ""
-            if (`$DistroListClean -notmatch '(?m)^Ubuntu') {
-                Write-Host "Ubuntu distribution not yet registered (WSL kernel required reboot after Phase 4). Installing Ubuntu now..." -ForegroundColor Yellow
-                & wsl.exe --install -d Ubuntu --no-launch
-                # Initialize root filesystem if Ubuntu Appx launcher is available
-                `$UbuntuAppx = Get-Command ubuntu.exe -ErrorAction SilentlyContinue
-                if (`$UbuntuAppx) {
-                    & ubuntu.exe install --root 2>&1 | Out-Null
+            # WSL distributions are user-scoped; install inside the primary user session if not yet registered
+            `$DistroListRaw = (& wsl.exe --list --quiet 2>`$null) -join "``n"
+            `$DistroListClean = `$DistroListRaw -replace "``0", ""
+            `$EscDistro = [regex]::Escape(`$WslDistroName)
+            if (`$DistroListClean -notmatch "(?m)^`$EscDistro\s*\z" -and `$DistroListClean -notmatch "(?m)^`$EscDistro\r?\n") {
+                Write-Host "Installing user-scope WSL2 distribution '`$WslDistroName' (--no-launch)..." -ForegroundColor Cyan
+                & wsl.exe --install -d `$WslDistroName --no-launch
+                # Re-check registration; if legacy Store Appx launcher is present and rootfs not yet unpacked, initialize as root
+                `$DistroListAfter = ((& wsl.exe --list --quiet 2>`$null) -join "``n") -replace "``0", ""
+                if (`$DistroListAfter -notmatch "(?m)^`$EscDistro\s*\z" -and `$DistroListAfter -notmatch "(?m)^`$EscDistro\r?\n") {
+                    `$LauncherName = (`$WslDistroName -replace '[^a-zA-Z0-9]', '').ToLower() + ".exe"
+                    `$DistroAppx = Get-Command `$LauncherName -ErrorAction SilentlyContinue
+                    if (`$DistroAppx) {
+                        Write-Host "Initializing '`$WslDistroName' root filesystem via `$LauncherName..." -ForegroundColor Cyan
+                        & `$LauncherName install --root 2>&1 | Out-Null
+                    }
                 }
+            } else {
+                Write-Host " [V] WSL2 distribution '`$WslDistroName' is already registered for user." -ForegroundColor Green
             }
-            Write-Host "Executing non-interactive setup-wsl.sh inside Ubuntu distro..."
-            & wsl.exe -d Ubuntu -u root -- /bin/bash /mnt/c/Reglaze/payload/setup-wsl.sh
+            Write-Host "Executing non-interactive setup-wsl.sh inside '`$WslDistroName' distro as root..."
+            & wsl.exe -d `$WslDistroName -u root -- /bin/bash -c "tr -d '\r' < /mnt/c/Reglaze/payload/setup-wsl.sh | /bin/bash"
             if (`$LASTEXITCODE -eq 0) {
-                Write-Host "[SUCCESS] WSL2 environment provisioned!" -ForegroundColor Green
+                # Restart WSL instance so /etc/wsl.conf (default user & systemd=true) takes effect immediately
+                & wsl.exe --terminate `$WslDistroName 2>`$null | Out-Null
+                Write-Host "[SUCCESS] WSL2 distribution '`$WslDistroName' installed and provisioned!" -ForegroundColor Green
                 Save-HydrateState "wsl_setup"
             } else {
-                Write-Warning "WSL setup script exited with code `$LASTEXITCODE. Ensure Ubuntu is installed ('wsl --install -d Ubuntu') and re-run hydration."
+                Write-Warning "WSL setup script exited with code `$LASTEXITCODE. Ensure '`$WslDistroName' is installed ('wsl --install -d `$WslDistroName') and re-run hydration."
             }
         } catch {
             Write-Warning "WSL setup encountered an error: `$(`$_.Exception.Message)"
