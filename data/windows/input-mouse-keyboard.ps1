@@ -2,7 +2,11 @@
 .SYNOPSIS
     Configures Windows Mouse speed/precision and Keyboard repeat rate/delay/layouts.
 .DESCRIPTION
-    Applies user hardware input preferences from windows_settings.input in reglaze.yaml.
+    SCOPE: Phase 5 (User Scope - HKCU:\Control Panel\Mouse, HKCU:\Control Panel\Keyboard,
+           HKCU:\Control Panel\Desktop, Set-WinUserLanguageList)
+    ORDERING DEPENDENCY:
+      - Must run in the primary user's interactive session (Phase 5 Step 1) so pointer precision,
+        mouse sensitivity, and keyboard layout are immediately comfortable before interactive sign-ins.
 #>
 [CmdletBinding()]
 param (

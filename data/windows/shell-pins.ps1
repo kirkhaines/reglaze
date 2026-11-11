@@ -3,8 +3,14 @@
     Configures declarative File Explorer Quick Access pins, Taskbar pins, Start Menu pins,
     per-application user PATH additions, and preserved Steam library registrations.
 .DESCRIPTION
-    Intended to run after applications and directory junctions are provisioned (Phase 5)
-    so target folders and executables exist on disk.
+    SCOPE & ORDERING DEPENDENCY:
+      - Section 3 (StartMenuPinnedApps) writes to HKLM:\SOFTWARE\Microsoft\PolicyManager\current\device\Start
+        (ConfigureStartPins). Because HKLM PolicyManager requires elevation and is evaluated when initializing
+        a user's Start Menu, StartMenuPinnedApps should be invoked in Phase 4 (Machine Bootstrap under LocalAdmin).
+      - Sections 1, 2, 4, and 5 (QuickAccessPins, TaskbarPinnedApps, AppPathEntries, SteamLibraries) operate
+        in User Scope (HKCU / %APPDATA% / %LOCALAPPDATA%) and depend on installed applications, mounted cloud
+        storage (%STREAM%), relocated User Shell Folders, Steam installation, and User Directory Junctions.
+        Therefore, they must run in Phase 5 (hydrate.ps1 Step 9) AFTER applications and junctions exist on disk.
 #>
 [CmdletBinding()]
 param (

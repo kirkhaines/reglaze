@@ -2,12 +2,20 @@
 .SYNOPSIS
     Configures Windows File Explorer preferences, context menu style, and relocated User Shell Folders.
 .DESCRIPTION
+    SCOPE: Phase 5 (User Scope - HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer)
+    ORDERING DEPENDENCY:
+      - Must run in the primary user's interactive session (never under LocalAdmin in Phase 4, which
+        would only mutate LocalAdmin's HKCU hive and risk pre-creating uninitialized user folders).
+      - Must run AFTER preserved drives are verified (Step 0) so secondary drive targets (e.g., D:\Downloads)
+        exist, and BEFORE user directory junctions (Step 9) so Known Folder paths are established first.
+
     Applies developer-friendly Explorer settings:
     - Show hidden files and folders
     - Show file name extensions
     - Open File Explorer to "This PC" or "Quick Access"
     - Hide frequent folders / recent files from Quick Access
     - Restore Windows 10 Classic Right-Click Context Menu
+    - Simple vs. Normal/Advanced File Sharing (SharingWizardOn in HKCU)
     - Relocate Known User Shell Folders (Desktop, Documents, Downloads, Pictures, Music, Videos)
 #>
 [CmdletBinding()]
@@ -18,6 +26,7 @@ param (
     [string]$LaunchTo = "ThisPC",
     [switch]$HideRecentFromQuickAccess = $true,
     [switch]$ClassicContextMenu = $false,
+    [Nullable[bool]]$SharingWizardEnabled = $null,
     [PSCustomObject]$UserShellFolders = $null
 )
 
@@ -64,6 +73,12 @@ if ($ClassicContextMenu) {
     if (Test-Path -LiteralPath $ParentClsid) {
         Remove-Item -LiteralPath $ParentClsid -Recurse -Force -ErrorAction SilentlyContinue
     }
+}
+
+# 5b. Simple vs. Normal (Advanced) File Sharing (HKCU SharingWizardOn)
+if ($null -ne $SharingWizardEnabled) {
+    Set-ItemProperty -Path $AdvancedKey -Name "SharingWizardOn" -Value $(if ($SharingWizardEnabled) { 1 } else { 0 }) -Type DWord
+    Write-Host "  [+] File Sharing Mode: $(if ($SharingWizardEnabled) { 'Simple (Sharing Wizard)' } else { 'Normal / Advanced Sharing' })" -ForegroundColor Green
 }
 
 # 6. Relocated Windows User Shell Folders

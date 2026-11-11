@@ -37,16 +37,16 @@ Modern software engineering treats servers and compute runtimes as disposable in
 (Hardware, Keys & Disks Reference)  │
                                     │◄─── [ data/applications.json ]
                                     ▼     (Reference Catalog & Safety Rules)
-                                    [ Phase 1: User Blueprint Review & Edit ]
-                                    │ (User customizes, validates app mappings,
-                                    │  and configures LocalAdmin + standard user)
+                                    [ Phase 1: User Blueprint Review & Data Staging ]
+                                    │ (Customize reglaze.yaml, validate mappings, and run
+                                    │  migration-plan / migrate to stage non-junctioned data)
                                     ▼
                                     [ Phase 2: Media & Artifact Generation ]
-                                    │ (reglaze compiler / media creator)
+                                    │ (reglaze compile / reglaze media)
                 ┌───────────────────┼───────────────────┐
                 ▼                   ▼                   ▼
-        autounattend.xml   configuration.dsc.yaml   bootstrap.ps1 & setup-wsl.sh
-        (Hands-free WinPE)    (WinGet DSC Apps)    (Junctions, WSL2 & rclone Sync)
+        autounattend.xml   configuration.dsc.yaml   bootstrap.ps1 + hydrate.ps1
+        (Hands-free WinPE)  (Machine WinGet Apps)   (& modular *-helpers.ps1)
                 │                   │                   │
                 └───────────────────┴───────────────────┘
                                     ▼
@@ -55,11 +55,14 @@ Modern software engineering treats servers and compute runtimes as disposable in
                        [ Phase 3: Unattended Install ]
                         (Provisions LocalAdmin & Non-Admin User)
                                     ▼
-                    [ Phase 4: System & App Provisioning ]
+                    [ Phase 4: Machine-Scope Provisioning ]
+                     (LocalAdmin: Drive Letters, BitLocker,
+                      Drivers, Machine Apps & Machine Settings)
                                     ▼
-                      [ Phase 5: State Linking & Tailoring ]
-                        (WSL2 Distro, rclone API Setup,
-                         dev_repos sync, directory junctions)
+                      [ Phase 5: User-Scope Hydration ]
+                        (Standard User: Desktop Theme, Browser +
+                         Password Manager Auth Bootstrap, Cloud Mount,
+                         Steam, Manual Apps, Junctions & WSL2)
                                     ▼
                             [ Fully Restored ]
 
@@ -69,13 +72,29 @@ Modern software engineering treats servers and compute runtimes as disposable in
 
 | Phase | Component | Responsibility |
 | :--- | :--- | :--- |
-| **0. Pre-Flight Audit** | `audit.ps1` | Scans the active PC prior to wiping (requires `-Profile <name>` when no existing `reglaze.yaml` is present). Extracts BitLocker recovery keys, Windows activation/license info, physical disk and partition GUIDs/IDs, active directory junctions, installed WinGet packages, Git remotes, and environment variables. Records the computer-to-profile mapping in `profile-computers.json`, correlates detected software against `data/applications.json`, and emits `audit-reference.json` alongside an initial, scaffolded `reglaze.yaml`. |
-| **1. User Blueprint Review & Validation** | Manual / Config Editor & Compiler | The user inspects and edits `reglaze.yaml` against `audit-reference.json`. The `reglaze` compiler validates declared applications against `data/applications.json`: any directory marked `needs_mapping: true` must be mapped to its recommended target type (`streaming` vs `sync`), or the user must provide an explicit `override` with a rationale. Uncataloged apps and custom folders are declared under `custom:`. |
-| **1b. Pre-Install Data Staging (`migration-plan` & `migrate`)** | `Invoke-PreInstallMigration.ps1` | For existing Windows installs that do not yet use directory junctions, `reglaze migration-plan` inspects the edited `reglaze.yaml` and `audit-reference.json` to emit a draft `migration-manifest.yaml` with measured byte sizes and file counts. After the user reviews/edits the manifest to disable or remove any unneeded directories, `reglaze migrate` creates all target sync/streaming/data directories and transfers files using multi-threaded `robocopy.exe` (`/MT:2 /E /XO`) so the targets are ready before wiping the OS. |
-| **2. Media Generation** | `Compile-Reglaze.ps1` & `Build-Media.ps1` | Compiles `reglaze.yaml` into tool-specific artifacts (`autounattend.xml`, `configuration.dsc.yaml`, `bootstrap.ps1`, `setup-wsl.sh`) and packages them onto bootable installation media (USB or ISO) with required drivers and bootstrap scripts. |
-| **3. Unattended Install** | `autounattend.xml` | Boots from media, identifies target OS disk via multi-factor hardware attributes (Serial Number, Bus Type, Model) to protect secondary drives, partitions and applies Windows image, provisions dedicated `LocalAdmin` with temporary setup auto-logon, and creates the primary standard user account (`local_to_msa`). |
-| **4. Machine Provisioning & BitLocker Recovery** | `bootstrap.ps1`, `Set-ReglazeDriveLetters.ps1` & WinGet DSC | Auto-logs into `LocalAdmin`. Reconciles preserved drive letters via a 3-phase atomic swap (clearing unconfigured fixed drives and moving removable media out of reserved letters), installs WHQL storage/chipset drivers, halts with a safe power-down checkpoint (`Stop-Computer`) if required preserved disks were physically disconnected during install so the user can reconnect them, unlocks preserved BitLocker volumes by hardware identity (`SerialNumber` + `PartitionGuid`), sets Google Drive `DefaultMountPoint` policy, provisions packages via WinGet DSC, pre-stages WSL2, and purges auto-logon credentials before rebooting. |
-| **5. User & Application Hydration** | `hydrate.ps1` & `Setup-Wsl.ps1` | Primary standard user signs in interactively (connecting to MSA). Staged human-in-the-loop steps: cloud storage authentication (Google Drive sentinel mount) &rarr; Steam GUI sign-in (instantly detects pre-existing `%DATA_DRIVE%` library) &rarr; manual app install guidance (e.g. OutFox). Establishes directory junctions, executes non-interactive WSL2 root user provisioning with `rclone bisync`, clones `dev_repos`, and runs post-flight health verification. |
+| **0. Pre-Flight Audit** | `Invoke-Audit.ps1` | Scans your existing PC prior to wiping (requires `-Profile <name>` when no existing `reglaze.yaml` is present). Extracts BitLocker recovery keys, Windows activation/license info, physical disk and partition GUIDs/IDs, active directory junctions, installed WinGet packages, non-WinGet ARP software, Steam libraries, and Windows preferences. Records the computer-to-profile mapping in `profile-computers.json`, correlates detected software against `data/applications.json`, and emits `audit-reference.json` alongside an initial, scaffolded `reglaze.yaml`. |
+| **1. Blueprint Review & Validation** | Config Editor & `Test-ReglazeSchema.ps1` | You inspect and edit `reglaze.yaml` against `audit-reference.json`. The `reglaze` compiler validates declared applications against `data/applications.json` (and any personal `<ConfigDir>/applications.json`): any directory marked `needs_mapping: true` must be mapped to its recommended target type (`streaming` vs `sync`), or you must provide an explicit `override` with a rationale. Uncataloged apps and custom folders are declared under `custom:`. |
+| **1b. Pre-Install Data Staging (`migration-plan` & `migrate`)** | `Invoke-PreInstallMigration.ps1` | For existing Windows installs that do not yet use directory junctions, `reglaze migration-plan` inspects your edited `reglaze.yaml` and `audit-reference.json` to emit a draft `migration-manifest.yaml` with measured byte sizes and file counts. After you review/edit the manifest to disable or remove any unneeded directories, `reglaze migrate` creates all target sync/streaming/data directories and transfers files using multi-threaded `robocopy.exe` (`/MT:2 /E /XO`) so your persistent targets are ready before wiping the OS. |
+| **2. Media Generation** | `Compile-Reglaze.ps1` & `Build-Media.ps1` | Compiles `reglaze.yaml` into deployment artifacts (`autounattend.xml`, `configuration.dsc.yaml`, `bootstrap.ps1`, `bootstrap-helpers.ps1`, `hydrate.ps1`, `hydrate-helpers.ps1`, `setup-wsl.sh`) and packages them onto a bootable UEFI installation USB drive with required drivers and offline bootstrap packages. |
+| **3. Unattended Install** | `autounattend.xml` | Boots from USB media, identifies the target OS disk via multi-factor hardware attributes (Serial Number, Bus Type, Model) to protect secondary drives, partitions and applies the Windows image, provisions the dedicated `LocalAdmin` account with temporary setup auto-logon, and creates your primary standard user account (`local_to_msa`). |
+| **4. Machine-Scope Provisioning (`LocalAdmin`)** | `bootstrap.ps1` & `bootstrap-helpers.ps1` | Auto-logs into `LocalAdmin`. Reconciles preserved drive letters via a 3-phase atomic swap, halts with a safe power-down checkpoint (`Stop-Computer`) if required preserved disks were physically disconnected during install so you can reconnect them, unlocks preserved BitLocker volumes by hardware identity (`SerialNumber` + `PartitionGuid`), installs WHQL storage/display/network drivers and updates, applies **machine-scoped** Windows settings (`HKLM:` policies, power plan, network profile, camera privacy), installs **machine-wide** WinGet packages (recording any user-installer packages to `deferred-user-packages.json`), pre-stages WSL2 kernel features (`wsl --install --no-distribution`) and the `Reglaze Hydration` desktop launcher, and purges auto-logon credentials before rebooting. |
+| **5. User-Scope Hydration (`primary_user`)** | `hydrate.ps1` & `hydrate-helpers.ps1` | You sign into your primary standard user account and launch **Reglaze Hydration** from the desktop shortcut. Applies **user-scoped** `HKCU:` Windows preferences (Dark Mode, Taskbar, Explorer, Input, Audio/Display), guides you through the **Foundational Browser & Password Manager Authentication Bootstrap**, relocates Windows shell folders (`Documents`, `Pictures`, `Desktop`) to `%DATA_DRIVE%`, installs user-scoped WinGet packages, mounts Google Drive and restores staged local sync folders, connects Steam to existing `%DATA_DRIVE%` libraries, walks through any manual app installers, creates `%USERPROFILE%` directory junctions (and re-applies any cloud-hosted wallpaper), and provisions your WSL2 Linux distribution (`setup-wsl.sh`), `rclone bisync`, and `dev_repos`. |
+
+### Execution Scope & Step Dependency Model
+
+A core design rule in `reglaze` is the strict separation between **Phase 4 (Machine Scope under `LocalAdmin`)** and **Phase 5 (User Scope under `primary_user`)**, paired with deterministic step ordering inside each script:
+
+1. **Why User Actions Must Wait Until Phase 5 (`hydrate.ps1`)**:
+   * **Per-User Registry Isolation (`HKCU:`)**: During Phase 4, Windows runs under the temporary `LocalAdmin` session. Writing Explorer, Taskbar, Theme, Input, or User `PATH` settings to `HKCU:` during Phase 4 only modifies `LocalAdmin`'s disposable hive.
+   * **Preventing `.000` User Profile Collisions**: If Phase 4 pre-creates any folder or junction inside `C:\Users\<PrimaryUser>` before that user signs into Windows interactively for the first time, the Windows User Profile Service (`ProfSvc`) treats the existing directory as a collision and creates a suffixed profile directory (`C:\Users\<PrimaryUser>.000`) on first login.
+   * **User-Scoped Installers & WSL Distros**: Per-user installers (`%LOCALAPPDATA%\Programs`) and WSL2 Linux distributions (`HKCU:\Software\Microsoft\Windows\CurrentVersion\Lxss`) register exclusively under the active user context. Phase 4 installs only machine-wide WSL kernel features (`wsl --install --no-distribution`) and automatically defers any WinGet package that rejects `--scope machine` (`-1978335216`) or admin context (`-1978335146`) to Phase 5 via `deferred-user-packages.json`.
+2. **Highlighted Step: Browser & Password Manager Foundational Authentication Bootstrap**:
+   * Setting up your primary browser (e.g., Chrome) and password manager extension (e.g., Bitwarden) is **not treated like an ordinary application install**.
+   * While the browser binary is installed machine-wide in Phase 4, **Step 2 of `hydrate.ps1` (`Invoke-BrowserAuthBootstrap`)** runs immediately after basic desktop personalization and *before* Google Drive, Steam, or manual software setups.
+   * It registers your browser as the default handler, prompts you to sign into your browser profile and unlock your password manager extension, and opens `chrome://history/syncedTabs` so your credentials, passkeys, and active sessions are ready in a single click for every subsequent OAuth flow (Google Drive sign-in, Steam Guard, and manual app downloads).
+3. **Strict Intra-Phase Ordering**:
+   * Every step in `bootstrap.ps1`, `bootstrap-helpers.ps1`, `hydrate.ps1`, and `hydrate-helpers.ps1` includes inline `[DEPENDENCY & ORDERING]` comments explaining why it runs where it does (for example: preserved drive letters and BitLocker auto-unlock must complete before `%DATA_DRIVE%` junctions or Steam libraries are accessed; Google Drive must mount `%STREAM%` and user apps must finish installing before `Invoke-UserJunctionsAndPins` replaces empty default `%APPDATA%` folders with junctions).
+   * See [Section 5.1 of `docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md#51-cross-phase--intra-phase-dependency-architecture) for the complete dependency flowcharts and step-by-step precondition/postcondition tables.
 
 ---
 
@@ -83,53 +102,80 @@ Modern software engineering treats servers and compute runtimes as disposable in
 
 ```text
 reglaze/
+├── bin/
+│   └── reglaze.ps1                      # Main CLI entry point (audit, validate, migration-plan, migrate, compile, media, test)
 ├── data/
-│   ├── applications/           # Modular application catalog (one directory per app_id)
-│   │   ├── _schema.json        # Formal schema for individual app manifests
-│   │   ├── _template/          # Starter template (app.json, guide.md, post-install.ps1)
-│   │   ├── adobe_lightroom/    # app.json
-│   │   ├── outfox/             # app.json, guide.md, post-install.ps1
-│   │   ├── vscode/             # app.json, post-install.ps1
+│   ├── applications/                    # Modular application catalog (one directory per app_id)
+│   │   ├── _schema.json                 # Formal schema for individual app manifests
+│   │   ├── _template/                   # Starter template (app.json, guide.md, post-install.ps1)
+│   │   ├── adobe_lightroom/             # app.json
+│   │   ├── outfox/                      # app.json, guide.md, post-install.ps1
+│   │   ├── vscode/                      # app.json, post-install.ps1
 │   │   └── ... (beat_saber, steam, lotro, git, etc.)
-│   ├── windows/                # Modular Windows settings & preference scripts
-│   │   ├── explorer-folder-options.ps1  # Hidden files, extensions, launch to This PC
-│   │   ├── taskbar-system-tray.ps1      # Taskbar alignment, search mode, tray icons
-│   │   ├── performance-power.ps1        # Power plan and display/sleep timeouts
-│   │   └── audit-windows-settings.ps1   # Audits existing system settings
-│   └── applications.json       # Cached/merged application catalog index
+│   ├── windows/                         # Modular Windows settings scripts (explicit Phase 4 Machine vs. Phase 5 User scope)
+│   │   ├── explorer-folder-options.ps1  # [Phase 5 User] Hidden files, extensions, launch to This PC, SharingWizardOn, UserShellFolders
+│   │   ├── taskbar-system-tray.ps1      # [Phase 5 User] Taskbar alignment, search mode, widgets, tray icons
+│   │   ├── performance-power.ps1        # [Phase 4 Machine & Phase 5 User] Power scheme, LongPaths, ssh-agent, ClipboardHistory, DefaultTerminal
+│   │   ├── theme-personalization.ps1    # [Phase 5 User] Dark/Light mode, accent color, desktop wallpaper
+│   │   ├── input-mouse-keyboard.ps1     # [Phase 5 User] Mouse acceleration, NumLock, accessibility hotkeys
+│   │   ├── audio-display.ps1            # [Phase 4 Machine & Phase 5 User] Camera PnP, HAGS, CoreAudio endpoints, Game Mode, display layout
+│   │   ├── network-firewall.ps1         # [Phase 4 Machine] Active network profile category (Private/Public)
+│   │   ├── shell-pins.ps1               # [Phase 4 Machine & Phase 5 User] Start layout policy, Quick Access pins, User PATH, Steam libraries
+│   │   └── audit-windows-settings.ps1   # [Phase 0 Audit] Captures existing system & user settings
+│   └── applications.json                # Merged/cached application catalog index
 ├── docs/
-│   ├── ARCHITECTURE.md         # Comprehensive system architecture & technical design
-│   └── TESTING_GUIDE.md        # Walkthrough for third-party testers
+│   └── ARCHITECTURE.md                  # Comprehensive system architecture, security model & dependency matrices
 ├── schemas/
-│   └── reglaze.schema.json     # JSON Schema validating the agnostic spec
+│   └── reglaze.schema.json              # JSON Schema validating reglaze.yaml
 ├── src/
-│   ├── audit/                  # Pre-wipe discovery scripts
-│   │   ├── Audit-BitLocker.ps1 # Extracts BitLocker recovery keys
-│   │   ├── Audit-Licensing.ps1 # Gathers Windows edition, digital license & product keys
-│   │   ├── Audit-Storage.ps1   # Enumerates physical disks, partition GUIDs & drive letters
-│   │   ├── Audit-Apps.ps1      # Discovers WinGet packages AND Add/Remove Programs (ARP)
-│   │   ├── Audit-Junctions.ps1 # Discovers existing directory junctions and reparse points
-│   │   └── Invoke-Audit.ps1    # Emits audit-reference.json & scaffolded reglaze.yaml
-│   ├── compiler/               # Translates reglaze.yaml -> tool outputs
-│   │   ├── generators/
-│   │   │   ├── UnattendGenerator.ps1
-│   │   │   ├── WinGetDscGenerator.ps1
-│   │   │   ├── BootstrapGenerator.ps1
-│   │   │   ├── WslGenerator.ps1
-│   │   │   └── RcloneGenerator.ps1
-│   │   └── Compile-Reglaze.ps1
-│   ├── media/                  # Media creation utilities
-│   │   └── Build-Media.ps1     # Native UEFI bootable USB builder with DISM split
-│   └── runtime/                # Scripts packaged onto the deployment media
-│       ├── Install-Junctions.ps1
-│       ├── Test-CloudMount.ps1
-│       ├── Setup-Wsl.ps1
-│       ├── hydrate.ps1         # User hydration runner with checkpoint resumption
-│       └── sync-dev-repos.sh   # Background rclone bisync script inside WSL2
+│   ├── audit/                           # Phase 0 Pre-wipe discovery scripts
+│   │   ├── Audit-Hardware.ps1           # Physical disks, serial numbers, partition GUIDs & hardware
+│   │   ├── Audit-Licensing.ps1          # Windows edition, digital license, product keys & user identity
+│   │   ├── Audit-BitLocker.ps1          # Extracts BitLocker protectors & recovery passwords
+│   │   ├── Audit-Apps.ps1               # Discovers WinGet packages, ARP software & Steam libraries
+│   │   ├── Audit-Junctions.ps1          # Discovers existing NTFS directory junctions & reparse points
+│   │   ├── Audit-StorageProviders.ps1   # Discovers cloud streaming mounts & local sync roots
+│   │   ├── Audit-Network.ps1            # Discovers network adapters, sharing mode & firewall rules
+│   │   ├── Audit-Wsl.ps1                # Discovers WSL2 distributions & installed packages
+│   │   ├── Invoke-AdminAudit.ps1        # Elevated helper for BitLocker & hardware queries
+│   │   └── Invoke-Audit.ps1             # Phase 0 Audit CLI orchestrator
+│   ├── common/                          # Shared subsystems & parsers
+│   │   ├── Catalog.ps1                  # Merges data/applications/ with optional user applications.json
+│   │   ├── ConfigResolver.ps1           # Resolves configuration paths & profile registries
+│   │   ├── GameLibraries.ps1            # Multi-library game discovery & fresh install engine
+│   │   ├── Logging.ps1                  # Structured console & transcript logging
+│   │   └── YamlParser.ps1               # Dependency-free PowerShell YAML parser
+│   ├── compiler/                        # Phase 1 & 2 Compiler & modular script generators
+│   │   ├── Test-ReglazeValidation.ps1   # Schema & storage tier safety validator
+│   │   ├── Resolve-Variables.ps1        # Resolves %STREAM%, %SYNC_<ID>%, %OS_DRIVE%, %DATA_DRIVE%
+│   │   ├── Build-Autounattend.ps1       # Generates hardware-targeted autounattend.xml
+│   │   ├── Build-WinGetDSC.ps1          # Generates configuration.dsc.yaml
+│   │   ├── Build-Payload.ps1            # Orchestrates USB deployment bundle & offline bootstrap caches
+│   │   ├── Build-BootstrapScript.ps1    # Generates Phase 4 bootstrap.ps1 & bootstrap-helpers.ps1
+│   │   ├── Build-HydrateScript.ps1      # Generates Phase 5 hydrate.ps1, hydrate-helpers.ps1 & setup-wsl.sh
+│   │   ├── DiskMatch.ps1 / .vbs         # WinPE dynamic target disk verification & protection
+│   │   └── Compile-Reglaze.ps1          # Phase 2 Compiler CLI orchestrator
+│   ├── linking/                         # NTFS Directory Junction, Drive Letter & Migration engine
+│   │   ├── Invoke-PreInstallMigration.ps1 # Phase 1b migration-manifest.yaml planner & robocopy stager
+│   │   ├── Set-ReglazeDriveLetters.ps1  # 3-phase atomic preserved drive letter reconciliation
+│   │   ├── Unlock-BitLockerVolumes.ps1  # Hardware-matched BitLocker unlock & auto-unlock binding
+│   │   ├── New-DirectoryJunction.ps1    # Idempotent NTFS junction creator
+│   │   ├── Test-ReparsePoint.ps1        # Reparse point target verifier
+│   │   └── Backup-CollisionFolder.ps1   # Non-destructive collision backup helper
+│   ├── media/                           # Phase 2.5 Bootable USB media creation
+│   │   ├── Get-WindowsIso.ps1           # Official Windows ISO discovery & BITS download helper
+│   │   └── Build-Media.ps1              # Native UEFI FAT32 USB builder with DISM split-wim & -UpdateOnly refresh
+│   ├── runner/                          # Phase 4 & 5 runtime orchestration scripts
+│   │   ├── Apply-WindowsSettings.ps1    # Phase-aware Windows settings dispatcher (-Phase Phase4 | Phase5 | All)
+│   │   ├── Start-MachineBootstrap.ps1   # Phase 4 Machine Bootstrap runner
+│   │   └── Start-UserHydration.ps1      # Phase 5 User Hydration runner
+│   └── wsl/                             # WSL2 Linux integration
+│       ├── Initialize-WSLDistro.ps1
+│       └── Sync-WSLRclone.ps1
 ├── examples/
-│   ├── audit-reference.json    # Reference output from pre-flight audit
-│   └── reglaze.yaml            # Complete reference workstation specification
-├── reglaze.yaml                # Your personal system blueprint (git-ignored)
+│   ├── audit-reference.json             # Reference output from pre-flight audit
+│   └── reglaze.yaml                     # Complete reference workstation specification
+├── reglaze.yaml                         # Your personal system blueprint (git-ignored)
 └── README.md
 ```
 
@@ -461,69 +507,98 @@ Windows directory junctions (`mklink /J`) are used to link local application pat
 
 Before wiping an existing installation, `reglaze` runs a non-destructive discovery sweep via `Invoke-Audit.ps1` to produce both `audit-reference.json` (for recovery and verification) and an initial `reglaze.yaml` draft:
 
-* **BitLocker Recovery Keys (`Audit-BitLocker.ps1`)**: Queries all protected volumes using `Get-BitLockerVolume` to capture key protectors and numeric recovery passwords, ensuring auxiliary drives are not permanently locked out post-reinstall.
-* **Licensing & Activation Checks (`Audit-Licensing.ps1`)**: Extracts the current Windows edition, licensing channel (OEM/Retail/Digital License), and partial or full product key details via WMI/SoftwareLicensingService.
-* **Drive & Partition Identification (`Audit-Storage.ps1`)**: Identifies physical drive numbers, serial numbers, models, partition styles (GPT/MBR), partition GUIDs, volumes, and file systems to ensure `autounattend.xml` targets the exact OS drive without risking secondary data drives.
-* **Comprehensive Application Discovery (`Audit-Apps.ps1`)**: Discovers installed software across both **WinGet** (`winget export`) and the Windows **Add/Remove Programs (ARP)** registry hives (64-bit, 32-bit WoW64, and per-user HKCU). Detects manual installers (InnoSetup, NSIS, MSI), de-duplicates against WinGet, and correlates findings against `data/applications/`.
-* **Windows Preferences & System Settings (`audit-windows-settings.ps1`)**: Audits user and system settings (File Explorer folder options, Taskbar alignment and search mode, power schemes and sleep timeouts).
+* **BitLocker Recovery Keys (`Audit-BitLocker.ps1`)**: Queries all protected volumes using `Get-BitLockerVolume` to capture key protectors and numeric recovery passwords, ensuring auxiliary drives are automatically unlocked and never locked out post-reinstall.
+* **Drive, Partition & Hardware Identification (`Audit-Hardware.ps1`)**: Identifies physical drive numbers, serial numbers, models, partition styles (GPT/MBR), partition GUIDs, volumes, and file systems to ensure `autounattend.xml` targets the exact OS drive without risking secondary data drives.
+* **Licensing, Activation & User Identity (`Audit-Licensing.ps1`)**: Extracts the current Windows edition, licensing channel (OEM/Retail/Digital License), partial/full product key details, and current primary user identity.
+* **Comprehensive Application Discovery (`Audit-Apps.ps1`)**: Discovers installed software across **WinGet** (`winget list`), the Windows **Add/Remove Programs (ARP)** registry hives (64-bit, 32-bit WoW64, and per-user `HKCU:`), and **Steam** game libraries (`libraryfolders.vdf` and `appmanifest_*.acf`), correlating findings against `data/applications/`.
+* **Windows Preferences & System Settings (`audit-windows-settings.ps1`)**: Audits user and system settings (File Explorer folder options, user shell folder locations, Taskbar alignment/search/tray icons, power schemes and sleep timeouts, Dark/Light theme, mouse/keyboard preferences, audio/display topology, and network profile category).
 * **Directory Junctions & Reparse Points (`Audit-Junctions.ps1`)**: Scans `%USERPROFILE%`, `%APPDATA%`, and local application directories for existing reparse points (`fsutil reparsepoint query` / `Get-Item | ? LinkType`), cross-referencing findings against `data/applications/`.
-* **Output Artifacts**:
+* **Cloud Storage, Network & WSL Discovery (`Audit-StorageProviders.ps1`, `Audit-Network.ps1`, `Audit-Wsl.ps1`)**: Captures Google Drive streaming mount letters and sync roots, network adapter profiles, and installed WSL2 distributions.
+* **Output Artifacts (`Invoke-Audit.ps1`)**:
   * `audit-reference.json`: Complete dump of hardware IDs, licensing metadata, BitLocker keys, disk partitions, WinGet packages, non-WinGet ARP software, and Windows system preferences.
-  * `reglaze.yaml`: Scaffolded starter blueprint pre-populated with discovered system settings, packages, storage mappings, and suggested junction configurations ready for user editing.
+  * `reglaze.yaml`: Scaffolded starter blueprint pre-populated with discovered system settings, packages, storage mappings, and suggested junction configurations ready for editing.
 
 ---
 
-## 8. Usage Instructions
+## 8. Getting Started & Step-by-Step Usage Guide
 
-1. **Clone the Repo:** Clone `reglaze` to a secondary machine or run inside a test VM (Hyper-V or Proxmox).
-2. **Execute Pre-Flight Audit (Optional on Existing PC):**
-   ```powershell
-   pwsh ./bin/reglaze.ps1 audit -Profile workstation -ConfigDir ./audit-output
-   ```
-   Inspect `audit-output/audit-reference.json` and review the scaffolded `reglaze.yaml`.
-3. **Review & Edit `reglaze.yaml`:**
-   * Review [examples/reglaze.yaml](examples/reglaze.yaml) and [examples/audit-reference.json](examples/audit-reference.json) for reference configurations.
-   * Adjust target disk IDs and secondary preserved drives.
-   * Configure `system.users` with your `LocalAdmin` credentials and primary standard Microsoft Account.
-   * Verify declared applications against [data/applications.json](data/applications.json).
-   * Ensure directories with `needs_mapping: true` have junction targets, or provide inline `overrides`.
-   * Configure `wsl2` distro preferences and Google Drive OAuth API credentials under `storage.api_credentials`.
-4. **Stage Existing User Data Before Wiping (`migration-plan` & `migrate`):**
-   * Generate a draft migration manifest with measured directory sizes and file counts:
-     ```powershell
-     pwsh ./bin/reglaze.ps1 migration-plan -ConfigDir ./audit-output
-     ```
-   * Review and edit `./audit-output/migration-manifest.yaml` (set `enabled: false` or delete any item you do not wish to retain).
-   * Create all required sync/streaming/data target directories and copy existing files using multi-threaded `robocopy.exe`:
-     ```powershell
-     pwsh ./bin/reglaze.ps1 migrate -ConfigDir ./audit-output
-     ```
-5. **Compile Blueprint & Build Bootable USB Media:**
-   ```powershell
-   # Compile declarative blueprint into deployment media artifacts
-   pwsh ./bin/reglaze.ps1 compile -ConfigDir ./audit-output -DistDir ./dist
+### Step 1: Clone `reglaze` & Set Required Environment Variables
+Clone this repository on the Windows PC you want to audit and re-image (or on any machine where you manage your workstation blueprints) and set the local administrator password variable used when compiling deployment media:
 
-   # Create fresh vanilla UEFI bootable USB installer (formats USB, splits install.wim via DISM, injects artifacts; prompts for UAC elevation if needed)
-   pwsh ./bin/reglaze.ps1 media -DistDir ./dist -UsbDrive "E:"
+```powershell
+git clone https://github.com/your-org/reglaze.git
+cd reglaze
 
-   # RAPID ITERATION (seconds instead of minutes):
-   # Once the base Windows installer files are on the USB drive, use -RetainWindowsFiles (alias: -UpdateOnly)
-   # to refresh only autounattend.xml and the \Reglaze tools & payload directory without reformatting or re-copying the ISO:
-   pwsh ./bin/reglaze.ps1 compile -ConfigDir ./audit-output -UsbDrive "E:" -RetainWindowsFiles
-   # Or via media command:
-   pwsh ./bin/reglaze.ps1 media -UsbDrive "E:" -UpdateOnly
-   ```
-6. **Inspect Generated Artifacts (`./dist`) (Optional):**
-   * Check `autounattend.xml` against the target disk setup, partition layout, and dual-user (`LocalAdmin` + standard user) provisioning.
-   * Review `configuration.dsc.yaml` to ensure all package IDs resolve.
-   * Review `bootstrap.ps1` for mount point checks, sync folder verifications, and junction arguments.
-   * Review `setup-wsl.sh` and generated `rclone.conf` for WSL2 dev repo synchronization with injected Google Drive API credentials.
-7. **Deploy & Hydrate:**
-   * Boot target computer from USB installation media.
-   * Windows Setup installs the OS unattended with dedicated `LocalAdmin` and auto-logon.
-   * Phase 4 machine bootstrap reconciles drive letters, unlocks BitLocker volumes, and installs apps via WinGet DSC.
-   * Sign into your standard daily driver account and run hydration:
-     ```powershell
-     pwsh ./bin/reglaze.ps1 hydrate -Config "C:\Reglaze\reglaze.yaml"
-     ```
-8. **Report Issues:** Submit feedback on catalog validations, broken WinGet packages, drive letter race conditions, BitLocker recovery, or API rate limit handling.
+# Set the password for the dedicated LocalAdmin account (used for UAC elevation and Phase 4 setup)
+$env:LOCAL_ADMIN_PASSWORD = "YourStrongLocalAdminPassword!"
+
+# Optional: If using WSL2 rclone sync with your own Google Cloud OAuth 2.0 API project
+$env:GDRIVE_CLIENT_ID = "your-client-id.apps.googleusercontent.com"
+$env:GDRIVE_CLIENT_SECRET = "your-client-secret"
+```
+
+### Step 2: Run the Pre-Flight Audit on Your Existing PC
+Scan your current Windows installation to capture hardware identifiers, disk serial numbers, BitLocker recovery keys, installed applications, and Windows preferences:
+
+```powershell
+pwsh ./bin/reglaze.ps1 audit -Profile workstation -ConfigDir ./my-workstation
+```
+This creates `./my-workstation/audit-reference.json`, `./my-workstation/profile-computers.json`, and a pre-populated `./my-workstation/reglaze.yaml`.
+
+### Step 3: Customize & Validate `reglaze.yaml`
+Open `./my-workstation/reglaze.yaml` and tailor it to your desired setup (refer to [examples/reglaze.yaml](examples/reglaze.yaml) for a full example):
+* **Disks**: Confirm `disks.target_os_disk` points to your OS boot drive and `disks.preserved_disks` lists all secondary data drives (`%DATA_DRIVE%`, etc.) that must remain untouched.
+* **Users**: Verify `system.users.local_admin` and `system.users.primary_user` (your daily standard non-admin user account).
+* **Storage**: Configure your cloud streaming mount (`storage.streaming`, e.g., Google Drive `E:` or `G:`) and local two-way sync folders (`storage.sync`).
+* **Applications & Directory Mappings**: Review the `applications:` block (and optionally generate a personal `./my-workstation/applications.json` using the LLM prompt in Section 5 to promote custom apps). Validate your blueprint at any time with:
+  ```powershell
+  pwsh ./bin/reglaze.ps1 validate -ConfigDir ./my-workstation
+  ```
+
+### Step 4: Stage Existing User Data Before Wiping (`migration-plan` & `migrate`)
+If your current PC has application settings, saves, or catalogs on `C:` that are not yet backed by junctions on your cloud drive or preserved data drive, stage them before wiping:
+
+```powershell
+# 1. Generate a draft migration manifest with measured folder sizes and file counts
+pwsh ./bin/reglaze.ps1 migration-plan -ConfigDir ./my-workstation
+
+# 2. Review ./my-workstation/migration-manifest.yaml (set enabled: false on anything you want to skip)
+
+# 3. Copy enabled folders to their target streaming, sync, and preserved data locations via robocopy
+pwsh ./bin/reglaze.ps1 migrate -ConfigDir ./my-workstation
+```
+
+### Step 5: Compile Blueprint & Create Bootable USB Media
+Compile your blueprint into deployment artifacts (`autounattend.xml`, `configuration.dsc.yaml`, `bootstrap.ps1`, `bootstrap-helpers.ps1`, `hydrate.ps1`, `hydrate-helpers.ps1`, `setup-wsl.sh`) and write them to a USB flash drive:
+
+```powershell
+# Compile blueprint into ./dist and build a full UEFI bootable Windows 11 USB installer on drive E:
+# (Automatically downloads or locates the official Windows 11 ISO, formats FAT32, splits install.wim, and injects payload)
+pwsh ./bin/reglaze.ps1 compile -ConfigDir ./my-workstation -DistDir ./dist -UsbDrive "E:"
+
+# Tip: Updating an existing Reglaze USB drive in seconds
+# If your USB drive already has the base Windows installer files and you only edited reglaze.yaml or scripts,
+# pass -RetainWindowsFiles (or use 'media -UpdateOnly') to refresh autounattend.xml and \Reglaze without re-copying the ISO:
+pwsh ./bin/reglaze.ps1 compile -ConfigDir ./my-workstation -DistDir ./dist -UsbDrive "E:" -RetainWindowsFiles
+```
+
+### Step 6: Boot from USB (Phase 3 Unattended Install & Phase 4 Machine Bootstrap)
+1. Boot your PC from the USB flash drive.
+2. **Phase 3 (Unattended Windows Setup)** automatically verifies the target OS disk by hardware attributes (`SerialNumber`, `BusType`, `Model`), wipes and partitions only the OS disk, installs Windows, creates `LocalAdmin` and your primary user account, and logs into `LocalAdmin`.
+3. **Phase 4 (`C:\Reglaze\payload\bootstrap.ps1`)** starts automatically in the `LocalAdmin` session:
+   * Reconciles preserved drive letters (`D:`, etc.) and unlocks preserved BitLocker volumes using your audited recovery keys.
+   * Installs WHQL storage, display, and network drivers plus Windows Updates.
+   * Applies **machine-scoped** Windows settings (`HKLM:` policies, power scheme, network profile, camera privacy).
+   * Installs **machine-scoped** WinGet applications (automatically deferring any user-only installers to Phase 5) and machine-wide WSL2 kernel features.
+   * Stages the **Reglaze Hydration** shortcut on the desktop, clears `LocalAdmin` auto-logon, and reboots to the Windows sign-in screen.
+
+### Step 7: Sign In & Run User Hydration (Phase 5)
+1. Sign into Windows using your **primary standard user account** (`primary_user`).
+2. Double-click the **Reglaze Hydration** shortcut on your desktop (which launches `C:\Reglaze\payload\hydrate.ps1` and `hydrate-helpers.ps1`):
+   * **Step 1 — User Personalization**: Applies your `HKCU:` desktop preferences immediately (Dark Mode, Taskbar layout, File Explorer options, mouse/keyboard settings, audio/display configuration).
+   * **Step 2 — Foundational Browser & Password Manager Authentication Bootstrap**: Sets your primary browser (e.g., Chrome) as the default browser, launches it so you can sign into your browser profile and unlock your password manager extension (e.g., Bitwarden), and opens `chrome://history/syncedTabs`. Completing this first makes every subsequent login effortless.
+   * **Step 3 & 4 — Shell Folders & User-Scope Apps**: Redirects Windows shell folders (`Documents`, `Pictures`, `Desktop`) to `%DATA_DRIVE%` and installs user-scoped WinGet packages without UAC prompts.
+   * **Step 5 & 6 — Google Drive Mount & Steam Discovery**: Guides you through signing into Google Drive (verifying your `%STREAM%` mount and restoring staged local sync folders) and signing into Steam (automatically reconnecting existing `%DATA_DRIVE%` Steam libraries).
+   * **Step 7 & 8 — Manual Apps & Directory Junctions**: Walks through any manual software installers, links all `%USERPROFILE%` / `%APPDATA%` directory junctions to `%STREAM%`, `%SYNC_<ID>%`, and `%DATA_DRIVE%`, and re-applies your desktop wallpaper if hosted on a cloud drive.
+   * **Step 9 — WSL2 & Developer Repos**: Installs your WSL2 Linux distribution under your user account, runs `setup-wsl.sh`, and configures `rclone bisync` and `dev_repos`.
+3. If you ever close the terminal or reboot mid-hydration, simply double-click **Reglaze Hydration** on the desktop to resume safely from where you left off.

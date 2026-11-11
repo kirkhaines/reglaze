@@ -2,7 +2,13 @@
 .SYNOPSIS
     Configures Windows 11 Theme (Dark/Light mode), Transparency, Accent Color, and Desktop Wallpaper.
 .DESCRIPTION
-    Applies user personalization preferences from windows_settings.theme in reglaze.yaml.
+    SCOPE: Phase 5 (User Scope - HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize,
+           HKCU:\Software\Microsoft\Windows\DWM, HKCU:\Control Panel\Desktop)
+    ORDERING DEPENDENCY:
+      - Must run in the primary user's interactive session (Phase 5).
+      - Runs in Step 1 of hydrate.ps1 for immediate Dark/Light theme and accent colors, and is re-invoked
+        for WallpaperPath after Cloud Mount (Step 6) and User Junctions (Step 9) in case the wallpaper file
+        resides on a cloud-streamed (%STREAM%) or synced (%SYNC_*%) directory.
 #>
 [CmdletBinding()]
 param (

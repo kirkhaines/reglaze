@@ -2,7 +2,14 @@
 .SYNOPSIS
     Configures Default Audio Endpoints (Speakers/Mic), Master Volume, Cameras, Gaming Graphics, and Multi-Monitor Layout.
 .DESCRIPTION
-    Applies audio_and_devices and display preferences from windows_settings in reglaze.yaml.
+    SCOPE: Dual-Scope (Phase 4 Machine Scope + Phase 5 User Scope), controlled via -Scope parameter:
+      - Machine Scope (Phase 4 / LocalAdmin): Disables unused secondary PnP cameras (Disable-PnpDevice)
+        and configures Hardware-Accelerated GPU Scheduling (HKLM:\SYSTEM\CurrentControlSet\Control\GraphicsDrivers).
+        Requires administrator elevation and must run after WHQL drivers are installed (Step 2 in bootstrap.ps1).
+      - User Scope (Phase 5 / primary_user): Configures default CoreAudio endpoints & master volume,
+        Game Mode (HKCU:\Software\Microsoft\GameBar), and multi-monitor spatial positioning/refresh rate
+        (ChangeDisplaySettingsEx). Must run at the start of Phase 5 so multi-monitor layout is comfortable
+        before the user interacts with browser/cloud/Steam sign-in windows.
 #>
 [CmdletBinding()]
 param (
@@ -15,12 +22,15 @@ param (
     [bool]$MasterMuted = $false,
     [bool]$GameModeEnabled = $true,
     [bool]$HardwareGpuScheduling = $true,
-    [PSCustomObject[]]$Monitors = @()
+    [PSCustomObject[]]$Monitors = @(),
+    [ValidateSet("All", "Machine", "User")]
+    [string]$Scope = "All"
 )
 
-Write-Host "Applying Audio Endpoints, Camera, and Display settings..." -ForegroundColor Cyan
+Write-Host "Applying Audio Endpoints, Camera, and Display settings (Scope: $Scope)..." -ForegroundColor Cyan
 
-# 1. Default Audio Endpoints (Speakers & Microphone) and Master Volume via CoreAudio COM
+# 1. Default Audio Endpoints (Speakers & Microphone) and Master Volume via CoreAudio COM (User Scope)
+if ($Scope -in @("All", "User")) {
 try {
     if (-not ("Reglaze.CoreAudioConfig" -as [type])) {
         Add-Type -TypeDefinition @'
@@ -174,9 +184,10 @@ namespace Reglaze {
         Write-Host "  [+] Master Volume: ${MasterVolumePercent}% (Muted: $MasterMuted)" -ForegroundColor Green
     }
 } catch {}
+}
 
-# 2. Disable Unused Secondary Cameras so Preferred Default Camera Takes Precedence
-if ($DisabledCameras -and $DisabledCameras.Count -gt 0 -and (Get-Command "Get-PnpDevice" -ErrorAction SilentlyContinue)) {
+# 2. Disable Unused Secondary Cameras so Preferred Default Camera Takes Precedence (Machine Scope - requires elevation)
+if ($Scope -in @("All", "Machine") -and $DisabledCameras -and $DisabledCameras.Count -gt 0 -and (Get-Command "Get-PnpDevice" -ErrorAction SilentlyContinue)) {
     foreach ($CamName in $DisabledCameras) {
         $CamDevs = @(Get-PnpDevice -Class Camera, Image -ErrorAction SilentlyContinue | Where-Object { $_.FriendlyName -ieq $CamName -and $_.Status -eq "OK" })
         foreach ($Cam in $CamDevs) {
@@ -186,16 +197,21 @@ if ($DisabledCameras -and $DisabledCameras.Count -gt 0 -and (Get-Command "Get-Pn
     }
 }
 
-# 3. Game Mode & Hardware-Accelerated GPU Scheduling
-$GameBarKey = "HKCU:\Software\Microsoft\GameBar"
-if (-not (Test-Path $GameBarKey)) { New-Item -Path $GameBarKey -Force | Out-Null }
-Set-ItemProperty -Path $GameBarKey -Name "AutoGameModeEnabled" -Value $(if ($GameModeEnabled) { 1 } else { 0 }) -Type DWord
-
-$GfxKey = "HKLM:\SYSTEM\CurrentControlSet\Control\GraphicsDrivers"
-if (Test-Path $GfxKey) {
-    Set-ItemProperty -Path $GfxKey -Name "HwSchMode" -Value $(if ($HardwareGpuScheduling) { 2 } else { 1 }) -Type DWord -ErrorAction SilentlyContinue
+# 3. Game Mode (User Scope HKCU) & Hardware-Accelerated GPU Scheduling (Machine Scope HKLM)
+if ($Scope -in @("All", "User")) {
+    $GameBarKey = "HKCU:\Software\Microsoft\GameBar"
+    if (-not (Test-Path $GameBarKey)) { New-Item -Path $GameBarKey -Force | Out-Null }
+    Set-ItemProperty -Path $GameBarKey -Name "AutoGameModeEnabled" -Value $(if ($GameModeEnabled) { 1 } else { 0 }) -Type DWord
+    Write-Host "  [+] Game Mode (HKCU): $GameModeEnabled" -ForegroundColor Green
 }
-Write-Host "  [+] Game Mode=$GameModeEnabled, Hardware GPU Scheduling=$HardwareGpuScheduling" -ForegroundColor Green
+
+if ($Scope -in @("All", "Machine")) {
+    $GfxKey = "HKLM:\SYSTEM\CurrentControlSet\Control\GraphicsDrivers"
+    if (Test-Path $GfxKey) {
+        Set-ItemProperty -Path $GfxKey -Name "HwSchMode" -Value $(if ($HardwareGpuScheduling) { 2 } else { 1 }) -Type DWord -ErrorAction SilentlyContinue
+        Write-Host "  [+] Hardware GPU Scheduling (HKLM): $HardwareGpuScheduling" -ForegroundColor Green
+    }
+}
 
 # =============================================================================
 # [HITL-ID]: HITL-M5-05
@@ -210,7 +226,7 @@ Write-Host "  [+] Game Mode=$GameModeEnabled, Hardware GPU Scheduling=$HardwareG
 # [HITL-PATTERN]: Stage each display with CDS_UPDATEREGISTRY | CDS_NORESET (and CDS_SET_PRIMARY for primary), fallback to DM_POSITION-only if refresh rate/mode is rejected, then commit atomically via ChangeDisplaySettingsEx(null, IntPtr.Zero, IntPtr.Zero, 0, IntPtr.Zero).
 # [HITL-AVOID]: Calling ChangeDisplaySettingsEx without CDS_NORESET per monitor (causes intermediate topology rejection when primary monitor is shifted).
 # =============================================================================
-if ($Monitors -and @($Monitors).Count -gt 0) {
+if ($Scope -in @("All", "User") -and $Monitors -and @($Monitors).Count -gt 0) {
     try {
         if (-not ("Reglaze.DisplayTopology" -as [type])) {
             Add-Type -TypeDefinition @'

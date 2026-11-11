@@ -2,17 +2,43 @@
 .SYNOPSIS
     Reglaze Phase 4 Machine Provisioning Runner (LocalAdmin).
 .DESCRIPTION
-    Executes post-install machine-level orchestration:
-    1. Unlocks and re-arms preserved BitLocker volumes using recovery keys.
-    2. Executes automated WHQL driver servicing pass via PSWindowsUpdate.
-    3. Applies general Windows security and quality cumulative updates.
-    4. Provisions machine-scope applications via WinGet DSC.
-    5. Stages the WSL2 kernel and target Linux distribution.
-    6. Establishes machine-level directory junctions (Program Files, ProgramData).
-    7. Applies developer-friendly Windows Explorer, taskbar, and power preferences.
-    8. Destroys temporary LocalAdmin AutoLogon credentials.
-    9. Stages Phase 5 User Hydration in RunOnce and Public Desktop shortcut.
-    10. Restarts the computer into the interactive standard user login screen.
+    Executes post-install machine-level orchestration in strict dependency order:
+    1. Pass 1 Drive Letter Reconciliation & Connected BitLocker Unlock:
+       Must run FIRST so preserved data volumes (D:, F:) are mounted at their canonical letters
+       and the USB installer is moved off reserved letters (e.g. E:) before any paths are referenced.
+    1b. Standalone UEFI Bootloader Provisioning (bcdboot):
+       Provisions the target OS disk's 260 MB EFI System Partition so the new OS disk boots
+       independently even if secondary disks with legacy EFI partitions were disconnected during WinPE.
+    2. Automated WHQL Hardware Driver Servicing (PSWindowsUpdate):
+       Must run BEFORE Pass 2 disk reconciliation, network adapter config, and display/audio setup
+       so storage controllers, NICs, and GPUs are enumerated by Windows.
+    2b. Pass 2 Drive Letter Reconciliation & Missing Disk Reconnect Check:
+       Verifies all required preserved disks are online after storage controller drivers load;
+       if any were physically unplugged for safety during WinPE, re-arms AutoLogon and shuts down
+       cleanly so the user can reconnect them.
+    3. Windows Quality & Security Cumulative Updates:
+       Applies OS cumulative patches prior to WinGet DSC and WSL2 kernel provisioning.
+    4. Google Drive Enterprise Policy & WinGet DSC Machine Application Provisioning:
+       Sets HKLM DriveFS policy BEFORE Google Drive is installed so its first launch uses the
+       configured streaming letter and suppresses backup wizard prompts; installs all machine-scope
+       applications (including Browser & Password Manager prerequisites for Phase 5).Packages that
+       reject machine/admin scope are automatically deferred to user-packages.json for Phase 5.
+    5. Machine-Scope WSL2 Subsystem Kernel Staging (wsl --install --no-distribution):
+       Installs only the machine-wide WSL2 kernel/platform. Linux distributions are per-user (HKCU)
+       and MUST be deferred to Phase 5 (Start-UserHydration.ps1 / hydrate.ps1).
+    6. Machine-Scope Directory Junctions & Deferred Junction ACL Grants:
+       Creates junctions under C:\ProgramData and C:\Program Files* whose targets already exist on
+       preserved drives, and grants BUILTIN\Users modify permissions on parent folders of deferred
+       Phase 5 junctions (e.g. Steam\userdata) so the non-admin user can link them in Phase 5.
+    7. Machine-Scope Windows Settings (Phase 4):
+       Applies only machine-wide settings (Power Plan, LongPathsEnabled, ssh-agent, PnP cameras,
+       Hardware GPU Scheduling, Network/Firewall/hosts, and HKLM Start Menu pin policy). User-scoped
+       HKCU settings are strictly deferred to Phase 5.
+    8. AutoLogon Credential Purge:
+       Clears temporary LocalAdmin AutoLogon credentials from HKLM Winlogon once machine setup succeeds.
+    9. Stage Phase 5 User Hydration Shortcut:
+       Drops 'Reglaze Hydration.lnk' on the Public Desktop (without RunOnce auto-launch) so the
+       primary user can sign in and launch interactive hydration on demand.
 
     FAIL-SAFE DIRECTIVE: Defaults strictly to SIMULATION mode ($Simulation=$true, $Live=$false).
     Live execution requires explicit -Live switch. Reboots require -AllowReboot AND -Live.
@@ -397,6 +423,37 @@ if ($DscManifest -and (Test-Path -LiteralPath $DscManifest)) {
                     }
                     Write-ReglazeInfo "Installing / verifying machine package: $PkgId (--scope machine)..."
                     & winget install --id $PkgId --source $PkgSource --exact --scope machine --silent --accept-package-agreements --accept-source-agreements --disable-interactivity
+                    $InstallExit = $LASTEXITCODE
+                    if ($InstallExit -eq -1978335216 -or $InstallExit -eq -1978335146) {
+                        # -1978335216 (0x8A150010): No applicable installer found (package only supports --scope user)
+                        # -1978335146 (0x8A150056): Installer cannot be run from an administrator context
+                        Write-ReglazeWarning "Package '$PkgId' cannot be installed in elevated machine scope (exit $InstallExit); deferring to Phase 5 user hydration (user-packages.json)."
+                        if ($ResolvedPayload) {
+                            $UserPkgPath = Join-Path $ResolvedPayload "user-packages.json"
+                            $ExistingUserPkgs = [System.Collections.Generic.List[object]]::new()
+                            if (Test-Path -LiteralPath $UserPkgPath) {
+                                try {
+                                    $ParsedUp = Get-Content -Raw -LiteralPath $UserPkgPath -Encoding UTF8 | ConvertFrom-Json
+                                    foreach ($Item in @($ParsedUp)) { if ($null -ne $Item) { $ExistingUserPkgs.Add($Item) } }
+                                } catch {}
+                            }
+                            if (-not ($ExistingUserPkgs | Where-Object { $_.PackageId -ieq $PkgId })) {
+                                $ExistingUserPkgs.Add([PSCustomObject]@{
+                                    AppId     = ($PkgId -replace '[^a-zA-Z0-9_]', '_').ToLowerInvariant()
+                                    AppName   = $PkgId
+                                    PackageId = $PkgId
+                                    Source    = $PkgSource
+                                    Scope     = "user"
+                                })
+                                ConvertTo-Json -InputObject @($ExistingUserPkgs.ToArray()) -Depth 4 | Set-Content -LiteralPath $UserPkgPath -Encoding UTF8
+                            }
+                        }
+                    } elseif ($InstallExit -ne 0 -and $InstallExit -ne -1978335189) {
+                        & winget install --id $PkgId --source $PkgSource --exact --silent --accept-package-agreements --accept-source-agreements --disable-interactivity
+                        if ($LASTEXITCODE -eq -1978335146 -and $ResolvedPayload) {
+                            Write-ReglazeWarning "Package '$PkgId' rejected administrator context; deferring to Phase 5 user hydration."
+                        }
+                    }
                 }
             }
         }
@@ -434,7 +491,10 @@ if (-not $IsSimulated) {
 }
 
 # =============================================================================
-# Step 6: Create Machine-Level Directory Junctions
+# Step 6: Create Machine-Level Directory Junctions & Grant Deferred ACLs
+# DEPENDENCY: Must run AFTER Step 1/2b (preserved drives online & unlocked) and Step 4 (apps installed).
+# Also grants BUILTIN\Users modify permissions on parent folders of deferred Phase 5 junctions under
+# C:\Program Files* or C:\ProgramData* (e.g., Steam\userdata) so the non-admin user in Phase 5 can create them.
 # =============================================================================
 Write-ReglazeStep "Step 6/9: Establishing Machine-Scope Directory Junctions..."
 $JunctionsManifest = if ($ResolvedPayload) { Join-Path $ResolvedPayload "junctions-manifest.json" } else { $null }
@@ -444,6 +504,21 @@ if ($JunctionsManifest -and (Test-Path -LiteralPath $JunctionsManifest)) {
         $JunctionResults = Install-JunctionsFromManifest -ManifestPath $JunctionsManifest -Scope "machine"
         $SuccessCount = ($JunctionResults | Where-Object { $_.Success }).Count
         Write-ReglazeSuccess "Processed $($JunctionResults.Count) machine junction(s) ($SuccessCount active)."
+
+        try {
+            $AllManifestJuncs = @(Get-Content -Raw -LiteralPath $JunctionsManifest -Encoding UTF8 | ConvertFrom-Json)
+            $DeferredElevatedJuncs = @($AllManifestJuncs | Where-Object { $_.Scope -eq "user" -and $_.RequiresElevation -eq $true })
+            foreach ($DJ in $DeferredElevatedJuncs) {
+                $ParentDir = Split-Path -Parent $DJ.Link
+                if ($ParentDir -and -not (Test-Path -LiteralPath $ParentDir)) {
+                    New-Item -ItemType Directory -Path $ParentDir -Force -ErrorAction SilentlyContinue | Out-Null
+                }
+                if ($ParentDir -and (Test-Path -LiteralPath $ParentDir)) {
+                    & icacls.exe $ParentDir /grant "*S-1-5-32-545:(OI)(CI)M" /T /C /Q 2>&1 | Out-Null
+                    Write-ReglazeInfo "Granted BUILTIN\Users modify permissions on '$ParentDir' for deferred Phase 5 junction '$($DJ.Link)'."
+                }
+            }
+        } catch {}
     } else {
         $ManifestData = Get-Content -Raw -LiteralPath $JunctionsManifest | ConvertFrom-Json
         $MachineJuncs = @($ManifestData | Where-Object { $_.Scope -eq "machine" })
@@ -454,11 +529,14 @@ if ($JunctionsManifest -and (Test-Path -LiteralPath $JunctionsManifest)) {
 }
 
 # =============================================================================
-# Step 7: Apply Windows Explorer, Taskbar & Power Preferences
+# Step 7: Apply Machine-Scope Windows System Settings (Phase 4)
+# DEPENDENCY: Must run AFTER Step 2 (WHQL drivers for GPU/NIC/Cameras). Only applies machine-wide
+# settings (Power Plan, LongPathsEnabled, ssh-agent, PnP cameras, Hardware GPU Scheduling, Network/Firewall,
+# and HKLM Start Menu pin policy). User-scoped HKCU settings are strictly deferred to Phase 5.
 # =============================================================================
-Write-ReglazeStep "Step 7/9: Applying Windows Preferences & System Settings..."
+Write-ReglazeStep "Step 7/9: Applying Machine-Scope Windows System Settings (Phase 4)..."
 $SettingsFile = if ($ResolvedPayload) { Join-Path $ResolvedPayload "windows-settings.json" } else { $null }
-$SettingsResults = Invoke-WindowsSettingsApplication -RepoRoot $RepoRoot -SettingsFile $SettingsFile -Simulation:$IsSimulated -Live:(-not $IsSimulated)
+$SettingsResults = Invoke-WindowsSettingsApplication -RepoRoot $RepoRoot -SettingsFile $SettingsFile -Phase "Phase4" -Simulation:$IsSimulated -Live:(-not $IsSimulated)
 foreach ($Setting in $SettingsResults) {
     Write-ReglazeSuccess "$($Setting.SettingName): $($Setting.Status)"
 }

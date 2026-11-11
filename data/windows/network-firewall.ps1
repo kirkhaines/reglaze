@@ -2,6 +2,13 @@
 .SYNOPSIS
     Configures Windows Network Adapters, Simple vs Normal/Advanced Sharing, DNS/hosts, and Firewall Rules.
 .DESCRIPTION
+    SCOPE: Phase 4 (Machine Scope - requires Administrator elevation for NetAdapter, NetConnectionProfile,
+           NetFirewallRule, HKLM LSA, and System32\drivers\etc\hosts).
+           Note: HKCU SharingWizardOn is also applied in Phase 5 via explorer-folder-options.ps1 so the
+           primary user's Explorer hive receives the setting.
+    ORDERING DEPENDENCY:
+      - Must run in Phase 4 AFTER WHQL drivers (Step 2) so all physical network adapters are enumerated by NDIS.
+
     Applies network preferences from the network: section of reglaze.yaml:
     - Disables unused network adapters matched by MAC address or InterfaceDescription
       (with a safety guard ensuring at least one active default-gateway adapter stays up)

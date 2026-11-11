@@ -966,65 +966,80 @@ applications:
         -Details "OnlinedDisks: $($OnlineTestRes.OnlinedDisks -join ','), Disk1Offline: $($SimDisk1.IsOffline), Disk2Offline: $($SimDisk2.IsOffline)"
 
     # -------------------------------------------------------------------------
-    # TEST 13: Generated bootstrap.ps1 & hydrate.ps1 AST & Bare-Metal Bug Fixes
+    # TEST 13: Generated bootstrap.ps1, bootstrap-helpers.ps1, hydrate.ps1 & hydrate-helpers.ps1 AST & Bare-Metal Bug Fixes
     # -------------------------------------------------------------------------
-    $GenBootstrapPath = Join-Path $PayloadOut "bootstrap.ps1"
-    $GenHydratePath   = Join-Path $PayloadOut "hydrate.ps1"
-    $GenBootstrapRaw  = Get-Content -Raw -LiteralPath $GenBootstrapPath
-    $GenHydrateRaw    = Get-Content -Raw -LiteralPath $GenHydratePath
+    $GenBootstrapPath        = Join-Path $PayloadOut "bootstrap.ps1"
+    $GenBootstrapHelpersPath = Join-Path $PayloadOut "bootstrap-helpers.ps1"
+    $GenHydratePath          = Join-Path $PayloadOut "hydrate.ps1"
+    $GenHydrateHelpersPath   = Join-Path $PayloadOut "hydrate-helpers.ps1"
+
+    $GenBootstrapRaw        = Get-Content -Raw -LiteralPath $GenBootstrapPath
+    $GenBootstrapHelpersRaw = Get-Content -Raw -LiteralPath $GenBootstrapHelpersPath
+    $GenHydrateRaw          = Get-Content -Raw -LiteralPath $GenHydratePath
+    $GenHydrateHelpersRaw   = Get-Content -Raw -LiteralPath $GenHydrateHelpersPath
 
     $BsTokens = $null; $BsErrors = $null
     [void][System.Management.Automation.Language.Parser]::ParseInput($GenBootstrapRaw, [ref]$BsTokens, [ref]$BsErrors)
+    $BshTokens = $null; $BshErrors = $null
+    [void][System.Management.Automation.Language.Parser]::ParseInput($GenBootstrapHelpersRaw, [ref]$BshTokens, [ref]$BshErrors)
     $HyTokens = $null; $HyErrors = $null
     [void][System.Management.Automation.Language.Parser]::ParseInput($GenHydrateRaw, [ref]$HyTokens, [ref]$HyErrors)
+    $HyhTokens = $null; $HyhErrors = $null
+    [void][System.Management.Automation.Language.Parser]::ParseInput($GenHydrateHelpersRaw, [ref]$HyhTokens, [ref]$HyhErrors)
 
-    $AstClean = ($BsErrors.Count -eq 0 -and $HyErrors.Count -eq 0)
-    $AsciiClean = ($GenBootstrapRaw -notmatch '[^\x00-\x7F]' -and $GenHydrateRaw -notmatch '[^\x00-\x7F]')
+    $CombinedBootstrap = "$GenBootstrapRaw`n$GenBootstrapHelpersRaw"
+    $CombinedHydrate   = "$GenHydrateRaw`n$GenHydrateHelpersRaw"
+
+    $AstClean = ($BsErrors.Count -eq 0 -and $BshErrors.Count -eq 0 -and $HyErrors.Count -eq 0 -and $HyhErrors.Count -eq 0)
+    $AsciiClean = ($CombinedBootstrap -notmatch '[^\x00-\x7F]' -and $CombinedHydrate -notmatch '[^\x00-\x7F]')
     $BootstrapChecks = (
-        $GenBootstrapRaw -match 'if \(\$true\)' -and
-        $GenBootstrapRaw -notmatch 'if \(true\)' -and
-        $GenBootstrapRaw -match 'Start-Transcript -Path \$TranscriptFile' -and
-        $GenBootstrapRaw -match 'C:\\Reglaze\\bootstrap\.log' -and
-        $GenBootstrapRaw -match 'Initialize-PSWindowsUpdate' -and
-        $GenBootstrapRaw -match '-SkipPublisherCheck' -and
-        $GenBootstrapRaw -notmatch '-AcceptLicense' -and
-        $GenBootstrapRaw -match 'TrustedPublisher' -and
-        $GenBootstrapRaw -match 'Import-Module -Name PSWindowsUpdate -Force -DisableNameChecking -Global' -and
-        $GenBootstrapRaw -match 'bcdboot\.exe C:\\Windows /s' -and
-        $GenBootstrapRaw -match 'Microsoft\.DesktopAppInstaller_\*_x64__8wekyb3d8bbwe\\winget\.exe' -and
-        $GenBootstrapRaw -match 'Repair-WinGetPackageManager' -and
-        $GenBootstrapRaw -match 'https://aka\.ms/getwinget' -and
-        $GenBootstrapRaw -match 'configure --enable' -and
-        $GenBootstrapRaw -match '--scope machine' -and
-        $GenBootstrapRaw -match 'Add-DeferredUserPackage' -and
-        $GenBootstrapRaw -match 'DisablePromptToBackupDevices' -and
-        $GenBootstrapRaw -match 'DisableDesktopBackup' -and
-        $GenBootstrapRaw -notmatch 'UserShellFolders' -and
-        $GenBootstrapRaw -match 'wsl\.exe --install --no-distribution' -and
-        $GenBootstrapRaw -notmatch 'wsl\.exe --install -d' -and
-        $GenBootstrapRaw -match '-NoProfile -ExecutionPolicy Bypass -NoExit -File'
+        $GenBootstrapRaw -match 'bootstrap-helpers\.ps1' -and
+        $CombinedBootstrap -match 'if \(\$true\)' -and
+        $CombinedBootstrap -notmatch 'if \(true\)' -and
+        $CombinedBootstrap -match 'Start-Transcript -Path \$TranscriptFile' -and
+        $CombinedBootstrap -match 'C:\\Reglaze\\bootstrap\.log' -and
+        $CombinedBootstrap -match 'Initialize-PSWindowsUpdate' -and
+        $CombinedBootstrap -match '-SkipPublisherCheck' -and
+        $CombinedBootstrap -notmatch '-AcceptLicense' -and
+        $CombinedBootstrap -match 'TrustedPublisher' -and
+        $CombinedBootstrap -match 'Import-Module -Name PSWindowsUpdate -Force -DisableNameChecking -Global' -and
+        $CombinedBootstrap -match 'bcdboot\.exe C:\\Windows /s' -and
+        $CombinedBootstrap -match 'Microsoft\.DesktopAppInstaller_\*_x64__8wekyb3d8bbwe\\winget\.exe' -and
+        $CombinedBootstrap -match 'Repair-WinGetPackageManager' -and
+        $CombinedBootstrap -match 'https://aka\.ms/getwinget' -and
+        $CombinedBootstrap -match 'configure --enable' -and
+        $CombinedBootstrap -match '--scope machine' -and
+        $CombinedBootstrap -match 'Add-DeferredUserPackage' -and
+        $CombinedBootstrap -match 'DisablePromptToBackupDevices' -and
+        $CombinedBootstrap -match 'DisableDesktopBackup' -and
+        $CombinedBootstrap -notmatch '-UserShellFolders' -and
+        $CombinedBootstrap -match 'wsl\.exe --install --no-distribution' -and
+        $CombinedBootstrap -notmatch 'wsl\.exe --install -d' -and
+        $CombinedBootstrap -match '-NoProfile -ExecutionPolicy Bypass -NoExit -File'
     )
     $HydrateChecks = (
-        $GenHydrateRaw -match 'Start-Transcript -Path \$TranscriptFile' -and
-        $GenHydrateRaw -match 'C:\\Reglaze\\hydrate\.log' -and
-        $GenHydrateRaw -match 'function Read-JsonArray' -and
-        $GenHydrateRaw -match 'chrome://history/syncedTabs' -and
-        $GenHydrateRaw -match 'user-packages\.json' -and
-        $GenHydrateRaw -match 'Add-AppxPackage -RegisterByFamilyName -MainPackage Microsoft\.DesktopAppInstaller_8wekyb3d8bbwe' -and
-        $GenHydrateRaw -match 'WHAT TO DO / WHAT NOT TO DO DURING GOOGLE DRIVE SETUP' -and
-        $GenHydrateRaw -match '\$\{Target\}:' -and
-        $GenHydrateRaw -match '\$\{Link\}:' -and
-        $GenHydrateRaw -match 'UserShellFolders' -and
-        $GenHydrateRaw -match '\$UninstalledGames' -and
-        $GenHydrateRaw -match 'Recommended Bulk Installation via Steam Collection' -and
-        $GenHydrateRaw -match 'Press \[Enter\] after confirming the install prompt in Steam' -and
-        $GenHydrateRaw -match 'wsl\.exe --install -d \$WslDistroName --no-launch' -and
-        $GenHydrateRaw -match 'wsl\.exe --terminate \$WslDistroName'
+        $GenHydrateRaw -match 'hydrate-helpers\.ps1' -and
+        $CombinedHydrate -match 'Start-Transcript -Path \$TranscriptFile' -and
+        $CombinedHydrate -match 'C:\\Reglaze\\hydrate\.log' -and
+        $CombinedHydrate -match 'function Read-JsonArray' -and
+        $CombinedHydrate -match 'FOUNDATIONAL AUTHENTICATION BOOTSTRAP' -and
+        $CombinedHydrate -match 'chrome://history/syncedTabs' -and
+        $CombinedHydrate -match 'user-packages\.json' -and
+        $CombinedHydrate -match 'Add-AppxPackage -RegisterByFamilyName -MainPackage Microsoft\.DesktopAppInstaller_8wekyb3d8bbwe' -and
+        $CombinedHydrate -match 'WHAT TO DO / WHAT NOT TO DO DURING GOOGLE DRIVE SETUP' -and
+        $CombinedHydrate -match '\$\{Target\}:' -and
+        $CombinedHydrate -match '\$\{Link\}:' -and
+        $CombinedHydrate -match 'UserShellFolders' -and
+        $CombinedHydrate -match '\$UninstalledGames' -and
+        $CombinedHydrate -match 'Recommended Bulk Installation via Steam Collection' -and
+        $CombinedHydrate -match 'Press \[Enter\] after confirming the install prompt in Steam' -and
+        $CombinedHydrate -match 'wsl\.exe --install -d \$WslDistroName --no-launch' -and
+        $CombinedHydrate -match 'wsl\.exe --terminate \$WslDistroName'
     )
 
-    Assert-Test -Name "30. Payload Scripts: bootstrap.ps1 & hydrate.ps1 pass PowerShell AST validation with 0 errors and include all bare-metal fixes" `
+    Assert-Test -Name "30. Payload Scripts: bootstrap.ps1, bootstrap-helpers.ps1, hydrate.ps1 & hydrate-helpers.ps1 pass PowerShell AST validation with 0 errors and include all bare-metal fixes" `
         -Condition ($AstClean -and $AsciiClean -and $BootstrapChecks -and $HydrateChecks) `
-        -Details "BsErrors=$($BsErrors.Count), HyErrors=$($HyErrors.Count), AsciiClean=$AsciiClean, BootstrapChecks=$BootstrapChecks, HydrateChecks=$HydrateChecks"
+        -Details "BsErrors=$($BsErrors.Count), BshErrors=$($BshErrors.Count), HyErrors=$($HyErrors.Count), HyhErrors=$($HyhErrors.Count), AsciiClean=$AsciiClean, BootstrapChecks=$BootstrapChecks, HydrateChecks=$HydrateChecks"
 
 
 } finally {

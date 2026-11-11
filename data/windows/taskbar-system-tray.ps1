@@ -2,6 +2,14 @@
 .SYNOPSIS
     Configures Windows 11 Taskbar, Search, System Tray, Clock Seconds/Format, and Developer End-Task settings.
 .DESCRIPTION
+    SCOPE: Phase 5 (User Scope - HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced,
+           HKCU:\Software\Microsoft\Windows\CurrentVersion\Search, HKCU:\Control Panel\International,
+           HKCU:\Control Panel\NotifyIconSettings)
+    ORDERING DEPENDENCY:
+      - Must run in the primary user's session (Phase 5), never under LocalAdmin in Phase 4.
+      - Runs early in Phase 5 (Step 1) for immediate desktop ergonomics, and PromotedTrayIcons can be
+        re-applied after background tray applications (Google Drive, Steam) have registered their tray icons.
+
     Applies custom preferences:
     - Taskbar Alignment (Left vs Center)
     - Taskbar Search mode (Hidden, IconOnly, Box)

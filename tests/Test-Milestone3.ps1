@@ -249,8 +249,8 @@ try {
     $Phase4Results = @(Invoke-WindowsSettingsApplication -RepoRoot $RepoRoot -Settings $CustomSettings -Phase "Phase4" -Simulation)
     $Phase5Results = @(Invoke-WindowsSettingsApplication -RepoRoot $RepoRoot -Settings $CustomSettings -Phase "Phase5" -Simulation)
 
-    Assert-Test "10. Windows Settings: executes all 8 modular Windows, Input, Audio, Network & Shell Pin scripts in simulation (7 Phase4 + 1 Phase5)" `
-        ($SettingsCount -eq 8 -and $AllSimulated -and $Phase4Results.Count -eq 7 -and $Phase5Results.Count -eq 1)
+    Assert-Test "10. Windows Settings: executes all 8 modular Windows, Input, Audio, Network & Shell Pin scripts in simulation (4 Phase4 machine-scope + 7 Phase5 user-scope)" `
+        ($SettingsCount -eq 8 -and $AllSimulated -and $Phase4Results.Count -eq 4 -and $Phase5Results.Count -eq 7)
 
     # =========================================================================
     # Test 11: AutoLogon Deactivation Logic Verification

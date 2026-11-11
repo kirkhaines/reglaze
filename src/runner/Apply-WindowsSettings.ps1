@@ -82,19 +82,25 @@ function Invoke-WindowsSettingsApplication {
         }
     }
 
+    # Scope mapping:
+    # - Phase4 (Machine Scope / LocalAdmin): Power plan & timeouts, LongPathsEnabled (HKLM), ssh-agent service,
+    #   camera disabling (PnP), Hardware GPU Scheduling (HKLM), Network/Firewall/hosts, and Start Menu pins policy (HKLM).
+    # - Phase5 (User Scope / primary_user): Explorer options & User Shell Folders (HKCU), Taskbar/Tray/Clock (HKCU),
+    #   Clipboard History & Default Terminal (HKCU), Theme/Accent/Wallpaper (HKCU), Mouse/Keyboard/Input languages (HKCU),
+    #   CoreAudio endpoints/volume, Game Mode (HKCU), Multi-Monitor layout, and Quick Access/Taskbar pins + User PATH + Steam libraries.
     $Scripts = @(
-        @{ Name = "ExplorerFolderOptions"; File = "explorer-folder-options.ps1"; Phase = "Phase4" },
-        @{ Name = "TaskbarSystemTray";     File = "taskbar-system-tray.ps1";     Phase = "Phase4" },
-        @{ Name = "PerformancePower";      File = "performance-power.ps1";      Phase = "Phase4" },
-        @{ Name = "ThemePersonalization";  File = "theme-personalization.ps1";  Phase = "Phase4" },
-        @{ Name = "InputMouseKeyboard";    File = "input-mouse-keyboard.ps1";    Phase = "Phase4" },
-        @{ Name = "AudioDisplay";          File = "audio-display.ps1";          Phase = "Phase4" },
-        @{ Name = "NetworkFirewall";       File = "network-firewall.ps1";       Phase = "Phase4" },
-        @{ Name = "ShellPins";             File = "shell-pins.ps1";             Phase = "Phase5" }
+        @{ Name = "ExplorerFolderOptions"; File = "explorer-folder-options.ps1"; Phase = "Phase5"; Phases = @("Phase5") },
+        @{ Name = "TaskbarSystemTray";     File = "taskbar-system-tray.ps1";     Phase = "Phase5"; Phases = @("Phase5") },
+        @{ Name = "PerformancePower";      File = "performance-power.ps1";      Phase = "Phase4"; Phases = @("Phase4", "Phase5") },
+        @{ Name = "ThemePersonalization";  File = "theme-personalization.ps1";  Phase = "Phase5"; Phases = @("Phase5") },
+        @{ Name = "InputMouseKeyboard";    File = "input-mouse-keyboard.ps1";    Phase = "Phase5"; Phases = @("Phase5") },
+        @{ Name = "AudioDisplay";          File = "audio-display.ps1";          Phase = "Phase4"; Phases = @("Phase4", "Phase5") },
+        @{ Name = "NetworkFirewall";       File = "network-firewall.ps1";       Phase = "Phase4"; Phases = @("Phase4") },
+        @{ Name = "ShellPins";             File = "shell-pins.ps1";             Phase = "Phase5"; Phases = @("Phase4", "Phase5") }
     )
 
     foreach ($Item in $Scripts) {
-        if ($Phase -ne "All" -and $Item.Phase -ne $Phase) {
+        if ($Phase -ne "All" -and ($Item.Phases -notcontains $Phase)) {
             continue
         }
 
@@ -130,6 +136,9 @@ function Invoke-WindowsSettingsApplication {
                             if ($null -ne $Settings.explorer.classic_context_menu) {
                                 $ScriptArgs["ClassicContextMenu"] = [bool]$Settings.explorer.classic_context_menu
                             }
+                        }
+                        if ($Settings.network -and $null -ne $Settings.network.sharing_wizard_enabled) {
+                            $ScriptArgs["SharingWizardEnabled"] = [bool]$Settings.network.sharing_wizard_enabled
                         }
                         if ($Settings.user_shell_folders -and $Phase -ne "Phase4" -and $env:USERNAME -notmatch '^LocalAdmin$') {
                             $ScriptArgs["UserShellFolders"] = $Settings.user_shell_folders
@@ -173,6 +182,7 @@ function Invoke-WindowsSettingsApplication {
                             }
                         }
                     } elseif ($Item.Name -eq "PerformancePower" -and $Settings) {
+                        $ScriptArgs["Scope"] = if ($Phase -eq "Phase4") { "Machine" } elseif ($Phase -eq "Phase5") { "User" } else { "All" }
                         if ($Settings.power) {
                             if ($Settings.power.active_scheme_name) {
                                 $Plan = ($Settings.power.active_scheme_name -replace '\s+', '')
@@ -224,6 +234,7 @@ function Invoke-WindowsSettingsApplication {
                             if ($Settings.input.keyboard.input_languages) { $ScriptArgs["InputLanguages"] = @($Settings.input.keyboard.input_languages) }
                         }
                     } elseif ($Item.Name -eq "AudioDisplay" -and $Settings) {
+                        $ScriptArgs["Scope"] = if ($Phase -eq "Phase4") { "Machine" } elseif ($Phase -eq "Phase5") { "User" } else { "All" }
                         if ($Settings.audio_and_devices) {
                             if ($Settings.audio_and_devices.default_speakers) { $ScriptArgs["DefaultSpeakers"] = [string]$Settings.audio_and_devices.default_speakers }
                             if ($Settings.audio_and_devices.default_microphone) { $ScriptArgs["DefaultMicrophone"] = [string]$Settings.audio_and_devices.default_microphone }
@@ -248,20 +259,24 @@ function Invoke-WindowsSettingsApplication {
                         if ($Net.hosts_entries) { $ScriptArgs["HostsEntries"] = @($Net.hosts_entries) }
                         if ($Net.firewall_rules) { $ScriptArgs["FirewallRules"] = @($Net.firewall_rules) }
                     } elseif ($Item.Name -eq "ShellPins" -and $Settings) {
-                        if ($Settings.explorer -and $Settings.explorer.quick_access_pins) {
-                            $ScriptArgs["QuickAccessPins"] = @($Settings.explorer.quick_access_pins)
+                        if ($Phase -in @("All", "Phase5")) {
+                            if ($Settings.explorer -and $Settings.explorer.quick_access_pins) {
+                                $ScriptArgs["QuickAccessPins"] = @($Settings.explorer.quick_access_pins)
+                            }
+                            if ($Settings.taskbar -and $Settings.taskbar.pinned_apps) {
+                                $ScriptArgs["TaskbarPinnedApps"] = @($Settings.taskbar.pinned_apps)
+                            }
+                            if ($Settings.app_path_entries) {
+                                $ScriptArgs["AppPathEntries"] = @($Settings.app_path_entries)
+                            }
+                            if ($Settings.steam_libraries) {
+                                $ScriptArgs["SteamLibraries"] = @($Settings.steam_libraries)
+                            }
                         }
-                        if ($Settings.taskbar -and $Settings.taskbar.pinned_apps) {
-                            $ScriptArgs["TaskbarPinnedApps"] = @($Settings.taskbar.pinned_apps)
-                        }
-                        if ($Settings.start_menu -and $Settings.start_menu.pinned_apps) {
-                            $ScriptArgs["StartMenuPinnedApps"] = @($Settings.start_menu.pinned_apps)
-                        }
-                        if ($Settings.app_path_entries) {
-                            $ScriptArgs["AppPathEntries"] = @($Settings.app_path_entries)
-                        }
-                        if ($Settings.steam_libraries) {
-                            $ScriptArgs["SteamLibraries"] = @($Settings.steam_libraries)
+                        if ($Phase -in @("All", "Phase4")) {
+                            if ($Settings.start_menu -and $Settings.start_menu.pinned_apps) {
+                                $ScriptArgs["StartMenuPinnedApps"] = @($Settings.start_menu.pinned_apps)
+                            }
                         }
                     }
 

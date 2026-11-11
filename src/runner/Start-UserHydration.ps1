@@ -2,16 +2,31 @@
 .SYNOPSIS
     Reglaze Phase 5 User Hydration & State Linking Wizard.
 .DESCRIPTION
-    Executes in the primary standard user session to orchestrate interactive
-    user hydration:
-    - Microsoft Account (MSA) sign-in guidance
-    - Cloud virtual mount verification (Google Drive for Desktop sentinel check)
-    - Steam library rediscovery on preserved drives
-    - Interactive manual application installation walkthroughs
-    - User-scope directory junction application with collision backups
-    - Non-interactive WSL2 developer environment staging & rclone bisync
-    - Dev repositories cloning and Chezmoi dotfiles initialization
-    - Startup self-unregistration and desktop health check shortcut creation
+    Executes in the primary standard user session (never under LocalAdmin) to orchestrate
+    interactive user hydration in strict dependency order:
+    - Step 1: User-Scope Windows Personalization, Display Topology, MSA Link &
+              FOUNDATIONAL AUTHENTICATION BOOTSTRAP (Default Browser + Profile Sync + Password Manager).
+              Why Browser & Password Manager come first: Unlike ordinary application installs, restoring
+              the user's browser session (chrome://history/syncedTabs) and password manager extension
+              (e.g., Bitwarden) provides the OAuth sessions, 2FA/passkeys, and credentials required to
+              authenticate Google Drive (Step 2), Steam Guard (Step 3), and manual web downloads (Step 4).
+              Also installs any user-scoped WinGet packages (user-packages.json) deferred from Phase 4.
+    - Step 2: Cloud Virtual Mount Verification (Google Drive for Desktop sentinel check) & Synced Folder Migration.
+              Depends on Step 1 (Browser OAuth ready) and must complete BEFORE Step 5 (User Junctions)
+              so %STREAM% and %SYNC_*% targets exist on disk.
+    - Step 3: Steam Library Rediscovery on Preserved Drives & Game Provisioning.
+              Depends on Step 1 (Password Manager for Steam login) and must complete BEFORE Step 5
+              so game install directories (e.g., Beat Saber) and Steam userdata exist before linking.
+    - Step 4: Interactive Manual Application Installation Walkthroughs.
+              Depends on Step 1 (Browser & Password Manager) and must complete BEFORE Step 5 so manually
+              installed applications exist before their config/plugin junctions are linked.
+    - Step 5: User-Scope Directory Junctions, User Shell Folders & Declarative Shell Pins.
+              Depends on Steps 1-4 (Preserved drives, Cloud mount, Steam, and Manual apps ready).
+    - Step 6: User-Scope WSL2 Linux Distribution Installation & rclone bisync.
+              WSL distributions are registered per-user in HKCU:\Software\Microsoft\Windows\CurrentVersion\Lxss
+              and must run under the primary user account rather than LocalAdmin.
+    - Step 7: Dev Repositories Cloning and Chezmoi Dotfiles Initialization.
+    - Step 8: Startup Self-Unregistration and Desktop Health Check Shortcut Creation.
 
     Maintains idempotent state in hydration-state.json allowing interruption
     and seamless resumption.
@@ -51,6 +66,7 @@ if (-not $RepoRoot) {
 . (Join-Path $RepoRoot "src\linking\New-DirectoryJunction.ps1")
 . (Join-Path $RepoRoot "src\wsl\Initialize-WSLDistro.ps1")
 . (Join-Path $RepoRoot "src\wsl\Sync-WSLRclone.ps1")
+. (Join-Path $RepoRoot "src\runner\Apply-WindowsSettings.ps1")
 
 Write-ReglazeBanner "REGLAZE PHASE 5: USER HYDRATION WIZARD"
 
@@ -185,9 +201,19 @@ if ($ResolvedConfigFile -and (Test-Path -LiteralPath $ResolvedConfigFile)) {
 }
 
 # =============================================================================
-# Step 1: Microsoft Account (MSA), Browser Sync & Password Manager Setup
+# Step 1: User-Scope Personalization, MSA Link & Browser/Password Manager Auth Bootstrap
+# DEPENDENCY: Runs FIRST in the primary user session so multi-monitor layout, dark mode,
+# mouse/keyboard input, and Known User Shell Folders are configured immediately, and so the
+# user's Default Browser + Password Manager (e.g., Chrome + Bitwarden) are authenticated BEFORE
+# downstream interactive steps (Google Drive OAuth in Step 2, Steam login in Step 3, Manual Apps in Step 4).
 # =============================================================================
-Write-ReglazeStep "Step 1/8: Microsoft Account (MSA) & Browser Setup..."
+Write-ReglazeStep "Step 1/8: User Personalization, MSA Link & Browser/Password Manager Auth Bootstrap..."
+$SettingsFile = if ($ResolvedPayload) { Join-Path $ResolvedPayload "windows-settings.json" } else { $null }
+$UserSettingsResults = Invoke-WindowsSettingsApplication -RepoRoot $RepoRoot -SettingsFile $SettingsFile -Phase "Phase5" -Simulation:$IsSimulated -Live:(-not $IsSimulated)
+foreach ($USetting in $UserSettingsResults) {
+    Write-ReglazeInfo "User Setting ($($USetting.SettingName)): $($USetting.Status)"
+}
+
 if (-not $HydrateState.msa_connected) {
     if (-not $NonInteractive -and -not $IsSimulated) {
         Write-Host "If you wish to link this standard account to your Microsoft Account for digital licenses and Store,"
@@ -200,7 +226,9 @@ if (-not $HydrateState.msa_connected) {
         }
 
         Write-Host ""
-        Write-Host "Recommended Browser & Password Manager Setup:" -ForegroundColor Cyan
+        Write-Host "Foundational Authentication Bootstrap (Browser & Password Manager):" -ForegroundColor Cyan
+        Write-Host "  Why now: Subsequent steps (Google Drive OAuth, Steam Guard, Manual App downloads) rely on" -ForegroundColor Gray
+        Write-Host "  your browser session and password manager credentials being unlocked first." -ForegroundColor Gray
         Write-Host "  1. Set your preferred browser (e.g., Chrome) as Default Browser and sign into your profile."
         Write-Host "  2. Sign into your password manager extension (e.g., Bitwarden)."
         Write-Host "  3. Restore previous open tabs via: chrome://history/syncedTabs ('Open all')." -ForegroundColor Green
@@ -210,12 +238,12 @@ if (-not $HydrateState.msa_connected) {
         }
         Read-Host "Press [Enter] when your browser and password manager are ready..."
     } else {
-        Write-ReglazeInfo "MSA interactive connection bypassed (Simulation: $IsSimulated, NonInteractive: $NonInteractive)."
+        Write-ReglazeInfo "MSA & Browser Auth Bootstrap bypassed (Simulation: $IsSimulated, NonInteractive: $NonInteractive)."
     }
     $HydrateState.msa_connected = $true
     Save-HydrationCheckpoint "msa_connected"
 } else {
-    Write-ReglazeSuccess "Microsoft Account connection already validated."
+    Write-ReglazeSuccess "Microsoft Account & Browser Auth Bootstrap already validated."
 }
 
 # Install User-Scope WinGet Packages (user-packages.json) if present
